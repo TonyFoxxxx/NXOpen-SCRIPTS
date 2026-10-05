@@ -277,7 +277,10 @@ class UpdaterTests(unittest.TestCase):
         self.add_script()
         self.add_script('NX_Update_Script_Buttons.py', 'V1.11')
         self.manifest['min_updater_version'] = 'V1.11'
-        rows = {r['remote']['id']: r for r in self.scan()}
+        # Model an older client explicitly so this remains a minimum-version
+        # regression test when the real updater advances to V1.11 and beyond.
+        with patch.object(u, 'SCRIPT_VERSION', 'V1.10'):
+            rows = {r['remote']['id']: r for r in self.scan()}
         self.assertFalse(rows['Example']['eligible'])
         self.assertTrue(rows['NX_Update_Script_Buttons']['eligible'])
 

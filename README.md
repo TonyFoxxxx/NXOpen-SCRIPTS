@@ -8,7 +8,7 @@ GitHub — центральный источник обновлений. Раб�
 
 Проект ведётся для **NX 2506.8100** и **Designcenter 2606 Build 4002** на Windows. Поддержка других сборок не заявляется. Это целевые среды проекта: проверки Python в CI не подтверждают работу каждого журнала в обеих сборках NX.
 
-Апдейтер V1.10 прошёл 22 автоматических теста на Windows и Linux; manifest также проверен. [Результаты проверки](https://github.com/TonyFoxxxx/NXOpen-SCRIPTS/actions/runs/37316606792). Работа журналов и их окон внутри NX проверяется отдельно на ваших проектах: NXOpen и графическое окно NX в CI не запускаются.
+Апдейтер и manifest проверяются автоматическими тестами на Windows и Linux. [Результаты проверки](https://github.com/TonyFoxxxx/NXOpen-SCRIPTS/actions). Работа журналов и их окон внутри NX проверяется отдельно на ваших проектах: NXOpen и графическое окно NX в CI не запускаются.
 
 ## Скрипты
 
@@ -26,7 +26,7 @@ GitHub — центральный источник обновлений. Раб�
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Переименование файлов деталей и сборок с обновлением ссылок компонентов. | [Все функции](docs/rename-assemblies.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Открытие папки текущего PRT в Проводнике. | [Все функции](docs/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Открытие папки карт наладки текущего проекта. | [Все функции](docs/open-setup-cards-folder.md) |
-| [NX_Update_Script_Buttons.py](scripts/NX_Update_Script_Buttons.py) | V1.10 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
+| [NX_Update_Script_Buttons.py](scripts/NX_Update_Script_Buttons.py) | V1.11 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
 
 Каждое руководство содержит возможности, порядок запуска, настройки, результат и ограничения. История редакций находится в [CHANGELOG.md](CHANGELOG.md).
 
@@ -45,8 +45,8 @@ Z определяется проекцией положения CL-точки �
 ## Установка
 
 1. Создайте `C:\ProgramData\2. NX_Scripts`, если папки ещё нет. Нужны права записи текущего пользователя.
-2. Скачайте [Raw апдейтера V1.10](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Update_Script_Buttons.py) как `NX_Update_Script_Buttons.py` в эту папку. При переходе с V1.08 или V1.09 закройте его окно и замените файл один раз вручную.
-3. **Существующий `NX_Update_Script_Buttons.ini` сохраните.** V1.10 прочитает старые пути и включит GitHub, если раздела `[Source]` ещё нет. Для новой установки можно скопировать [пример](config/NX_Update_Script_Buttons.example.ini), убрав `.example`, либо создать INI кнопкой «Проверить».
+2. Скачайте [Raw апдейтера V1.11](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Update_Script_Buttons.py) как `NX_Update_Script_Buttons.py` в эту папку. При переходе с V1.08 или V1.09 закройте его окно и замените файл один раз вручную. С V1.10 можно обновиться через сам апдейтер.
+3. **Существующий `NX_Update_Script_Buttons.ini` сохраните.** V1.11 прочитает старые пути и включит GitHub, если раздела `[Source]` ещё нет. Для новой установки можно скопировать [пример](config/NX_Update_Script_Buttons.example.ini), убрав `.example`, либо создать INI кнопкой «Проверить».
 4. Запустите журнал в NX через **Tools → Journal → Play / Инструменты → Журнал → Воспроизвести** (`Alt+F8`, если сочетание назначено в вашей настройке).
 5. Проверьте рабочую папку и источник, нажмите «Проверить». Отметьте нужные новые скрипты или обновления и нажмите «Применить выбранное».
 6. Перед первым использованием заполните свои INI. Для нумератора назначьте согласованный диапазон; для ЕСКД обеспечьте совместимый внешний шрифт.

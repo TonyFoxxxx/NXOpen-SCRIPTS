@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # NX_Update_Script_Buttons.py
-# SCRIPT_VERSION: V1.10
+# SCRIPT_VERSION: V1.11
 """
 Апдейтер NX / Designcenter для Windows: GitHub manifest или папка обновлений.
 
@@ -50,7 +50,7 @@ import urllib.request
 from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 
-SCRIPT_VERSION = "V1.10"
+SCRIPT_VERSION = "V1.11"
 SCRIPT_NAME = "Обновление скриптов NX"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode('utf-8')
@@ -1410,7 +1410,13 @@ def run_window():
     signature(U, "GetWindowTextW", ctypes.c_int, W.HWND, W.LPWSTR, ctypes.c_int)
     signature(U, "SetWindowTextW", W.BOOL, W.HWND, W.LPCWSTR)
     signature(U, "MessageBoxW", ctypes.c_int, W.HWND, W.LPCWSTR, W.LPCWSTR, W.UINT)
-    signature(U, "MoveWindow", W.BOOL, W.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, W.BOOL)
+    signature(U, "BeginDeferWindowPos", W.HANDLE, ctypes.c_int)
+    signature(U, "DeferWindowPos", W.HANDLE, W.HANDLE, W.HWND, W.HWND,
+              ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, W.UINT)
+    signature(U, "EndDeferWindowPos", W.BOOL, W.HANDLE)
+    signature(U, "SetWindowPos", W.BOOL, W.HWND, W.HWND,
+              ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, W.UINT)
+    signature(U, "RedrawWindow", W.BOOL, W.HWND, ctypes.POINTER(W.RECT), W.HANDLE, W.UINT)
     signature(U, "GetClientRect", W.BOOL, W.HWND, ctypes.POINTER(W.RECT))
     signature(U, "GetWindowThreadProcessId", W.DWORD, W.HWND, ctypes.POINTER(W.DWORD))
     if hasattr(U, "GetDpiForWindow"):
@@ -1443,7 +1449,7 @@ def run_window():
     result_queue = queue.Queue()
     cancelled = threading.Event()
     state = {"rows": [], "busy": False, "closed": False, "applying": False, "populating": False,
-             "syncing_checks": False,
+             "syncing_checks": False, "laying_out": False,
              "inputs": None, "settings": settings, "pending_self": None, "threads": []}
     controls = {}
     hwnd_holder = {"value": None}
@@ -1743,13 +1749,24 @@ def run_window():
                          'Перед первым использованием проверьте INI.').format(installs, updates))
                 start_scan(persist=False)
 
+    def redraw_window():
+        hwnd = hwnd_holder['value']
+        if hwnd and not state['closed']:
+            # Invalidate old child positions, erase their borders, and repaint
+            # every child (including nonclient borders) before returning.
+            U.RedrawWindow(hwnd, None, None, 0x1 | 0x4 | 0x80 | 0x100 | 0x400)
+            # RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME
+
     def layout():
-        if "list" not in controls:
+        # WM_SIZE can arrive while controls are being created or while minimized.
+        if 'close' not in controls or state['laying_out'] or state['closed']:
             return
         rect = W.RECT()
         U.GetClientRect(hwnd_holder["value"], ctypes.byref(rect))
         width, height = rect.right, rect.bottom
-        for key, x, y, w, h in (
+        if width <= 0 or height <= 0:
+            return
+        positions = (
             ("working", unit(150), unit(14), width-unit(272), unit(26)),
             ("browse_working", width-unit(112), unit(13), unit(96), unit(28)),
             ("folder", unit(150), unit(50), width-unit(272), unit(26)),
@@ -1763,11 +1780,32 @@ def run_window():
             ("select_installs", unit(206), height-unit(43), unit(205), unit(30)),
             ("clear", unit(421), height-unit(43), unit(105), unit(30)),
             ("apply", width-unit(350), height-unit(43), unit(225), unit(30)),
-            ("close", width-unit(112), height-unit(43), unit(96), unit(30))):
-            U.MoveWindow(controls[key], x, y, w, h, True)
-        col_widths = [unit(145), max(unit(260), width-unit(725)), unit(140), unit(115), unit(285)]
-        for i, w in enumerate(col_widths):
-            U.SendMessageW(controls["list"], 0x1000 + 30, i, max(unit(90), w))
+            ("close", width-unit(112), height-unit(43), unit(96), unit(30)))
+        state['laying_out'] = True
+        try:
+            # Position all controls first. Copying old pixels or repainting each
+            # control separately can leave trails during rapid resizing.
+            flags = 0x4 | 0x8 | 0x10 | 0x100
+            # SWP_NOZORDER | SWP_NOREDRAW | SWP_NOACTIVATE | SWP_NOCOPYBITS
+            batch = U.BeginDeferWindowPos(len(positions))
+            if batch:
+                for key, x, y, w, h in positions:
+                    batch = U.DeferWindowPos(batch, controls[key], None, x, y, w, h, flags)
+                    if not batch:
+                        break  # A failed DeferWindowPos invalidates the batch.
+            if not batch or not U.EndDeferWindowPos(batch):
+                # Keep the window usable if Windows cannot allocate a batch.
+                for key, x, y, w, h in positions:
+                    if not U.SetWindowPos(controls[key], None, x, y, w, h, flags):
+                        raise ctypes.WinError(ctypes.get_last_error())
+            col_widths = [unit(145), max(unit(260), width-unit(725)), unit(140), unit(115), unit(285)]
+            for i, w in enumerate(col_widths):
+                U.SendMessageW(controls["list"], 0x1000 + 30, i, max(unit(90), w))
+        finally:
+            try:
+                redraw_window()
+            finally:
+                state['laying_out'] = False
 
     @WNDPROC
     def window_proc(hwnd, msg, wparam, lparam):
@@ -1828,8 +1866,12 @@ def run_window():
             if msg == 0x8002:
                 render_update()
                 return 0
-            if msg == 5:
-                layout()
+            if msg == 5:  # WM_SIZE
+                if wparam != 1:  # SIZE_MINIMIZED has no useful client area.
+                    layout()
+                return 0
+            if msg == 0x232:  # WM_EXITSIZEMOVE: finish with a clean complete frame.
+                redraw_window()
                 return 0
             if msg == 0x24:  # WM_GETMINMAXINFO
                 values = ctypes.cast(lparam, ctypes.POINTER(W.POINT))
@@ -1859,7 +1901,8 @@ def run_window():
     try:
         screen_w, screen_h = U.GetSystemMetrics(0), U.GetSystemMetrics(1)
         width, height = min(unit(1380), screen_w-unit(40)), min(unit(740), screen_h-unit(80))
-        hwnd = U.CreateWindowExW(0x100, class_name, title, 0x00CF0000,
+        # WS_CLIPCHILDREN keeps the parent background out of child controls.
+        hwnd = U.CreateWindowExW(0x100, class_name, title, 0x00CF0000 | 0x02000000,
                                  max(0, (screen_w-width)//2), max(0, (screen_h-height)//2), width, height,
                                  owner, None, instance, None)
         if not hwnd:
@@ -1867,7 +1910,8 @@ def run_window():
         hwnd_holder["value"] = hwnd
 
         def control(key, cls, text, x, y, w, h, command=0, style=0, ex=0):
-            handle = U.CreateWindowExW(ex, cls, text, 0x50000000 | style, unit(x), unit(y), unit(w), unit(h), hwnd, command, instance, None)
+            # WS_CLIPSIBLINGS prevents one control painting over its neighbours.
+            handle = U.CreateWindowExW(ex, cls, text, 0x50000000 | 0x04000000 | style, unit(x), unit(y), unit(w), unit(h), hwnd, command, instance, None)
             if not handle:
                 raise ctypes.WinError(ctypes.get_last_error())
             controls[key] = handle
