@@ -9,7 +9,7 @@
       "version": "V2.37",
       "path": "scripts/NX_Setup_Prototype.py",
       "sha256": "3874708806e3153f0672e7107a6664239327401cb40f4d6954e7f43f53245169",
-      "description": "Карта наладки с видами, инструментами, Zmin в MCS операции и растягиваемыми примечаниями.",
+      "description": "Создание редактируемой карты наладки с видами, инструментами и операциями.",
       "config": {
         "path": "config/NX_Setup_Prototype.example.ini",
         "file": "NX_Setup_Prototype.ini",
@@ -24,7 +24,7 @@
       "version": "V1.35",
       "path": "scripts/NX_Postprocess_To_Machine.cs",
       "sha256": "46cc3bef6b2f102e6662635748c0e5a4cf2002fb2d0dcee6d6c0acd739036d54",
-      "description": "Выбор постпроцессора и папки станка, сохранение управляющей программы.",
+      "description": "Вывод управляющих программ и FANUC BIN в папку станка или на носитель.",
       "config": {
         "path": "config/NX_Postprocess_To_Machine.example.ini",
         "file": "NX_Postprocess_To_Machine.ini",
@@ -39,7 +39,7 @@
       "version": "V1.01",
       "path": "scripts/NX_Operation_Zmin.py",
       "sha256": "ad639637f22430ec4825a0b86cfbf4fae2cecd1936468dfb6bd31d8324586692",
-      "description": "Добавление или обновление суффикса _Z в именах операций. В V1.01 известна ошибка Z для 4 осей: требуется диагностика; не используйте такой результат в производственных решениях."
+      "description": "Добавление минимального Z траектории к именам операций. Для 4 осей известна ошибка расчёта."
     },
     {
       "id": "NX_Rename_Operations_In_Selected_Folder",
@@ -48,7 +48,7 @@
       "version": "V1.04",
       "path": "scripts/NX_Rename_Operations_In_Selected_Folder.cs",
       "sha256": "8e6241749d4b7b22bfdbd0b73635615473eebec6c5fe5d600cd572ad621410e9",
-      "description": "Переименование операций в выбранной папке CAM."
+      "description": "Переименование операций с нумерацией по порядку дерева CAM."
     },
     {
       "id": "NX_Number_Program_Folders",
@@ -57,7 +57,7 @@
       "version": "V1.03",
       "path": "scripts/NX_Number_Program_Folders.cs",
       "sha256": "ff1e04277a092109666bca8190afdd7485038ab9370cabccd7f37f997e8c9cee",
-      "description": "Выдача номеров папкам программ с учётом диапазона и истории в XLSX.",
+      "description": "Нумерация папок программ по порядку дерева с учётом XLSX-реестра.",
       "config": {
         "path": "config/NX_Numbering_Settings_v1.0.example.ini",
         "file": "NX_Numbering_Settings_v1.0.ini",
@@ -80,7 +80,7 @@
       "version": "V1.06",
       "path": "scripts/NX_Tool_D_To_Description.cs",
       "sha256": "38deff1dd9585b660114e01e5418e35d892aad5a87ab3dbcb5e3dd67fafeca18",
-      "description": "Перенос диаметра инструмента в описание."
+      "description": "Заполнение описаний инструментов диаметром и номерами T, H, D."
     },
     {
       "id": "NX_ESKD_Format_GOST_A",
@@ -89,7 +89,7 @@
       "version": "V1.35",
       "path": "scripts/NX_ESKD_Format_GOST_A.cs",
       "sha256": "33e706b47a26a45e3a8e4b6b5a4a693ff30cec2e0a8d0f3e19aa5fe5af644707",
-      "description": "Оформление чертежа по принятым шаблонам ЕСКД; требуется внешний совместимый шрифт.",
+      "description": "Оформление рамки, основной надписи и аннотаций чертежа по ЕСКД. Нужен совместимый внешний шрифт.",
       "config": {
         "path": "config/NX_ESKD_Settings.example.ini",
         "file": "NX_ESKD_Settings.ini",
@@ -104,7 +104,7 @@
       "version": "V1.11",
       "path": "scripts/NX_Export_Drawing_To_PDF.cs",
       "sha256": "660c62e77123f047a0498bc3a8426798c4308916ad9ab664a5ef3908d5c29f98",
-      "description": "Экспорт листов чертежа в PDF."
+      "description": "Экспорт текущего листа в PDF с настройкой толщин линий."
     },
     {
       "id": "NX_Export_Current_View_To_DXF",
@@ -113,7 +113,7 @@
       "version": "V1.08",
       "path": "scripts/NX_Export_Current_View_To_DXF.cs",
       "sha256": "0d829bdd590991d86c63a76ebcdb933db38183673c765640bc9f8a1879e8283b",
-      "description": "Экспорт текущего вида в DXF."
+      "description": "Экспорт рёбер, внешнего контура или выбранных кривых в DXF."
     },
     {
       "id": "NX_Rename_Assemblies",
@@ -122,7 +122,7 @@
       "version": "V1.05",
       "path": "scripts/NX_Rename_Assemblies.cs",
       "sha256": "253fb84e0621592a0368120616162f70a2d69a190ebaa16e645fcd8322336259",
-      "description": "Переименование сборок и компонентов по существующим правилам скрипта."
+      "description": "Переименование файлов деталей и сборок с обновлением ссылок компонентов."
     },
     {
       "id": "NX_Open_Project_Folder",
@@ -131,7 +131,7 @@
       "version": "V1.01",
       "path": "scripts/NX_Open_Project_Folder.cs",
       "sha256": "6424c9d7c285761ceaa8c256b3a5075a943709250185727a170e766654cd1b74",
-      "description": "Открытие папки текущего проекта."
+      "description": "Открытие папки текущего PRT в Проводнике."
     },
     {
       "id": "NX_Open_Setup_Cards_Folder",
@@ -140,7 +140,7 @@
       "version": "V1.01",
       "path": "scripts/NX_Open_Setup_Cards_Folder.py",
       "sha256": "f632d4edaf6ff498cfdd96ad4b1b6075d1ad2889b0c61d4db98ed1ba21ef9d2c",
-      "description": "Открытие папки карт наладки для текущей детали."
+      "description": "Открытие папки карт наладки текущего проекта."
     },
     {
       "id": "NX_Update_Script_Buttons",
@@ -149,7 +149,7 @@
       "version": "V1.10",
       "path": "scripts/NX_Update_Script_Buttons.py",
       "sha256": "aa904fcd91fd7db2dea639e69cde10a2249c9ccaae2a5fd9e9fa3fca48955a45",
-      "description": "Проверка manifest GitHub, установка новых скриптов и обновление выбранных.",
+      "description": "Установка и обновление выбранных скриптов из GitHub или папки.",
       "config": {
         "path": "config/NX_Update_Script_Buttons.example.ini",
         "file": "NX_Update_Script_Buttons.ini",

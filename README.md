@@ -8,25 +8,27 @@ GitHub — центральный источник обновлений. Раб�
 
 Проект ведётся для **NX 2506.8100** и **Designcenter 2606 Build 4002** на Windows. Поддержка других сборок не заявляется. Это целевые среды проекта: проверки Python в CI не подтверждают работу каждого журнала в обеих сборках NX.
 
-При подготовке публикации проверены manifest и переносимая логика апдейтера. Апдейтер V1.10, ЕСКД V1.35, публичная карта V2.37 и Zmin V1.01 требуют контрольного запуска в вашей NX. NXOpen и графическое окно NX в CI не запускаются.
+Апдейтер V1.10 прошёл 22 автоматических теста на Windows и Linux; manifest также проверен. [Результаты проверки](https://github.com/TonyFoxxxx/NXOpen-SCRIPTS/actions/runs/37316606792). Работа журналов и их окон внутри NX проверяется отдельно на ваших проектах: NXOpen и графическое окно NX в CI не запускаются.
 
 ## Скрипты
 
-| Файл | Версия | Назначение |
-| --- | --- | --- |
-| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.37 | Карта наладки на основе готовой V2.36: Zmin траектории в MCS операции, рост и ручное растягивание примечаний. Имя разработчика — через INI. |
-| [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.35 | Меню постпроцессирования, выбор поста и папки станка. |
-| [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.01 | Суффикс `_Z…` в именах выбранных операций либо всех операций проекта. Для 4 осей есть известная ошибка расчёта; см. ограничение ниже. |
-| [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций в выбранной папке CAM. |
-| [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.03 | Нумерация папок программ с диапазоном и XLSX-реестром. |
-| [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Диаметр инструмента в описании TOOL D. |
-| [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.35 | Оформление ЕСКД; нужен внешний совместимый шрифт. |
-| [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.11 | Экспорт чертежа в PDF. |
-| [NX_Export_Current_View_To_DXF.cs](scripts/NX_Export_Current_View_To_DXF.cs) | V1.08 | Экспорт текущего вида в DXF. |
-| [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Переименование сборок и компонентов. |
-| [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Открытие папки текущего проекта. |
-| [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Открытие папки карт наладки. |
-| [NX_Update_Script_Buttons.py](scripts/NX_Update_Script_Buttons.py) | V1.10 | Каталог GitHub, установка новых скриптов и обновление выбранных; исправлена замена файлов на Windows. |
+| Файл | Версия | Назначение | Руководство |
+| --- | --- | --- | --- |
+| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.37 | Создание редактируемой карты наладки с видами, инструментами и операциями. | [Все функции](docs/setup-card.md) |
+| [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.35 | Вывод управляющих программ и FANUC BIN в папку станка или на носитель. | [Все функции](docs/postprocess.md) |
+| [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.01 | Добавление минимального Z траектории к именам операций. | [Все функции](docs/zmin.md) |
+| [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |
+| [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.03 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
+| [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Заполнение описаний инструментов диаметром и номерами T, H, D. | [Все функции](docs/tool-description.md) |
+| [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.35 | Оформление рамки, основной надписи и аннотаций чертежа по ЕСКД. | [Все функции](docs/eskd.md) |
+| [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.11 | Экспорт текущего листа в PDF с настройкой толщин линий. | [Все функции](docs/export-pdf.md) |
+| [NX_Export_Current_View_To_DXF.cs](scripts/NX_Export_Current_View_To_DXF.cs) | V1.08 | Экспорт рёбер, внешнего контура или выбранных кривых в DXF. | [Все функции](docs/export-dxf.md) |
+| [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Переименование файлов деталей и сборок с обновлением ссылок компонентов. | [Все функции](docs/rename-assemblies.md) |
+| [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Открытие папки текущего PRT в Проводнике. | [Все функции](docs/open-project-folder.md) |
+| [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Открытие папки карт наладки текущего проекта. | [Все функции](docs/open-setup-cards-folder.md) |
+| [NX_Update_Script_Buttons.py](scripts/NX_Update_Script_Buttons.py) | V1.10 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
+
+Каждое руководство содержит возможности, порядок запуска, настройки, результат и ограничения. История редакций находится в [CHANGELOG.md](CHANGELOG.md).
 
 **NEW PROJECT в публичный набор не включён.** C#-журналы сохраняют расширение `.cs`; преобразовывать их в Python не нужно.
 
@@ -85,7 +87,7 @@ GitHub — центральный источник обновлений. Раб�
 | `config/` | Публичные примеры INI. |
 | `templates/` | Пустой реестр только для первой установки. |
 | `manifest.json` | Каталог, версии, пути и SHA-256. |
-| `docs/` | Установка, настройки, обновление и публикация. |
+| `docs/` | Руководства по каждому скрипту, установка, настройки и публикация. |
 | `tools/`, `tests/`, `.github/workflows/` | Проверка публикации; устанавливать в NX не нужно. |
 
 ## Проверка перед публикацией
