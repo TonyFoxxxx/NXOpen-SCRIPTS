@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 # Минимальный Z в именах операций
-# SCRIPT_VERSION: V1.01
+# SCRIPT_VERSION: V1.02
 # Рабочее имя файла: NX_Operation_Zmin.py
-SCRIPT_VERSION = "V1.01"
+SCRIPT_VERSION = "V1.02"
 SCRIPT_NAME = "Минимальный Z в именах операций"
 
 # Запуск: NX / Designcenter -> Журнал -> Воспроизвести.
 # Выделены операции: только они. Выделения нет: все операции рабочей детали.
-# V1.01: для 4 осей Z считается по текущей оси инструмента в каждой CL-точке.
+# V1.02: фактическая ось ToolAxis учитывается и в формате Three, и в Five.
+# Three может содержать постоянный наклон инструмента при повороте детали.
 # Начало СКС операции должно находиться на оси вращения детали.
-# Трёхосевая траектория: прежний расчёт Z в СКС операции.
+# При ToolAxis, совпадающей с Z СКС, результат обычной 3-осевой обработки прежний.
 # Единицы CAM-детали; четыре знака после точки без незначащих нулей.
 # Дуги/винты с постоянной осью: аналитический минимум между CL-точками.
 # Дуги/винты с изменением оси без данных интерполяции: операция пропускается.
@@ -201,10 +202,11 @@ def arc_path_zmin(start, end, center, axis, clockwise, z_axis, origin, revolutio
 
 
 def path_axis_mode(nx, path):
-    """NX stores rotary tool vectors in the XYZ+IJK ('Five') path format.
+    """Validate the supported NX path storage formats.
 
-    This storage format does not imply that the machine has five axes.
-    Never assume a three-axis path when the format cannot be read.
+    The supplied NX diagnostic demonstrates that 'Three' also contains a
+    meaningful, fixed ToolAxis tilted relative to the operation MCS. Neither
+    format determines the physical tool direction or the machine axis count.
     """
     axis_type = getattr(nx.CAM, 'CamPathToolAxisType', None)
     try:
@@ -216,10 +218,11 @@ def path_axis_mode(nx, path):
     return mode
 
 
-def motion_z_axis(motion, mode, mcs_z):
-    if mode == 'Three':
-        # Keep the established 3-axis calculation, including tilted MCS.
-        return mcs_z
+def motion_z_axis(motion):
+    # Read the actual CL vector for BOTH Three and Five, including indexed cuts.
+    # Using MCS Z for Three caused wrong Z values on 16 operations in the
+    # supplied diagnostic. Stored CAM parameter vectors can also differ from
+    # this motion's vector after a toolpath transformation: use the path itself.
     try:
         return unit(path_point(motion.ToolAxis))
     except Exception as exc:
@@ -230,8 +233,7 @@ def motion_z_axis(motion, mode, mcs_z):
 def toolpath_zmin(nx, operation, basis, origin, progress=None):
     """Read the existing CL path; never generate, post or modify it.
 
-    Three-axis paths keep their original MCS calculation. For XYZ+IJK paths,
-    EndPoint and ToolAxis are read in the same work-part frame. With MCS origin
+    EndPoint and ToolAxis are used together for Three and Five paths. With MCS origin
     O on the rotary axis, Z at each stored position is dot(P - O, unit(IJK)).
     Under the same rigid rotation of P - O and IJK their dot product is
     invariant. No abs(), radius substitution or guessed A/B angle is used.
@@ -254,7 +256,7 @@ def toolpath_zmin(nx, operation, basis, origin, progress=None):
     count = int(path.NumberOfToolpathEvents)
     if count <= 0:
         return None
-    mode = path_axis_mode(nx, path)
+    path_axis_mode(nx, path)
     shapes = nx.CAM.CamPathMotionShapeType
     directions = nx.CAM.CamPathDir
     if not all(math.isfinite(c) for c in origin):
@@ -282,10 +284,10 @@ def toolpath_zmin(nx, operation, basis, origin, progress=None):
                     else:
                         raise ValueError('Zmin: неподдерживаемая форма движения ' + str(shape))
                     end = path_point(motion.EndPoint)
-                    z_axis = motion_z_axis(motion, mode, basis[2])
+                    z_axis = motion_z_axis(motion)
                     value = dot(tuple(end[i] - origin[i] for i in range(3)), z_axis)
                     if shape != shapes.Linear:
-                        if mode == 'Five' and previous_axis is not None:
+                        if previous_axis is not None:
                             difference = tuple(z_axis[i] - previous_axis[i] for i in range(3))
                             if dot(difference, difference) > 1e-16:
                                 raise ValueError('Дуга или винтовое движение с изменением оси инструмента: '

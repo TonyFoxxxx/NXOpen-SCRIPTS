@@ -36,10 +36,10 @@
       "id": "NX_Operation_Zmin",
       "name": "Минимальный Z в именах операций",
       "file": "NX_Operation_Zmin.py",
-      "version": "V1.01",
+      "version": "V1.02",
       "path": "scripts/NX_Operation_Zmin.py",
-      "sha256": "ad639637f22430ec4825a0b86cfbf4fae2cecd1936468dfb6bd31d8324586692",
-      "description": "Добавление минимального Z траектории к именам операций. Для 4 осей известна ошибка расчёта."
+      "sha256": "f9e3c14ec0f0b080edd8aa8d1f99121c712c34282cb9c05c008e5db8eff8ce3c",
+      "description": "Добавление минимального Z траектории к именам операций с учётом текущего направления инструмента. Начало MCS должно лежать на оси вращения детали."
     },
     {
       "id": "NX_Rename_Operations_In_Selected_Folder",
