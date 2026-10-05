@@ -146,15 +146,15 @@
       "id": "NX_Update_Script_Buttons",
       "name": "Апдейтер скриптов",
       "file": "NX_Update_Script_Buttons.py",
-      "version": "V1.11",
+      "version": "V1.12",
       "path": "scripts/NX_Update_Script_Buttons.py",
-      "sha256": "d32f1034f642c1f63e6b4e2745791333446721460101fa97bae3025b00796e35",
+      "sha256": "c36e446d1aed138f1c84db7a04c56c05d14e544ecb11e7120a9c2dc287309150",
       "description": "Установка и обновление выбранных скриптов из GitHub или папки.",
       "config": {
         "path": "config/NX_Update_Script_Buttons.example.ini",
         "file": "NX_Update_Script_Buttons.ini",
         "location": "script",
-        "sha256": "cf3b7bcaeb214f830547027df772a9e8e60be4a9aac77ad33957d31e14435176"
+        "sha256": "003e31fb4e84456c1dba948cf43b7ecdd2ff39618f2cdf7a270382006588dc34"
       }
     }
   ]

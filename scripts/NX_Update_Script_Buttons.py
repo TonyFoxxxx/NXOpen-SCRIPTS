@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # NX_Update_Script_Buttons.py
-# SCRIPT_VERSION: V1.11
+# SCRIPT_VERSION: V1.12
 """
 Апдейтер NX / Designcenter для Windows: GitHub manifest или папка обновлений.
 
@@ -50,11 +50,11 @@ import urllib.request
 from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 
-SCRIPT_VERSION = "V1.11"
+SCRIPT_VERSION = "V1.12"
 SCRIPT_NAME = "Обновление скриптов NX"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode('utf-8')
-DEFAULT_WORKING_FOLDER = r"C:\ProgramData\2. NX_Scripts"
+DEFAULT_WORKING_FOLDER = r"C:\ProgramData\NX_SCRIPTS"
 DEFAULT_UPDATE_FOLDER = ''
 RAW_ROOT = 'https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/'
 DEFAULT_MANIFEST_URL = RAW_ROOT + 'manifest.json'
