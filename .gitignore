@@ -218,3 +218,34 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Local NX data; only explicitly public examples/templates belong in Git.
+*.ini
+!config/*.example.ini
+*.xlsx
+!templates/NX_Numbering_Register_v1.0.xlsx
+*.ttf
+*.otf
+*.prt
+*.log
+*.lock
+*.pending
+*.tmp
+*.bak
+*.backup
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.zip
+*.7z
+*.ptp
+*.nc
+LastChoice.ini
+local/
+private/
+backup/
+backups/

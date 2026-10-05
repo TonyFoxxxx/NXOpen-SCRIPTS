@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "min_updater_version": "V1.09",
+  "scripts": [
+    {
+      "id": "NX_Setup_Prototype",
+      "name": "Карта наладки",
+      "file": "NX_Setup_Prototype.py",
+      "version": "V2.37",
+      "path": "scripts/NX_Setup_Prototype.py",
+      "sha256": "3874708806e3153f0672e7107a6664239327401cb40f4d6954e7f43f53245169",
+      "description": "Карта наладки с видами, инструментами, Zmin в MCS операции и растягиваемыми примечаниями.",
+      "config": {
+        "path": "config/NX_Setup_Prototype.example.ini",
+        "file": "NX_Setup_Prototype.ini",
+        "location": "script",
+        "sha256": "09e47d79e585f0773c65d25fb5d39f089e843d04bac79af14acbe127d5d34376"
+      }
+    },
+    {
+      "id": "NX_Postprocess_To_Machine",
+      "name": "Меню постпроцессирования",
+      "file": "NX_Postprocess_To_Machine.cs",
+      "version": "V1.35",
+      "path": "scripts/NX_Postprocess_To_Machine.cs",
+      "sha256": "46cc3bef6b2f102e6662635748c0e5a4cf2002fb2d0dcee6d6c0acd739036d54",
+      "description": "Выбор постпроцессора и папки станка, сохранение управляющей программы.",
+      "config": {
+        "path": "config/NX_Postprocess_To_Machine.example.ini",
+        "file": "NX_Postprocess_To_Machine.ini",
+        "location": "script",
+        "sha256": "763a42f5c25257ab26e79139e141d4830ad697d3aa7eba48bf7e07f5adb33455"
+      }
+    },
+    {
+      "id": "NX_Operation_Zmin",
+      "name": "Минимальный Z в именах операций",
+      "file": "NX_Operation_Zmin.py",
+      "version": "V1.01",
+      "path": "scripts/NX_Operation_Zmin.py",
+      "sha256": "ad639637f22430ec4825a0b86cfbf4fae2cecd1936468dfb6bd31d8324586692",
+      "description": "Добавление или обновление суффикса _Z в именах операций. В V1.01 известна ошибка Z для 4 осей: требуется диагностика; не используйте такой результат в производственных решениях."
+    },
+    {
+      "id": "NX_Rename_Operations_In_Selected_Folder",
+      "name": "Переименование операций",
+      "file": "NX_Rename_Operations_In_Selected_Folder.cs",
+      "version": "V1.04",
+      "path": "scripts/NX_Rename_Operations_In_Selected_Folder.cs",
+      "sha256": "8e6241749d4b7b22bfdbd0b73635615473eebec6c5fe5d600cd572ad621410e9",
+      "description": "Переименование операций в выбранной папке CAM."
+    },
+    {
+      "id": "NX_Number_Program_Folders",
+      "name": "Нумерация папок программ",
+      "file": "NX_Number_Program_Folders.cs",
+      "version": "V1.03",
+      "path": "scripts/NX_Number_Program_Folders.cs",
+      "sha256": "ff1e04277a092109666bca8190afdd7485038ab9370cabccd7f37f997e8c9cee",
+      "description": "Выдача номеров папкам программ с учётом диапазона и истории в XLSX.",
+      "config": {
+        "path": "config/NX_Numbering_Settings_v1.0.example.ini",
+        "file": "NX_Numbering_Settings_v1.0.ini",
+        "location": "numbering_data",
+        "sha256": "47ef932dd74f3e4eb628d2f09b2ea83a426960fe0d27ac504d7cb14941fbf01a"
+      },
+      "install_files": [
+        {
+          "path": "templates/NX_Numbering_Register_v1.0.xlsx",
+          "file": "NX_Numbering_Register_v1.0.xlsx",
+          "location": "numbering_data",
+          "sha256": "9daf4d5582206428dfbfff058d2c428589d01ab4fe05ab0df86a3f40240824d4"
+        }
+      ]
+    },
+    {
+      "id": "NX_Tool_D_To_Description",
+      "name": "TOOL D / описание инструмента",
+      "file": "NX_Tool_D_To_Description.cs",
+      "version": "V1.06",
+      "path": "scripts/NX_Tool_D_To_Description.cs",
+      "sha256": "38deff1dd9585b660114e01e5418e35d892aad5a87ab3dbcb5e3dd67fafeca18",
+      "description": "Перенос диаметра инструмента в описание."
+    },
+    {
+      "id": "NX_ESKD_Format_GOST_A",
+      "name": "ЕСКД",
+      "file": "NX_ESKD_Format_GOST_A.cs",
+      "version": "V1.35",
+      "path": "scripts/NX_ESKD_Format_GOST_A.cs",
+      "sha256": "33e706b47a26a45e3a8e4b6b5a4a693ff30cec2e0a8d0f3e19aa5fe5af644707",
+      "description": "Оформление чертежа по принятым шаблонам ЕСКД; требуется внешний совместимый шрифт.",
+      "config": {
+        "path": "config/NX_ESKD_Settings.example.ini",
+        "file": "NX_ESKD_Settings.ini",
+        "location": "script",
+        "sha256": "e9ecf8a6d2765f47899c4865209c8a6437033592fa4bd01c72d05f046e3de9e2"
+      }
+    },
+    {
+      "id": "NX_Export_Drawing_To_PDF",
+      "name": "Экспорт чертежа PDF",
+      "file": "NX_Export_Drawing_To_PDF.cs",
+      "version": "V1.11",
+      "path": "scripts/NX_Export_Drawing_To_PDF.cs",
+      "sha256": "660c62e77123f047a0498bc3a8426798c4308916ad9ab664a5ef3908d5c29f98",
+      "description": "Экспорт листов чертежа в PDF."
+    },
+    {
+      "id": "NX_Export_Current_View_To_DXF",
+      "name": "Экспорт текущего вида DXF",
+      "file": "NX_Export_Current_View_To_DXF.cs",
+      "version": "V1.08",
+      "path": "scripts/NX_Export_Current_View_To_DXF.cs",
+      "sha256": "0d829bdd590991d86c63a76ebcdb933db38183673c765640bc9f8a1879e8283b",
+      "description": "Экспорт текущего вида в DXF."
+    },
+    {
+      "id": "NX_Rename_Assemblies",
+      "name": "Переименование сборок",
+      "file": "NX_Rename_Assemblies.cs",
+      "version": "V1.05",
+      "path": "scripts/NX_Rename_Assemblies.cs",
+      "sha256": "253fb84e0621592a0368120616162f70a2d69a190ebaa16e645fcd8322336259",
+      "description": "Переименование сборок и компонентов по существующим правилам скрипта."
+    },
+    {
+      "id": "NX_Open_Project_Folder",
+      "name": "Папка проекта",
+      "file": "NX_Open_Project_Folder.cs",
+      "version": "V1.01",
+      "path": "scripts/NX_Open_Project_Folder.cs",
+      "sha256": "6424c9d7c285761ceaa8c256b3a5075a943709250185727a170e766654cd1b74",
+      "description": "Открытие папки текущего проекта."
+    },
+    {
+      "id": "NX_Open_Setup_Cards_Folder",
+      "name": "Папка карт наладки",
+      "file": "NX_Open_Setup_Cards_Folder.py",
+      "version": "V1.01",
+      "path": "scripts/NX_Open_Setup_Cards_Folder.py",
+      "sha256": "f632d4edaf6ff498cfdd96ad4b1b6075d1ad2889b0c61d4db98ed1ba21ef9d2c",
+      "description": "Открытие папки карт наладки для текущей детали."
+    },
+    {
+      "id": "NX_Update_Script_Buttons",
+      "name": "Апдейтер скриптов",
+      "file": "NX_Update_Script_Buttons.py",
+      "version": "V1.09",
+      "path": "scripts/NX_Update_Script_Buttons.py",
+      "sha256": "9528fcfd514e38e05d3d9bc3aad057c2e0f2eb634efd024356e31eb438f22175",
+      "description": "Проверка manifest GitHub, установка новых скриптов и обновление выбранных.",
+      "config": {
+        "path": "config/NX_Update_Script_Buttons.example.ini",
+        "file": "NX_Update_Script_Buttons.ini",
+        "location": "script",
+        "sha256": "cf3b7bcaeb214f830547027df772a9e8e60be4a9aac77ad33957d31e14435176"
+      }
+    }
+  ]
+}
