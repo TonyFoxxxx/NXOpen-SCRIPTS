@@ -241,6 +241,7 @@ class UpdaterTests(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             u.apply_updates(self.scan(), self.fetch, replace=fail_second)
+        self.assertEqual(count[0], 2, 'The first replacement must succeed before the simulated failure')
         for path, before in originals.items():
             self.assertEqual(path.read_bytes(), before)
         self.assertFalse((self.root / 'New.py').exists())
@@ -274,8 +275,8 @@ class UpdaterTests(unittest.TestCase):
 
     def test_new_minimum_allows_only_updater(self):
         self.add_script()
-        self.add_script('NX_Update_Script_Buttons.py', 'V1.10')
-        self.manifest['min_updater_version'] = 'V1.10'
+        self.add_script('NX_Update_Script_Buttons.py', 'V1.11')
+        self.manifest['min_updater_version'] = 'V1.11'
         rows = {r['remote']['id']: r for r in self.scan()}
         self.assertFalse(rows['Example']['eligible'])
         self.assertTrue(rows['NX_Update_Script_Buttons']['eligible'])

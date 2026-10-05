@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # NX_Update_Script_Buttons.py
-# SCRIPT_VERSION: V1.09
+# SCRIPT_VERSION: V1.10
 """
 Апдейтер NX / Designcenter для Windows: GitHub manifest или папка обновлений.
 
@@ -50,7 +50,7 @@ import urllib.request
 from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 
-SCRIPT_VERSION = "V1.09"
+SCRIPT_VERSION = "V1.10"
 SCRIPT_NAME = "Обновление скриптов NX"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode('utf-8')
@@ -1109,7 +1109,7 @@ def _reject_link(path):
 
 
 def open_replace_guard(path):
-    """Deny in-place writes while permitting our atomic rename on Windows."""
+    """Guard preflight reads on Windows; close before replacing this file."""
     if os.name != 'nt':
         return open(path, 'rb')
     import msvcrt
@@ -1118,7 +1118,9 @@ def open_replace_guard(path):
     kernel.CreateFileW.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD, ctypes.c_void_p, W.DWORD, W.DWORD, W.HANDLE]
     kernel.CreateFileW.restype = W.HANDLE
     kernel.CloseHandle.argtypes = [W.HANDLE]
-    handle = kernel.CreateFileW(path, 0x80000000, 1 | 4, None, 3, 0x80, None)
+    # FILE_SHARE_READ only: other readers are allowed during preflight,
+    # but writers and renames must wait until this guard is closed.
+    handle = kernel.CreateFileW(path, 0x80000000, 1, None, 3, 0x80, None)
     if handle == ctypes.c_void_p(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
     try:
@@ -1154,6 +1156,7 @@ def commit_jobs(jobs, replace=None):
     """Preflight the entire selection; use same-directory stages and RAM rollback."""
     replace = replace or os.replace
     staged, committed, created_dirs = [], [], []
+    guards = {}
     try:
         with ExitStack() as locks:
             for job in jobs:
@@ -1176,6 +1179,7 @@ def commit_jobs(jobs, replace=None):
                     job['before'] = None
                 else:
                     stream = locks.enter_context(open_replace_guard(path))
+                    guards[path] = stream
                     before = stream.read(MAX_SCRIPT_SIZE + 4097)
                     if digest(before) != job['expected']:
                         raise ValueError('Рабочий файл изменился после проверки: ' + path)
@@ -1197,6 +1201,10 @@ def commit_jobs(jobs, replace=None):
                         with open(path, 'rb') as source:
                             if digest(source.read(MAX_SCRIPT_SIZE + 4097)) != job['expected']:
                                 raise ValueError('Рабочий файл изменился перед заменой: ' + path)
+                        # Windows cannot replace the destination while our own
+                        # guard is open. Release only this file immediately
+                        # before the atomic rename; other jobs remain guarded.
+                        guards.pop(path).close()
                         replace(job['stage'], path)
                     committed.append(job)
                     with open(path, 'rb') as check:

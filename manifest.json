@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "min_updater_version": "V1.09",
+  "min_updater_version": "V1.10",
   "scripts": [
     {
       "id": "NX_Setup_Prototype",
@@ -146,9 +146,9 @@
       "id": "NX_Update_Script_Buttons",
       "name": "Апдейтер скриптов",
       "file": "NX_Update_Script_Buttons.py",
-      "version": "V1.09",
+      "version": "V1.10",
       "path": "scripts/NX_Update_Script_Buttons.py",
-      "sha256": "9528fcfd514e38e05d3d9bc3aad057c2e0f2eb634efd024356e31eb438f22175",
+      "sha256": "aa904fcd91fd7db2dea639e69cde10a2249c9ccaae2a5fd9e9fa3fca48955a45",
       "description": "Проверка manifest GitHub, установка новых скриптов и обновление выбранных.",
       "config": {
         "path": "config/NX_Update_Script_Buttons.example.ini",
