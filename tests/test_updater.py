@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('updater', ROOT / 'scripts/NX_Update_Script_Buttons.py')
+SPEC = importlib.util.spec_from_file_location('updater', ROOT / 'scripts/NX_Update_Scripts.py')
 u = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(u)
 
@@ -30,7 +30,7 @@ class UpdaterTests(unittest.TestCase):
         self.data = self.root / 'numbering'
         self.addCleanup(patch.stopall)
         patch.object(u, 'NUMBERING_DATA_FOLDER', str(self.data)).start()
-        self.settings = u.load_settings(str(self.root / 'NX_Update_Script_Buttons.py'))
+        self.settings = u.load_settings(str(self.root / 'NX_Update_Scripts.py'))
         self.settings['working_folder'] = str(self.root)
         self.payloads = {}
         self.calls = []
@@ -258,11 +258,15 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), b'created by another program')
 
     def test_self_update_is_deferred_until_explicit_final_commit(self):
-        self.add_script('NX_Update_Script_Buttons.py', 'V1.10')
-        target = self.root / 'NX_Update_Script_Buttons.py'
+        self.add_script('NX_Update_Scripts.py', 'V1.10')
+        target = self.root / 'NX_Update_Scripts.py'
         before = source('V1.09')
         target.write_bytes(before)
+        legacy = self.root / 'NX_Update_Script_Buttons.py'
+        legacy_before = source('V1.12')
+        legacy.write_bytes(legacy_before)
         rows = self.scan(self_path=str(target))
+        self.assertEqual(len(rows), 1)
         self.assertTrue(rows[0]['is_self'])
         self.assertFalse(rows[0]['checked'])
         with self.assertRaises(ValueError):
@@ -272,29 +276,72 @@ class UpdaterTests(unittest.TestCase):
         self.assert_no_stages()
         u.commit_jobs([pending])
         self.assertEqual(u.internal_info(str(target), target.read_bytes())['label'], 'V1.10')
+        self.assertEqual(legacy.read_bytes(), legacy_before)
 
     def test_new_minimum_allows_only_updater(self):
         self.add_script()
-        self.add_script('NX_Update_Script_Buttons.py', 'V1.11')
+        self.add_script('NX_Update_Scripts.py', 'V1.11')
         self.manifest['min_updater_version'] = 'V1.11'
         # Model an older client explicitly so this remains a minimum-version
         # regression test when the real updater advances to V1.11 and beyond.
         with patch.object(u, 'SCRIPT_VERSION', 'V1.10'):
             rows = {r['remote']['id']: r for r in self.scan()}
         self.assertFalse(rows['Example']['eligible'])
-        self.assertTrue(rows['NX_Update_Script_Buttons']['eligible'])
+        self.assertTrue(rows['NX_Update_Scripts']['eligible'])
 
     def test_legacy_ini_preserves_paths_unknown_options_and_sections(self):
         ini = Path(self.settings['config_path'])
         ini.write_text('[Paths]\nworking_folder=' + str(self.root) + '\nupdate_folder=' + str(self.root / 'offline') +
                        '\n[Options]\nsearch_working_subfolders=no\ncustom_option=keep\n[Personal]\nvalue=preserve\n')
-        cfg = u.load_settings(str(self.root / 'NX_Update_Script_Buttons.py'))
+        cfg = u.load_settings(str(self.root / 'NX_Update_Scripts.py'))
         self.assertEqual(cfg['source_type'], 'github')
         saved = u.save_settings(cfg)
         parsed = u.config_parser(saved['_config_bytes'])
         self.assertEqual(parsed['Personal']['value'], 'preserve')
         self.assertEqual(parsed['Options']['custom_option'], 'keep')
         self.assertEqual(parsed['Paths']['update_folder'], str(self.root / 'offline'))
+
+    def test_renamed_updater_preserves_legacy_ini_without_a_second_config(self):
+        legacy = self.root / 'NX_Update_Script_Buttons.ini'
+        current = self.root / 'NX_Update_Scripts.ini'
+        legacy.write_text('[Paths]\nworking_folder=' + str(self.root / 'custom') +
+                          '\nupdate_folder=\n[Options]\ncustom_option=keep\n'
+                          'exclude_files=NX_Update_Script_Buttons*.py\n'
+                          '[Personal]\nvalue=preserve\n')
+        cfg = u.load_settings(str(self.root / 'NX_Update_Scripts.py'))
+        self.assertEqual(cfg['config_path'], str(legacy))
+        self.assertEqual(cfg['working_folder'], str(self.root / 'custom'))
+        saved = u.save_settings(cfg)
+        parsed = u.config_parser(saved['_config_bytes'])
+        self.assertEqual(parsed['Personal']['value'], 'preserve')
+        self.assertEqual(parsed['Options']['custom_option'], 'keep')
+        self.assertEqual(set(self.root.iterdir()), {legacy})
+        legacy.rename(current)
+        cfg = u.load_settings(str(self.root / 'NX_Update_Scripts.py'))
+        self.assertEqual(cfg['config_path'], str(current))
+        self.assertEqual(cfg['working_folder'], str(self.root / 'custom'))
+        self.assertEqual(u.save_settings(cfg)['_config_bytes'], current.read_bytes())
+        self.assertEqual(set(self.root.iterdir()), {current})
+        legacy.write_text('[Paths]\nworking_folder=' + str(self.root / 'obsolete') + '\n')
+        self.assertEqual(u.load_settings(str(self.root / 'NX_Update_Scripts.py'))['config_path'], str(current))
+
+    def test_folder_source_excludes_both_updater_names(self):
+        remote = self.root / 'offline'
+        remote.mkdir()
+        originals = {}
+        for name in ('NX_Update_Scripts.py', 'NX_Update_Script_Buttons.py'):
+            target = self.root / name
+            originals[target] = source('V1.12')
+            target.write_bytes(originals[target])
+            (remote / name).write_bytes(source('V1.14'))
+        (remote / 'Example_V1.10.py').write_bytes(source())
+        cfg = dict(self.settings, source_type='folder', update_folder=str(remote), exclude_files=())
+        rows = u.scan_settings(cfg, threading.Event())
+        self.assertEqual([Path(row['path']).name for row in rows], ['Example.py'])
+        u.apply_updates(rows)
+        self.assertTrue((self.root / 'Example.py').is_file())
+        for path, before in originals.items():
+            self.assertEqual(path.read_bytes(), before)
 
     def test_folder_source_still_updates_stable_name(self):
         remote = self.root / 'offline'

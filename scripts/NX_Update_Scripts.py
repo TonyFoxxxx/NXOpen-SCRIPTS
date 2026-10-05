@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# NX_Update_Script_Buttons.py
-# SCRIPT_VERSION: V1.12
+# NX_Update_Scripts.py
+# SCRIPT_VERSION: V1.13
 """
 Апдейтер NX / Designcenter для Windows: GitHub manifest или папка обновлений.
 
@@ -9,7 +9,7 @@ GitHub: Проверить загружает только manifest.json; При
 до записи. Новые скрипты не отмечены автоматически. Местные правки и файлы
 без подтверждённого происхождения требуют ручного выбора.
 
-Настройки: NX_Update_Script_Buttons.ini рядом с журналом. Старые [Paths] и
+Настройки: NX_Update_Scripts.ini рядом с журналом. Старые [Paths] и
 [Options] читаются; новый [Source] задаёт github/folder и постоянный Raw URL.
 Рабочие пути, кнопки NX и пользовательские INI сохраняются. Новые INI создаются
 из примеров только при первоначальной установке; существующие не заменяются.
@@ -50,7 +50,7 @@ import urllib.request
 from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 
-SCRIPT_VERSION = "V1.12"
+SCRIPT_VERSION = "V1.13"
 SCRIPT_NAME = "Обновление скриптов NX"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode('utf-8')
@@ -61,8 +61,10 @@ DEFAULT_MANIFEST_URL = RAW_ROOT + 'manifest.json'
 NUMBERING_DATA_FOLDER = r'C:\ProgramData\3_NX_DATA'
 MAX_MANIFEST_SIZE = 1024 * 1024
 HTTP_TIMEOUT = 20
-UPDATER_ID = 'nx_update_script_buttons'
-CONFIG_FILENAME = 'NX_Update_Script_Buttons.ini'
+UPDATER_ID = 'nx_update_scripts'
+CONFIG_FILENAME = 'NX_Update_Scripts.ini'
+LEGACY_UPDATER_ID = 'nx_update_script_buttons'
+LEGACY_CONFIG_FILENAME = 'NX_Update_Script_Buttons.ini'
 MAX_CONFIG_SIZE = 256 * 1024
 SCRIPT_EXTENSIONS = {".py", ".cs", ".vb"}
 MAX_SCRIPT_SIZE = 16 * 1024 * 1024
@@ -243,7 +245,7 @@ def resolve_setting_path(value, base_folder):
 
 def excluded_script(path, patterns):
     identity = script_identity(path)
-    if not identity or identity[0] == ('nx_update_script_buttons', '.py'):
+    if not identity or identity[0] in {(UPDATER_ID, '.py'), (LEGACY_UPDATER_ID, '.py')}:
         return True
     name = ntpath.basename(path).casefold()
     return any(fnmatch.fnmatchcase(name, pattern.casefold()) for pattern in patterns)
@@ -281,13 +283,16 @@ def load_settings(script_path):
     folder = os.path.dirname(os.path.abspath(script_path))
     stable_path = os.path.join(folder, CONFIG_FILENAME)
     matching_path = os.path.splitext(os.path.abspath(script_path))[0] + '.ini'
+    legacy_path = os.path.join(folder, LEGACY_CONFIG_FILENAME)
     config_path = stable_path
-    if not os.path.isfile(stable_path) and os.path.isfile(matching_path):
-        config_path = matching_path
+    for candidate in (stable_path, matching_path, legacy_path):
+        if os.path.isfile(candidate):
+            config_path = candidate
+            break
     settings = {'config_path': config_path, 'working_folder': DEFAULT_WORKING_FOLDER,
                 'update_folder': DEFAULT_UPDATE_FOLDER, 'update_recursive': True,
                 'source_type': 'github', 'manifest_url': DEFAULT_MANIFEST_URL,
-                'working_recursive': False, 'exclude_files': ('NX_Update_Script_Buttons*.py',),
+                'working_recursive': False, 'exclude_files': ('NX_Update_Scripts*.py',),
                 '_config_bytes': None}
     try:
         with open(config_path, 'rb') as stream:
@@ -324,7 +329,7 @@ def load_settings(script_path):
                         update_recursive=boolean('search_update_subfolders', 'yes'),
                         working_recursive=boolean('search_working_subfolders', 'no'),
                         exclude_files=tuple(p.strip() for p in options.get(
-                            'exclude_files', 'NX_Update_Script_Buttons*.py').split(';') if p.strip()),
+                            'exclude_files', 'NX_Update_Scripts*.py').split(';') if p.strip()),
                         _config_bytes=raw)
         # V1.03 [Scripts] is intentionally ignored: every check discovers the folder afresh.
         return settings
@@ -362,7 +367,7 @@ def settings_payload(settings):
         'exclude_files': '; '.join(settings['exclude_files']),
     })
     output = io.StringIO()
-    output.write('; NX_Update_Script_Buttons.ini — ' + SCRIPT_VERSION + '\n')
+    output.write('; ' + os.path.basename(settings['config_path']) + ' — ' + SCRIPT_VERSION + '\n')
     output.write('; Папки и параметры сохраняются кнопкой «Проверить».\n')
     output.write('; Список скриптов определяется автоматически при каждой проверке.\n\n')
     parser.write(output)

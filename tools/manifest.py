@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('nx_updater', ROOT / 'scripts/NX_Update_Script_Buttons.py')
+spec = importlib.util.spec_from_file_location('nx_updater', ROOT / 'scripts/NX_Update_Scripts.py')
 updater = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(updater)
 

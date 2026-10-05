@@ -57,7 +57,7 @@ C:\ProgramData\3_NX_DATA\NX_Numbering_Settings_v1.0.ini
 
 ## Апдейтер
 
-`NX_Update_Script_Buttons.ini` находится рядом с `.py`:
+`NX_Update_Scripts.ini` находится рядом с `.py`:
 
 ```ini
 [Paths]
@@ -71,8 +71,10 @@ manifest_url=https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/ma
 [Options]
 search_update_subfolders=yes
 search_working_subfolders=no
-exclude_files=NX_Update_Script_Buttons*.py
+exclude_files=NX_Update_Scripts*.py
 ```
+
+При переходе со старого имени переименуйте рабочий INI по [инструкции](installation.md#переход-со-старого-имени-апдейтера), сохранив содержимое. Если основной INI отсутствует, апдейтер также читает `NX_Update_Script_Buttons.ini` и сохраняет настройки в этом же файле. При наличии обоих приоритет у `NX_Update_Scripts.ini`.
 
 GitHub — режим по умолчанию, включая старый INI без `[Source]`. `search_update_subfolders` относится только к источнику-папке. Старое исключение апдейтера действует в режиме `folder`; GitHub включает его отдельно для безопасного самообновления.
 

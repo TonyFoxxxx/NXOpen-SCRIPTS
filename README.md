@@ -24,14 +24,14 @@
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Переименование файлов деталей и сборок с обновлением ссылок компонентов. | [Все функции](docs/rename-assemblies.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Открытие папки текущего PRT в Проводнике. | [Все функции](docs/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Открытие папки карт наладки текущего проекта. | [Все функции](docs/open-setup-cards-folder.md) |
-| [NX_Update_Script_Buttons.py](scripts/NX_Update_Script_Buttons.py) | V1.12 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
+| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.13 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
 ## Установка
 
 1. Создайте папку для скриптов с правами записи. Папка по умолчанию — `C:\ProgramData\NX_SCRIPTS`.
-2. [Скачайте апдейтер](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Update_Script_Buttons.py) и сохраните его в этой папке как `NX_Update_Script_Buttons.py`.
+2. [Скачайте апдейтер](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Update_Scripts.py) и сохраните его в этой папке как `NX_Update_Scripts.py`.
 3. В NX откройте **Инструменты → Журнал → Воспроизвести / Tools → Journal → Play**, выберите файл апдейтера и запустите.
 4. Укажите рабочую папку. Источник GitHub заполнен по умолчанию. Нажмите **«Проверить»**.
 5. Отметьте нужные скрипты и нажмите **«Применить выбранное»**.
@@ -39,7 +39,21 @@
 
 Если INI апдейтера отсутствует, кнопка «Проверить» создаёт его с выбранными настройками. Существующие настройки других скриптов при обновлении сохраняются.
 
-Установленные скрипты запускаются через то же меню журналов. Для постоянного доступа можно настроить кнопки NX. Пошаговые инструкции, ручная установка и переход со старого апдейтера — в [руководстве по установке](docs/installation.md).
+Установленные скрипты запускаются через то же меню журналов или кнопками на ленте NX.
+
+## Кнопка запуска — настройка один раз
+
+**Для каждого скрипта кнопку нужно создать один раз.** Она запускает локальный файл по постоянному пути. При обновлении апдейтер заменяет содержимое этого файла; кнопка продолжает работать без повторной настройки.
+
+1. Нажмите правой кнопкой мыши на свободном месте ленты NX и откройте **Настройка / Customize**.
+2. На вкладке **Команды / Commands** выберите **Новый элемент / New Item** и перетащите **Новая пользовательская команда / New User Command** на нужную панель. В некоторых версиях категория называется **Новая кнопка / New Button**.
+3. Оставив окно настройки открытым, нажмите правой кнопкой на добавленной кнопке и выберите **Изменить действие / Edit Action**.
+4. Выберите действие запуска файла: **Execute an Action** или **Journal File** — в зависимости от версии NX. Через **Обзор / Browse** укажите `C:\ProgramData\NX_SCRIPTS\NX_Update_Scripts.py`. Для кнопки другого скрипта выберите соответствующий `.py` или `.cs`.
+5. Задайте название кнопки, например «Апдейтер скриптов», и при необходимости значок. Подтвердите действие, закройте настройку и проверьте запуск.
+
+[Подробная инструкция по кнопкам и сохранению роли](docs/installation.md#кнопки). Перенос файлов в другую папку требует изменения пути кнопки.
+
+Для апдейтера со старым именем `NX_Update_Script_Buttons.py` нужен [однократный переход на новое имя](docs/installation.md#переход-со-старого-имени-апдейтера). Дальнейшие обновления выполняются через `NX_Update_Scripts.py`.
 
 ## INI
 
@@ -51,7 +65,7 @@
 | Постпроцессирование | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Postprocess_To_Machine.example.ini) | `NX_Postprocess_To_Machine.ini` рядом со скриптом; свои посты и папки станков. |
 | ЕСКД | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_ESKD_Settings.example.ini) | `NX_ESKD_Settings.ini` рядом со скриптом; надписи и оформление. |
 | Нумерация | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Numbering_Settings_v1.0.example.ini) | `C:\ProgramData\3_NX_DATA\NX_Numbering_Settings_v1.0.ini` и реестр из `RegistryFile`. |
-| Апдейтер | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Update_Script_Buttons.example.ini) | `NX_Update_Script_Buttons.ini` рядом со скриптом; источник и рабочая папка. |
+| Апдейтер | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Update_Scripts.example.ini) | `NX_Update_Scripts.ini` рядом со скриптом; источник и рабочая папка. |
 
 При ручной установке удалите `.example` из имени файла и заполните параметры. Примеры не заменяют существующие рабочие INI или историю нумерации. Подробности — в [руководстве по настройкам](docs/configuration.md).
 

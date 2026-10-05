@@ -7,7 +7,7 @@ from pathlib import Path
 import unittest
 
 
-SOURCE = Path(__file__).resolve().parents[1] / 'scripts/NX_Update_Script_Buttons.py'
+SOURCE = Path(__file__).resolve().parents[1] / 'scripts/NX_Update_Scripts.py'
 WINDOW = next(node for node in ast.parse(SOURCE.read_text(encoding='utf-8')).body
               if isinstance(node, ast.FunctionDef) and node.name == 'run_window')
 FUNCTIONS = {node.name: node for node in WINDOW.body if isinstance(node, ast.FunctionDef)}
