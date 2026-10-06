@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.41
+# SCRIPT_VERSION: V2.42
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -86,7 +86,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.41"
+SCRIPT_VERSION = "V2.42"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -5298,7 +5298,7 @@ function migrateOperationTables(root){
   operationTableSchemas.set(table,legacy?1:(hasZmin?3:2));
   if(legacy){
    for(const row of table.rows)row.cells[3]?.remove();table.querySelectorAll('colgroup>col')[3]?.remove();
-   const floor=table.dataset.minMm?.split(',');if(floor?.length===11){floor.splice(3,1);table.dataset.minMm=floor.join(',');}table.dataset.flexCols='0,3';
+   const floor=table.dataset.minMm?.split(',');if(floor?.length===11){floor.splice(3,1);table.dataset.minMm=floor.join(',');}table.dataset.flexCols='0';
   }
   if(!hasZmin&&head.cells.length===10){
    const col=document.createElement('col');col.dataset.columnId='zmin';table.querySelector('colgroup').append(col);
@@ -5323,7 +5323,7 @@ function migrateOperationTables(root){
     text.textContent=value;text.title=value;cell.title=value;
    }
   }
-  table.dataset.opsSchema='3';table.dataset.flexCols='3';ColumnOptions.apply(table);
+  table.dataset.opsSchema='3';table.dataset.flexCols='0';ColumnOptions.apply(table);
  });
  root.querySelectorAll('template').forEach(t=>migrateOperationTables(t.content));
 }
@@ -6175,8 +6175,8 @@ local('columns-auto').addEventListener('click',()=>resetColumnWidths());
 
 function autoColumnWidths(natural,floor,flex,target){
  const widths=natural.map((n,i)=>Math.max(n,floor[i]));
- // All other columns keep their measured content width. Only a tool name
- // receives the remainder and may use ellipsis; never squeeze numeric data.
+ // All other columns keep their measured content width. The flexible name
+ // column receives the remainder and may use ellipsis; never squeeze values.
  flex.forEach(i=>widths[i]=floor[i]);
  const slack=Math.max(0,target-widths.reduce((a,b)=>a+b,0)),recipients=flex.length?flex:widths.map((_,i)=>i).filter(i=>floor[i]>0||natural[i]>0);
  const weight=recipients.reduce((s,i)=>s+Math.max(natural[i],floor[i]),0);
@@ -6355,7 +6355,7 @@ function fitDataTables(only=null){
   const scale=family==='cover-tools'?Number(first.dataset.coverScale)||1:PageScale.factor(first);
   const base=Number(first.dataset.basePt)*scale,allFloor=first.dataset.minMm.split(',').map(x=>Number(x)*96/25.4*scale);
   const shown=allFloor.map((_,i)=>family!=='operations'||ColumnOptions.shown(OP_COLUMNS[i][0]));
-  const floor=allFloor.map((x,i)=>shown[i]?x:0),flex=(family==='operations'?[3]:first.dataset.flexCols.split(',').map(Number)).filter(i=>shown[i]);
+  const floor=allFloor.map((x,i)=>shown[i]?x:0),flex=(family==='operations'?[0]:first.dataset.flexCols.split(',').map(Number)).filter(i=>shown[i]);
   const holder=document.createElement('div');holder.style.cssText='position:absolute;left:-30000px;top:0;visibility:hidden;width:max-content;pointer-events:none;';holder.style.setProperty('--data-scale',scale);
   const probe=first.cloneNode(false);probe.classList.add('column-probe');probe.classList.remove('wrap-operation-names');probe.style.width='max-content';probe.style.tableLayout='auto';probe.style.fontSize=base+'pt';for(const property of ['transform','transform-origin','position','left','top','zoom'])probe.style.removeProperty(property);
   probe.append(first.tHead.cloneNode(true));const body=document.createElement('tbody');probe.append(body);
@@ -6370,6 +6370,13 @@ function fitDataTables(only=null){
    const word=Math.max(...OP_COLUMNS[i][1].split(' ').map(w=>ellipsisContext.measureText(w).width));
    floor[i]=Math.max(floor[i],word+(parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0)+3);
   });
+  if(family==='operations'&&shown[0])for(const row of body.rows){
+   // The remaining column still needs room after the tree indentation and
+   // drag handle, including when long operation names wrap onto more lines.
+   const cell=row.cells[0],style=getComputedStyle(cell),indent=cell.querySelector('.tree-indent');
+   floor[0]=Math.max(floor[0],(indent?.getBoundingClientRect().width||0)+
+    (parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0)+4*(parseFloat(style.fontSize)||base*96/72)+3);
+  }
   const natural=headerCells.map((cell,i)=>shown[i]?cell.getBoundingClientRect().width+2:0);holder.remove();
   if(natural.some((x,i)=>shown[i]&&!(x>.35)))continue;
   const metrics={target,base,natural,floor,renderScale,tables,shown};tables.forEach(t=>columnMetrics.set(t,metrics));
@@ -7553,7 +7560,7 @@ def text_width_em(value, bold=False):
 
 
 def fitted_columns(samples, width_mm, base_pt, minima, flexible):
-    """Reserve complete values first; the tool name receives the remaining width."""
+    """Reserve complete values first; flexible names receive the remaining width."""
     needed = [max([minimum] + [em * base_pt * 25.4 / 72 + extra for em, extra in column])
               for column, minimum in zip(samples, minima)]
     if width_mm <= 0:
@@ -7605,8 +7612,8 @@ def operation_layout(report):
                     value = str(value) + ' · продолжение'
             samples[i].append((text_width_em(value, row['kind'] == 'group' or i == 3 or (i == 0 and bool(re.search(r'(?<![^\W_])R0(?![^\W_]|[.,][0-9])', str(value), re.IGNORECASE)))), extra))
     minima = (8, 5, 4, 8, 4, 7, 7, 7, 7, 7, 7)
-    font, widths = fitted_columns(samples, 193.4, 7, minima, (3,))
-    attrs, cols = layout_attributes('operations', font, widths, 7, minima, (3,))
+    font, widths = fitted_columns(samples, 193.4, 7, minima, (0,))
+    attrs, cols = layout_attributes('operations', font, widths, 7, minima, (0,))
     for key in OP_KEYS:
         cols = cols.replace('<col style=', '<col data-column-id="%s" style=' % key, 1)
     return attrs + ' data-ops-schema="3"', cols
