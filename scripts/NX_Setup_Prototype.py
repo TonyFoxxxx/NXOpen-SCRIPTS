@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.42
+# SCRIPT_VERSION: V2.43
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -86,7 +86,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.42"
+SCRIPT_VERSION = "V2.43"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -6269,7 +6269,10 @@ const PageScale=(()=>{
  }
  scope.addEventListener('input',event=>{
   if(!event.target.matches('.page-controls input[type=range]'))return;
-  const page=event.target.closest('.page'),key=page.dataset.pageKey,target=event.target.dataset.scaleTarget;
+  const target=event.target.dataset.scaleTarget;
+  // The shared panel also contains MCS controls; only handle our scale targets.
+  if(!['page','tools','project-image'].includes(target))return;
+  const page=event.target.closest('.page'),key=page.dataset.pageKey;
   if(target==='project-image')ProjectImage.set(event.target.dataset.logScale==='true'?Math.pow(10,Number(event.target.value)/100):event.target.value);else if(target==='tools')toolScale=normalized(event.target.value);else scales[key]=normalized(event.target.value);
   // Operation pages are rebuilt; keep the active slider in the same screen position.
   const rect=page.getBoundingClientRect();
