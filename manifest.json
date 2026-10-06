@@ -21,9 +21,9 @@
       "id": "NX_Postprocess_To_Machine",
       "name": "Меню постпроцессирования",
       "file": "NX_Postprocess_To_Machine.cs",
-      "version": "V1.38",
+      "version": "V1.39",
       "path": "scripts/NX_Postprocess_To_Machine.cs",
-      "sha256": "37f6401132679e19239f46d84d7c8725a7ee3390fd3a5689325b695bda0b2b28",
+      "sha256": "ec1ee7240851e65a713c4c0a283f2cb9ad64ced7e13f8e97ff7812fb07be4984",
       "description": "Вывод управляющих программ и FANUC BIN в папку станка или на носитель.",
       "config": {
         "path": "config/NX_Postprocess_To_Machine.example.ini",

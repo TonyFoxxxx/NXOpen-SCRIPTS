@@ -2,12 +2,12 @@
 
 ## Twemoji
 
-`scripts/NX_Postprocess_To_Machine.cs` содержит PNG Twemoji «folded hands» (`1f64f.png`), встроенный в исходник. Оригинальные сведения в комментариях сохранены.
+В редакциях `scripts/NX_Postprocess_To_Machine.cs` до V1.39 использовался встроенный PNG Twemoji «folded hands» (`1f64f.png`). В V1.39 значок удалён; сведения ниже сохранены для предыдущих редакций в истории репозитория.
 
 - Автор ресурса: Twitter, Inc. и участники проекта Twemoji.
 - Источник: [Twemoji v14.0.2, 72×72, 1f64f.png](https://github.com/twitter/twemoji/blob/v14.0.2/assets/72x72/1f64f.png).
 - Графика распространяется под [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/); см. также [лицензию графики Twemoji](https://github.com/twitter/twemoji/blob/v14.0.2/LICENSE-GRAPHICS).
-- PNG встроен без изменений; при отображении может масштабироваться интерфейсом.
+- PNG встраивался без изменений; при отображении масштабировался интерфейсом.
 
 MIT проекта не заменяет лицензию этой графики.
 

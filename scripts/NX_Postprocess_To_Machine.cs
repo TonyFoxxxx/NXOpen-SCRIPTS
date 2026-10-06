@@ -1,5 +1,5 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.38
+// SCRIPT_VERSION: V1.39
 // Configure postprocessor paths and machine folders in the UI; optional operation numbering.
 // Preserve NC processing, modal validation, output paths and other INI settings.
 // Siemens NX / Designcenter, Windows. C# journal with an external INI.
@@ -375,71 +375,85 @@ internal sealed class ToolDiameterInspection
     { return (name ?? "(\u0431\u0435\u0437 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u044F)").Replace("\r", "\\r").Replace("\n", "\\n").Replace("\0", "\\0"); }
 }
 
-// A separate dialog avoids the standard MessageBox's fixed OK/Cancel captions.
+// A separate dialog provides explicit colored choices with a safe default.
 internal sealed class ToolDiameterErrorDialog : IDisposable
 {
     private readonly object window = RuntimeForms.New("Form");
-    private object acknowledgementImage;
-    // Folded hands artwork: Twemoji v14.0.2, Copyright Twitter, Inc. and contributors.
-    // Licensed CC BY 4.0: https://creativecommons.org/licenses/by/4.0/
-    // Source: https://github.com/twitter/twemoji/blob/v14.0.2/assets/72x72/1f64f.png
-    // PNG unchanged; displayed at 24 x 24. Artwork provided as-is, without warranties.
-    private const string FoldedHandsPng = "iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAAwFBMVEVHcExQpeb/2lxQpeZQpeZQpeZQpeb/21xQpeZQpeb/3F3/3F1QpeZQpeb80Vj/3F380VhQpeb/3F3Fyov6zFVdqdz/3F3/3F391lr/21z/3F3/3F3/3F1Qpeb20V75ylX5ylX5ylX5ylVQpeZ2scjg0nP02WZgqtkcY5k4h8REltXx1GHTzn+twJhHeo4seLHIy4i9x5CdvaqSurOHtrtFg6V+oZZxkIMqa5X5ylX/3F37z1f70Vj5y1b+2lz801n33QGGAAAAI3RSTlMAQDDPv+8QEGCAz0Dfn3q/nyCA77/f3+9QYI+vIK/f70CPIJK2P1UAAAJjSURBVHjaxdXZcqpAEIDhERXiipIEJIvmnBZBTYzZQ4eY93+rgKCjNT2Udi78r6iy6ivpnlFRlvVvFMcXhhB3wzgedQW7izhr9H8Qr+txHT8ugGHxcMeEenHeKC7qct/sO/lJNkj6+M2GMG31lTFfK0xjDsnycC1l0NpBz+LNGvO+0i+EeT4LciSUYJ7zV+jnT5CtQvZpIVeFXBaEKoQcx6IgiwG1KKh1SsihIOeUkE1B9ikhpCBkHCMasnjblxB//z4N+bztS4i/f5uGbMYvPwl5FmtEEmIPqamDmrxTJCHmSfIViPluPT3U44xIQtwhoQqx7q1RBhmsGysh1r31FYi5NqcMck4AWW4Z5FoH78zDMgg9g+MUEEMaeKiDpDQQ2iqdOkC7ITdPQ/IMNNoA9U5F7Ne/hbxzpCGlc8i77e86Z3VIm87CJR4K4TKcTSGtfiadDmQ9Rp8BHg6tgs/oEbI6BWPWIIcWc9RClDRf5BDUzLVThbx36agQ2fwd8qrmjgMPSJdoIXwAKW0deEW6VZKgplfYSgJkEzyyCch2oSeku75GuicNNEa6VgvpxhoIAqS6EuIKqQLQQS9I1LSEsJpI9KKFIKAdWgqAhugp2ZmTSTYxIT0E97iX64ttvot73UMZFE5wm9c1xF5G18Ntk7AUgmfcNLwRSjdD3PQMCkS/3PJSEF0uiRejoTDYXEfCMTdXOwh1kGycjeljClBRoQrA9CMb0BhUiJDmi0gPRYu54tAQhG9RGRS9hUBBVLMZAPRVqF98RkK62oKoDVTlUIOCGsdDVZOCzOqxUE1x5H8X2S+GKAiiBooqAQAAAABJRU5ErkJggg==";
+    private object dialogFont;
     internal ToolDiameterErrorDialog(ToolDiameterInspection result)
     {
         RuntimeForms.Set(window, "Text", ScriptInfo.WindowTitle("\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0438 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430"));
-        RuntimeForms.SetValue(window, "ClientSize", 720, 414);
+        RuntimeForms.SetValue(window, "ClientSize", 720, 434);
         RuntimeForms.SetValue(window, "AutoScaleDimensions", 96F, 96F);
         RuntimeForms.SetEnum(window, "AutoScaleMode", "Dpi");
+        RuntimeForms.SetValue(window, "Font", "Segoe UI", 10F);
+        dialogFont = RuntimeForms.Get(window, "Font");
         RuntimeForms.SetEnum(window, "StartPosition", "CenterParent");
         RuntimeForms.SetEnum(window, "FormBorderStyle", "FixedDialog");
         RuntimeForms.Set(window, "ControlBox", false);
         RuntimeForms.Set(window, "MinimizeBox", false);
         RuntimeForms.Set(window, "MaximizeBox", false);
         RuntimeForms.Set(window, "ShowInTaskbar", false);
-        RuntimeForms.SetColor(window, "BackColor", 153, 27, 27);
-        RuntimeForms.SetColor(window, "ForeColor", 255, 255, 255);
+        RuntimeForms.SetColor(window, "BackColor", 255, 255, 255);
+        RuntimeForms.SetColor(window, "ForeColor", 185, 28, 28);
+
         object message = RuntimeForms.New("Label");
         RuntimeForms.Set(message, "Text", result.Message);
         RuntimeForms.Set(message, "UseMnemonic", false);
-        Place(message, 20, 18, 680, 60);
+        Place(message, 24, 20, 672, 60);
         object details = RuntimeForms.New("TextBox");
         RuntimeForms.Set(details, "Multiline", true);
         RuntimeForms.Set(details, "ReadOnly", true);
-        RuntimeForms.SetColor(details, "BackColor", 127, 29, 29);
-        RuntimeForms.SetColor(details, "ForeColor", 255, 255, 255);
+        RuntimeForms.SetEnum(details, "BorderStyle", "FixedSingle");
+        RuntimeForms.SetColor(details, "BackColor", 255, 255, 255);
+        RuntimeForms.SetColor(details, "ForeColor", 185, 28, 28);
         RuntimeForms.Set(details, "TabStop", false);
         RuntimeForms.SetEnum(details, "ScrollBars", "Vertical");
         RuntimeForms.Set(details, "Text", result.Details());
-        Place(details, 20, 82, 680, 198);
+        Place(details, 24, 88, 672, 202);
         object hint = RuntimeForms.New("Label");
-        RuntimeForms.Set(hint, "Text", "\u041A\u043D\u043E\u043F\u043A\u0430 \u0441\u043F\u0440\u0430\u0432\u0430 \u043F\u0440\u043E\u0434\u043E\u043B\u0436\u0430\u0435\u0442 \u0440\u0430\u0431\u043E\u0442\u0443, \u043F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u044F \u043E\u0448\u0438\u0431\u043A\u0438 \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0438 \u0434\u0438\u0430\u043C\u0435\u0442\u0440\u043E\u0432.\u000D\u000A\u0414\u0438\u0430\u043C\u0435\u0442\u0440\u044B \u0443\u043A\u0430\u0437\u0430\u043D\u044B \u0432 \u0435\u0434\u0438\u043D\u0438\u0446\u0430\u0445 \u043F\u0440\u043E\u0435\u043A\u0442\u0430 NX.");
-        Place(hint, 20, 292, 680, 48);
-        object acknowledge = RuntimeForms.New("Button");
-        RuntimeForms.Set(acknowledge, "Text", "\u042F_\u043F\u043E\u043D\u044F\u043B");
-        RuntimeForms.Set(acknowledge, "AccessibleName", "\u042F_\u043F\u043E\u043D\u044F\u043B \uD83D\uDE4F");
-        RuntimeForms.SetEnum(acknowledge, "FlatStyle", "Standard");
-        RuntimeForms.SetEnum(acknowledge, "TextImageRelation", "TextBeforeImage");
-        RuntimeForms.SetEnum(acknowledge, "TextAlign", "MiddleCenter");
-        RuntimeForms.SetEnum(acknowledge, "ImageAlign", "MiddleCenter");
-        RuntimeForms.Set(acknowledge, "UseMnemonic", false);
-        RuntimeForms.Set(acknowledge, "UseVisualStyleBackColor", false);
-        RuntimeForms.SetColor(acknowledge, "BackColor", 21, 128, 61);
-        RuntimeForms.SetColor(acknowledge, "ForeColor", 255, 255, 255);
-        RuntimeForms.SetEnum(acknowledge, "DialogResult", "OK");
-        Place(acknowledge, 20, 348, 140, 46);
-        object extraAcknowledge = RuntimeForms.New("Button");
-        RuntimeForms.Set(extraAcknowledge, "Text", "\u041C\u0438\u0448\u0430, \u0447\u0451 \u0442\u044B \u0442\u0430\u043A\u043E\u0439 \u0443\u043C\u043D\u044B\u0439? \u0422\u0432\u043E\u044F \u0437\u0430\u0434\u0430\u0447\u0430 \u0437\u0434\u0435\u0441\u044C\u2026 \u0438\u0437\u0432\u0438\u043D\u0438 \u043C\u0435\u043D\u044F");
-        RuntimeForms.Set(extraAcknowledge, "UseMnemonic", false);
-        RuntimeForms.Set(extraAcknowledge, "UseVisualStyleBackColor", false);
-        RuntimeForms.SetColor(extraAcknowledge, "BackColor", 220, 38, 38);
-        RuntimeForms.SetColor(extraAcknowledge, "ForeColor", 255, 255, 255);
-        RuntimeForms.SetEnum(extraAcknowledge, "DialogResult", "Ignore");
-        Place(extraAcknowledge, 180, 348, 520, 46);
-        RuntimeForms.Set(window, "AcceptButton", acknowledge);
-        RuntimeForms.Set(window, "CancelButton", acknowledge);
-        RuntimeForms.Set(window, "ActiveControl", acknowledge);
-        acknowledgementImage = RuntimeForms.SetPngImage(acknowledge, FoldedHandsPng, 24, 24);
+        RuntimeForms.Set(hint, "Text", "\u0414\u0438\u0430\u043C\u0435\u0442\u0440\u044B \u0443\u043A\u0430\u0437\u0430\u043D\u044B \u0432 \u0435\u0434\u0438\u043D\u0438\u0446\u0430\u0445 \u043F\u0440\u043E\u0435\u043A\u0442\u0430 NX.\r\n\u041F\u0440\u0438 \u043F\u0440\u043E\u0434\u043E\u043B\u0436\u0435\u043D\u0438\u0438 \u043E\u0448\u0438\u0431\u043A\u0438 \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0438 \u0434\u0438\u0430\u043C\u0435\u0442\u0440\u043E\u0432 \u0431\u0443\u0434\u0443\u0442 \u043F\u0440\u043E\u043F\u0443\u0449\u0435\u043D\u044B.");
+        Place(hint, 24, 304, 672, 44);
+        object question = RuntimeForms.New("Label");
+        RuntimeForms.Set(question, "Text", "\u041F\u0440\u043E\u0434\u043E\u043B\u0436\u0438\u0442\u044C?");
+        RuntimeForms.SetEnum(question, "TextAlign", "MiddleLeft");
+        Place(question, 24, 366, 340, 44);
+
+        object noButton = RuntimeForms.New("Button");
+        RuntimeForms.Set(noButton, "Text", "\u041D\u0435\u0442");
+        RuntimeForms.Set(noButton, "AccessibleName", "\u041D\u0435\u0442");
+        RuntimeForms.Set(noButton, "AccessibleDescription", "\u041E\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u0435");
+        RuntimeForms.Set(noButton, "TabIndex", 0);
+        RuntimeForms.SetEnum(noButton, "FlatStyle", "Flat");
+        RuntimeForms.Set(RuntimeForms.Get(noButton, "FlatAppearance"), "BorderSize", 0);
+        RuntimeForms.Set(noButton, "UseMnemonic", false);
+        RuntimeForms.Set(noButton, "UseVisualStyleBackColor", false);
+        RuntimeForms.SetColor(noButton, "BackColor", 21, 128, 61);
+        RuntimeForms.SetColor(noButton, "ForeColor", 255, 255, 255);
+        RuntimeForms.SetColor(RuntimeForms.Get(noButton, "FlatAppearance"), "MouseOverBackColor", 22, 101, 52);
+        RuntimeForms.SetColor(RuntimeForms.Get(noButton, "FlatAppearance"), "MouseDownBackColor", 20, 83, 45);
+        RuntimeForms.SetEnum(noButton, "DialogResult", "OK");
+        Place(noButton, 420, 366, 132, 44);
+
+        object yesButton = RuntimeForms.New("Button");
+        RuntimeForms.Set(yesButton, "Text", "\u0414\u0430");
+        RuntimeForms.Set(yesButton, "AccessibleName", "\u0414\u0430");
+        RuntimeForms.Set(yesButton, "AccessibleDescription", "\u041F\u0440\u043E\u0434\u043E\u043B\u0436\u0438\u0442\u044C, \u043F\u0440\u043E\u043F\u0443\u0441\u0442\u0438\u0432 \u043E\u0448\u0438\u0431\u043A\u0438 \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0438");
+        RuntimeForms.Set(yesButton, "TabIndex", 1);
+        RuntimeForms.SetEnum(yesButton, "FlatStyle", "Flat");
+        RuntimeForms.Set(RuntimeForms.Get(yesButton, "FlatAppearance"), "BorderSize", 0);
+        RuntimeForms.Set(yesButton, "UseMnemonic", false);
+        RuntimeForms.Set(yesButton, "UseVisualStyleBackColor", false);
+        RuntimeForms.SetColor(yesButton, "BackColor", 224, 32, 32);
+        RuntimeForms.SetColor(yesButton, "ForeColor", 255, 255, 255);
+        RuntimeForms.SetColor(RuntimeForms.Get(yesButton, "FlatAppearance"), "MouseOverBackColor", 185, 28, 28);
+        RuntimeForms.SetColor(RuntimeForms.Get(yesButton, "FlatAppearance"), "MouseDownBackColor", 153, 27, 27);
+        RuntimeForms.SetEnum(yesButton, "DialogResult", "Ignore");
+        Place(yesButton, 564, 366, 132, 44);
+        // Keep the existing return values: only Ignore continues the current run.
+        RuntimeForms.Set(window, "AcceptButton", noButton);
+        RuntimeForms.Set(window, "CancelButton", noButton);
+        RuntimeForms.Set(window, "ActiveControl", noButton);
     }
     private void Place(object control, int left, int top, int width, int height)
     {
@@ -451,7 +465,7 @@ internal sealed class ToolDiameterErrorDialog : IDisposable
     public void Dispose()
     {
         try { RuntimeForms.Dispose(window); }
-        finally { RuntimeForms.Dispose(acknowledgementImage); acknowledgementImage = null; }
+        finally { RuntimeForms.Dispose(dialogFont); dialogFont = null; }
     }
 }
 
@@ -3778,7 +3792,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.38";
+    internal const string SCRIPT_VERSION = "V1.39";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
 
     internal static string WindowTitle(string detail)
