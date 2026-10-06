@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # NX_Update_Scripts.py
-# SCRIPT_VERSION: V1.13
+# SCRIPT_VERSION: V1.16
 """
 Апдейтер NX / Designcenter для Windows: GitHub manifest или папка обновлений.
 
@@ -50,7 +50,7 @@ import urllib.request
 from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 
-SCRIPT_VERSION = "V1.13"
+SCRIPT_VERSION = "V1.16"
 SCRIPT_NAME = "Обновление скриптов NX"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode('utf-8')
@@ -67,6 +67,8 @@ LEGACY_UPDATER_ID = 'nx_update_script_buttons'
 LEGACY_CONFIG_FILENAME = 'NX_Update_Script_Buttons.ini'
 MAX_CONFIG_SIZE = 256 * 1024
 SCRIPT_EXTENSIONS = {".py", ".cs", ".vb"}
+RESULT_COLUMNS = (("Скрипт", 145), ("Рабочий файл", 460), ("Установлено", 140),
+                  ("Доступно", 115), ("Состояние", 285))
 MAX_SCRIPT_SIZE = 16 * 1024 * 1024
 MAX_BATCH_SIZE = 128 * 1024 * 1024
 VERSION_RE = re.compile(r"^(.*?)[ _.-]v(\d+(?:\.\d+)*)(?:\s*\(\d+\))?$", re.I)
@@ -662,6 +664,23 @@ def displayed_status(row):
     return ('Выбрано — ' if row.get('selected') else '') + row['status']
 
 
+def result_values(row):
+    return (", ".join(row['titles']), ntpath.basename(row['path']),
+            row.get('installed_label', '—'), row.get('available_label', '—'), displayed_status(row))
+
+
+def result_sort_key(row, column):
+    value = result_values(row)[column]
+    if column in (2, 3):
+        # Dirty installed files display a trailing '*'; compare only the version.
+        try:
+            return (0, parse_version(value.rstrip(' *'))[0], '')
+        except ValueError:
+            return (1, (), value.casefold())
+    # The temporary 'Выбрано' prefix is not part of the file's update status.
+    return (row['status'] if column == 4 else value).casefold()
+
+
 def folder_identity(folder):
     info = os.stat(folder)
     if not os.path.isdir(folder):
@@ -837,6 +856,115 @@ class _RepositoryRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(request, fp, code, message, headers, url)
 
 
+def _read_http_body(read, declared, limit, cancelled):
+    if declared is not None and (not declared.isdecimal() or int(declared) > limit):
+        raise ValueError('Файл превышает разрешённый размер')
+    chunks, size = [], 0
+    while True:
+        check_cancelled(cancelled)
+        chunk = read(min(65536, limit + 1 - size))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > limit:
+            raise ValueError('Файл превышает разрешённый размер')
+    data = b''.join(chunks)
+    if declared is not None and len(data) != int(declared):
+        raise ValueError('Загрузка получена не полностью')
+    if not data:
+        raise ValueError('Получен пустой файл')
+    return data
+
+
+def _download_bytes_winhttp(url, limit, cancelled=None):
+    """Retry with Windows certificate-chain validation, never an unverified SSL context."""
+    validate_raw_url(url, manifest=url == DEFAULT_MANIFEST_URL)
+    check_cancelled(cancelled)
+    api = ctypes.WinDLL('winhttp', use_last_error=True)
+    # Fixed-width DWORD and pointer-sized handles also cover 64-bit NX.
+    D, H, P = ctypes.c_uint32, ctypes.c_void_p, ctypes.c_wchar_p
+    WINHTTP_OPTION_SECURE_PROTOCOLS = 84
+
+    def bind(name, result, *args):
+        function = getattr(api, name)
+        function.restype, function.argtypes = result, args
+        return function
+
+    open_session = bind('WinHttpOpen', H, P, D, P, P, D)
+    set_timeouts = bind('WinHttpSetTimeouts', ctypes.c_int, H,
+                        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int)
+    set_option = bind('WinHttpSetOption', ctypes.c_int, H, D, H, D)
+    connect = bind('WinHttpConnect', H, H, P, ctypes.c_ushort, D)
+    open_request = bind('WinHttpOpenRequest', H, H, P, P, P, P, ctypes.POINTER(P), D)
+    send = bind('WinHttpSendRequest', ctypes.c_int, H, P, D, H, D, D, ctypes.c_size_t)
+    receive = bind('WinHttpReceiveResponse', ctypes.c_int, H, H)
+    query = bind('WinHttpQueryHeaders', ctypes.c_int, H, D, P, H,
+                 ctypes.POINTER(D), ctypes.POINTER(D))
+    read = bind('WinHttpReadData', ctypes.c_int, H, H, D, ctypes.POINTER(D))
+    close = bind('WinHttpCloseHandle', ctypes.c_int, H)
+
+    def required(result, operation):
+        if not result:
+            error = ctypes.get_last_error()
+            if error in (12037, 12038, 12045, 12057, 12157, 12169, 12170, 12175):
+                raise OSError('Windows не подтвердила сертификат HTTPS (WinHTTP {}).\n'
+                              'Администратору ПК нужно проверить дату, доверенные сертификаты '
+                              'и проверку HTTPS антивирусом или корпоративным прокси.'.format(error))
+            raise OSError('{}: код ошибки Windows {}'.format(operation, error))
+        return result
+
+    with ExitStack() as handles:
+        # System/per-user proxy configuration; supported by Windows 8.1 and newer.
+        session = required(open_session('NXOpen-Scripts-Updater/' + SCRIPT_VERSION,
+                                        4, None, None, 0), 'WinHttpOpen')
+        handles.callback(close, session)
+        timeout = HTTP_TIMEOUT * 1000
+        required(set_timeouts(session, timeout, timeout, timeout, timeout), 'WinHttpSetTimeouts')
+        # TLS 1.2 works on Windows 10/11 without enabling obsolete TLS/SSL versions.
+        protocols = D(0x800)  # WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
+        required(set_option(session, WINHTTP_OPTION_SECURE_PROTOCOLS,
+                            ctypes.byref(protocols), ctypes.sizeof(protocols)),
+                 'WinHttpSetOption(TLS)')
+        parts = urllib.parse.urlsplit(url)
+        connection = required(connect(session, parts.hostname, 443, 0), 'WinHttpConnect')
+        handles.callback(close, connection)
+        request = required(open_request(connection, 'GET', parts.path, None, None, None,
+                                        0x800000), 'WinHttpOpenRequest')  # WINHTTP_FLAG_SECURE
+        handles.callback(close, request)
+        # Do not let WinHTTP follow a redirect before the repository URL can be checked.
+        # These permanent Raw URLs need no redirects; any 30x response is rejected below.
+        redirects = D(0)  # WINHTTP_OPTION_REDIRECT_POLICY_NEVER
+        required(set_option(request, 88, ctypes.byref(redirects), ctypes.sizeof(redirects)),
+                 'WinHttpSetOption(redirects)')
+        headers = 'Accept: application/octet-stream\r\nCache-Control: no-cache\r\n'
+        check_cancelled(cancelled)
+        required(send(request, headers, len(headers), None, 0, 0, 0), 'WinHttpSendRequest')
+        check_cancelled(cancelled)
+        required(receive(request, None), 'WinHttpReceiveResponse')
+        status, length = D(), D(ctypes.sizeof(D))
+        required(query(request, 19 | 0x20000000, None, ctypes.byref(status),
+                       ctypes.byref(length), None), 'WinHttpQueryHeaders(status)')
+        if status.value != 200:
+            raise ValueError('HTTP ' + str(status.value))
+        content_length = ctypes.create_unicode_buffer(64)
+        length = D(ctypes.sizeof(content_length))
+        if query(request, 5, None, content_length, ctypes.byref(length), None):
+            declared = content_length.value
+        elif ctypes.get_last_error() == 12150:  # ERROR_WINHTTP_HEADER_NOT_FOUND
+            declared = None
+        else:
+            required(False, 'WinHttpQueryHeaders(Content-Length)')
+        buffer = ctypes.create_string_buffer(65536)
+
+        def read_chunk(count):
+            received = D()
+            required(read(request, buffer, count, ctypes.byref(received)), 'WinHttpReadData')
+            return buffer.raw[:received.value]
+
+        return _read_http_body(read_chunk, declared, limit, cancelled)
+
+
 def download_bytes(url, limit, cancelled=None):
     validate_raw_url(url, manifest=url == DEFAULT_MANIFEST_URL)
     check_cancelled(cancelled)
@@ -851,26 +979,17 @@ def download_bytes(url, limit, cancelled=None):
             validate_raw_url(response.geturl(), manifest=url == DEFAULT_MANIFEST_URL)
             if response.status != 200:
                 raise ValueError('HTTP ' + str(response.status))
-            declared = response.headers.get('Content-Length')
-            if declared is not None and (not declared.isdecimal() or int(declared) > limit):
-                raise ValueError('Файл превышает разрешённый размер')
-            chunks, size = [], 0
-            while True:
-                check_cancelled(cancelled)
-                chunk = response.read(min(65536, limit + 1 - size))
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                size += len(chunk)
-                if size > limit:
-                    raise ValueError('Файл превышает разрешённый размер')
-            data = b''.join(chunks)
-            if declared is not None and len(data) != int(declared):
-                raise ValueError('Загрузка получена не полностью')
-            if not data:
-                raise ValueError('Получен пустой файл')
-            return data
+            return _read_http_body(response.read, response.headers.get('Content-Length'), limit, cancelled)
     except Exception as exc:
+        certificate_error = (isinstance(exc, ssl.SSLCertVerificationError) or
+                             isinstance(getattr(exc, 'reason', None), ssl.SSLCertVerificationError))
+        if os.name == 'nt' and certificate_error:
+            check_cancelled(cancelled)
+            try:
+                return _download_bytes_winhttp(url, limit, cancelled)
+            except Exception as windows_exc:
+                raise OSError('Не удалось загрузить ' + url + '\nPython NX: ' + str(exc) +
+                              '\nЗагрузка через Windows: ' + str(windows_exc)) from windows_exc
         raise OSError('Не удалось загрузить ' + url + '\n' + str(exc)) from exc
 
 
@@ -1368,6 +1487,10 @@ def run_window():
         _fields_ = [("hdr", NMHDR), ("iItem", ctypes.c_int), ("iSubItem", ctypes.c_int),
                     ("uNewState", W.UINT), ("uOldState", W.UINT), ("uChanged", W.UINT), ("ptAction", W.POINT), ("lParam", LPARAM)]
 
+    class LVHITTESTINFO(ctypes.Structure):
+        _fields_ = [("pt", W.POINT), ("flags", W.UINT), ("iItem", ctypes.c_int),
+                    ("iSubItem", ctypes.c_int), ("iGroup", ctypes.c_int)]
+
     class LVITEM(ctypes.Structure):
         _fields_ = [("mask", W.UINT), ("iItem", ctypes.c_int), ("iSubItem", ctypes.c_int), ("state", W.UINT),
                     ("stateMask", W.UINT), ("pszText", W.LPWSTR), ("cchTextMax", ctypes.c_int), ("iImage", ctypes.c_int),
@@ -1455,6 +1578,7 @@ def run_window():
     cancelled = threading.Event()
     state = {"rows": [], "busy": False, "closed": False, "applying": False, "populating": False,
              "syncing_checks": False, "laying_out": False,
+             "sort_column": None, "sort_reverse": False,
              "inputs": None, "settings": settings, "pending_self": None, "threads": []}
     controls = {}
     hwnd_holder = {"value": None}
@@ -1506,10 +1630,11 @@ def run_window():
             detail += '\r\nВыбор недоступен. Причина указана в состоянии и подробностях выше.'
         U.SetWindowTextW(controls['details'], detail)
 
-    def toggle_row():
-        if state['busy']:
+    def toggle_row(index=None):
+        if state['busy'] or state['populating'] or state['closed']:
             return
-        index = highlighted_row()
+        if index is None:
+            index = highlighted_row()
         if not 0 <= index < len(state['rows']):
             message('Сначала выделите нужную строку в списке.')
             return
@@ -1534,6 +1659,74 @@ def run_window():
         if msg.message == 0x100 and not msg.lParam & (1 << 30):
             toggle_row()
         return True
+
+    def handle_list_mouse(msg):
+        if msg.hWnd != controls['list'] or msg.message != 0x203:  # WM_LBUTTONDBLCLK
+            return False
+        # Consume before native processing so the native control cannot toggle again.
+        if state['busy'] or state['populating'] or state['closed']:
+            return True
+        hit = LVHITTESTINFO(pt=W.POINT(ctypes.c_short(msg.lParam & 0xFFFF).value,
+                                       ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value),
+                            iItem=-1, iSubItem=-1)
+        index = int(U.SendMessageW(controls['list'], 0x1000 + 57, 0,
+                                  ctypes.addressof(hit)))  # LVM_SUBITEMHITTEST
+        if 0 <= index < len(state['rows']):
+            # The first click on the checkbox already changed it. Suppress the second.
+            if not (hit.iSubItem == 0 and hit.flags & 8):  # LVHT_ONITEMSTATEICON
+                toggle_row(index)
+        return True
+
+    def update_sort_headers():
+        for i, (label, _) in enumerate(RESULT_COLUMNS):
+            if i == state['sort_column']:
+                label += ' ↓' if state['sort_reverse'] else ' ↑'
+            buffer = ctypes.create_unicode_buffer(label)
+            column = LVCOLUMN(mask=4, pszText=ctypes.cast(buffer, W.LPWSTR))  # LVCF_TEXT
+            U.SendMessageW(controls['list'], 0x1000 + 96, i,
+                           ctypes.addressof(column))  # LVM_SETCOLUMNW
+
+    def rebuild_list(focused_row=None):
+        previous = state['populating']
+        state['populating'] = True
+        focused_index = None
+        try:
+            U.SendMessageW(controls['list'], 0xB, 0, 0)  # WM_SETREDRAW
+            U.SendMessageW(controls['list'], 0x1000 + 9, 0, 0)  # LVM_DELETEALLITEMS
+            for i, row in enumerate(state['rows']):
+                for j, value in enumerate(result_values(row)):
+                    buffer = ctypes.create_unicode_buffer(value)
+                    item = LVITEM(mask=1, iItem=i, iSubItem=j, pszText=ctypes.cast(buffer, W.LPWSTR))
+                    U.SendMessageW(controls['list'], 0x1000 + (77 if j == 0 else 116),
+                                   0 if j == 0 else i, ctypes.addressof(item))
+                paint_check(i)  # Preserve current user intent, not the initial 'checked' default.
+                if row is focused_row:
+                    focused_index = i
+            if focused_index is not None:
+                item = LVITEM(mask=8, state=3, stateMask=3)  # LVIS_FOCUSED | LVIS_SELECTED
+                U.SendMessageW(controls['list'], 0x1000 + 43, focused_index, ctypes.addressof(item))
+                U.SendMessageW(controls['list'], 0x1000 + 19, focused_index, 0)  # LVM_ENSUREVISIBLE
+            update_sort_headers()
+        finally:
+            try:
+                U.SendMessageW(controls['list'], 0xB, 1, 0)
+                U.RedrawWindow(controls['list'], None, None, 0x1 | 0x4 | 0x80 | 0x100 | 0x400)
+            finally:
+                state['populating'] = previous
+        if focused_index is not None:
+            show_row_details(focused_index)
+
+    def sort_by_column(column):
+        if (state['busy'] or state['populating'] or state['closed']
+                or not 0 <= column < len(RESULT_COLUMNS)):
+            return
+        index = highlighted_row()
+        focused_row = state['rows'][index] if 0 <= index < len(state['rows']) else None
+        reverse = not state['sort_reverse'] if state['sort_column'] == column else False
+        rows = sorted(state['rows'], key=lambda row: result_sort_key(row, column), reverse=reverse)
+        state.update(rows=rows, sort_column=column, sort_reverse=reverse)
+        rebuild_list(focused_row)
+        selection_status()
 
     def inputs():
         return (path_key(get_text(controls['working'])), get_text(controls['folder']),
@@ -1611,23 +1804,17 @@ def run_window():
             U.SetWindowTextW(controls["status"], "Проверка не завершена.")
             message(error, True)
             return
+        for row in found:
+            select_row(row, row['checked'])
+        if state['sort_column'] is not None:
+            found = sorted(found, key=lambda row: result_sort_key(row, state['sort_column']),
+                           reverse=state['sort_reverse'])
         state.update(rows=found, inputs=snapshot)
         if not found:
             U.SetWindowTextW(controls['status'], 'Скрипты .py, .cs и .vb не найдены. Проверьте обе папки, поиск в подпапках и исключения INI.')
             U.SetWindowTextW(controls['details'], 'INI: ' + state['settings']['config_path'])
             return
-        state['populating'] = True
-        try:
-            for i, row in enumerate(found):
-                values = [", ".join(row["titles"]), ntpath.basename(row["path"]),
-                          row.get("installed_label", "—"), row.get("available_label", "—"), row["status"]]
-                for j, value in enumerate(values):
-                    buffer = ctypes.create_unicode_buffer(value)
-                    item = LVITEM(mask=1, iItem=i, iSubItem=j, pszText=ctypes.cast(buffer, W.LPWSTR))
-                    U.SendMessageW(controls["list"], 0x1000 + (77 if j == 0 else 116), 0 if j == 0 else i, ctypes.addressof(item))
-                set_checked(i, row["checked"])
-        finally:
-            state['populating'] = False
+        rebuild_list()
         selection_status()
         U.SetWindowTextW(controls['details'], 'Выберите строку для просмотра полного пути и причины состояния.\r\n'
                          'Новые скрипты устанавливаются в: ' + state['settings']['working_folder'])
@@ -1839,7 +2026,15 @@ def run_window():
                 return 0
             if msg == 0x4E and lparam and "list" in controls:
                 header = ctypes.cast(lparam, ctypes.POINTER(NMHDR)).contents
-                if header.hwndFrom != controls["list"] or header.code not in (-100, -101):
+                if header.hwndFrom != controls["list"]:
+                    return U.DefWindowProcW(hwnd, msg, wparam, lparam)
+                if state['populating']:
+                    return 0
+                if header.code == -108:  # LVN_COLUMNCLICK
+                    note = ctypes.cast(lparam, ctypes.POINTER(NMLISTVIEW)).contents
+                    sort_by_column(note.iSubItem)
+                    return 0
+                if header.code not in (-100, -101):
                     return U.DefWindowProcW(hwnd, msg, wparam, lparam)
                 note = ctypes.cast(lparam, ctypes.POINTER(NMLISTVIEW)).contents
                 if 0 <= note.iItem < len(state["rows"]):
@@ -1938,7 +2133,7 @@ def run_window():
         control("hint", "STATIC", "GitHub: при проверке загружается только manifest.json. Для папки используйте «Обзор…».", 16, 122, 1254, 24)
         control("list", "SysListView32", "", 16, 152, 1270, 356, style=1 | 4 | 8 | 0x10000 | 0x100000 | 0x200000, ex=0x200)
         U.SendMessageW(controls["list"], 0x1000+54, 0, 1 | 4 | 0x20 | 0x10000)
-        for i, (label, column_width) in enumerate((("Скрипт", 145), ("Рабочий файл", 460), ("Установлено", 140), ("Доступно", 115), ("Состояние", 285))):
+        for i, (label, column_width) in enumerate(RESULT_COLUMNS):
             buffer = ctypes.create_unicode_buffer(label)
             column = LVCOLUMN(mask=1 | 2 | 4, cx=unit(column_width), pszText=ctypes.cast(buffer, W.LPWSTR))
             U.SendMessageW(controls["list"], 0x1000+97, i, ctypes.addressof(column))
@@ -1962,7 +2157,7 @@ def run_window():
                 if code == 0:
                     U.PostQuitMessage(msg.wParam)
                 break
-            if handle_list_key(msg):
+            if handle_list_key(msg) or handle_list_mouse(msg):
                 continue
             if not U.IsDialogMessageW(hwnd, ctypes.byref(msg)):
                 U.TranslateMessage(ctypes.byref(msg))
