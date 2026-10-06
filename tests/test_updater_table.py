@@ -4,6 +4,8 @@ import copy
 import ctypes
 import importlib.util
 import os
+import subprocess
+import sys
 from pathlib import Path
 import queue
 from types import SimpleNamespace
@@ -274,6 +276,16 @@ class TableTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Requires native Windows list-view controls')
     def test_real_windows_double_click_text_and_checkbox_each_toggle_once(self):
         """Verify native hit flags and the remaining mouse-up after consuming a double-click."""
+        if os.environ.get('NX_UPDATER_TABLE_PROBE') != '1':
+            probe_env = dict(os.environ, NX_UPDATER_TABLE_PROBE='1')
+            result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()),
+                                     'TableTests.test_real_windows_double_click_text_and_checkbox_each_toggle_once', '-v'],
+                                    env=probe_env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return
+        import faulthandler
+        faulthandler.dump_traceback_later(20, exit=True)
+        self.addCleanup(faulthandler.cancel_dump_traceback_later)
         from ctypes import wintypes as W
         state, _, env = self.handlers([record('Example')])
         api = ctypes.WinDLL('user32', use_last_error=True)
@@ -286,6 +298,10 @@ class TableTests(unittest.TestCase):
                                         ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                         W.HWND, W.HMENU, W.HINSTANCE, ctypes.c_void_p]),
             'SendMessageW': (ctypes.c_ssize_t, [W.HWND, W.UINT, ctypes.c_size_t, ctypes.c_ssize_t]),
+            'PostMessageW': (W.BOOL, [W.HWND, W.UINT, ctypes.c_size_t, ctypes.c_ssize_t]),
+            'PeekMessageW': (W.BOOL, [ctypes.POINTER(W.MSG), W.HWND, W.UINT, W.UINT, W.UINT]),
+            'TranslateMessage': (W.BOOL, [ctypes.POINTER(W.MSG)]),
+            'DispatchMessageW': (ctypes.c_ssize_t, [ctypes.POINTER(W.MSG)]),
             'SetWindowTextW': (W.BOOL, [W.HWND, W.LPCWSTR]),
             'RedrawWindow': (W.BOOL, [W.HWND, ctypes.c_void_p, W.HANDLE, W.UINT]),
             'DestroyWindow': (W.BOOL, [W.HWND]),
@@ -322,18 +338,28 @@ class TableTests(unittest.TestCase):
             def native_checked():
                 return api.SendMessageW(handle, 4140, 0, 0xF000) & 0xF000 == 0x2000
 
+            def mouse_sequence(messages, position):
+                # Queue releases in advance: native drag detection may pump messages
+                # inside WM_LBUTTONDOWN and must not wait for a synchronous caller.
+                for message in messages:
+                    self.assertTrue(api.PostMessageW(handle, message, 0 if message == 0x202 else 1, position))
+                queued = W.MSG()
+                while api.PeekMessageW(ctypes.byref(queued), None, 0, 0, 1):
+                    if env['handle_list_mouse'](queued):
+                        continue
+                    api.TranslateMessage(ctypes.byref(queued))
+                    api.DispatchMessageW(ctypes.byref(queued))
+
             for x, checkbox in ((u.RESULT_COLUMNS[0][1] + 20, False), (checkbox_x, True)):
                 with self.subTest(checkbox=checkbox):
                     env['set_checked'](0, False)
                     position = (y << 16) | x
-                    api.SendMessageW(handle, 0x201, 1, position)
-                    api.SendMessageW(handle, 0x202, 0, position)
+                    mouse_sequence((0x201, 0x202), position)
                     self.assertEqual(native_checked(), checkbox)
                     if checkbox:
                         # The STATIC test parent has no notification handler; replay its actual change.
                         self.notify(env, -101, item=0, old=0x1000, new=0x2000, sender=handle)
-                    self.assertTrue(self.mouse(env, x=x, y=y, hwnd=handle))
-                    api.SendMessageW(handle, 0x202, 0, position)
+                    mouse_sequence((0x203, 0x202), position)
                     self.assertTrue(native_checked())
                     self.assertTrue(state['rows'][0]['selected'])
         finally:
