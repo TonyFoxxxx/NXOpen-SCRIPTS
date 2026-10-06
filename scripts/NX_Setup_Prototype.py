@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.39
+# SCRIPT_VERSION: V2.40
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -46,7 +46,9 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 Порядок и сквозная нумерация сохраняются при сохранении и повторном экспорте.
 Результат — один автономный HTML для редактирования и печати.
 Карта открывается через встроенный локальный помощник и сохраняет правки автоматически.
-Помощник запускается отдельным процессом доступного Python, без NXOpen и служебных файлов.
+Помощник работает отдельно от NX, без NXOpen и служебных файлов.
+Если отдельного python.exe нет, используется уже загруженная DLL Python NX
+в отдельном процессе штатного Windows PowerShell, без установки Python.
 До открытия браузера проверяется его ответ; при недоступности открывается обычный HTML.
 При открытии HTML напрямую остаётся прежнее сохранение средствами браузера.
 Во время создания карты отображаются текущий этап и полоса прогресса 0–100%.
@@ -84,7 +86,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.39"
+SCRIPT_VERSION = "V2.40"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -483,18 +485,149 @@ def helper_python_candidates():
                 continue
 
 
+EMBEDDED_PYTHON_BOOTSTRAP = r'''
+$ErrorActionPreference = 'Stop'
+try {
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+    $encoded = [Environment]::GetEnvironmentVariable('NX_SETUP_CARD_BOOT', 'Process')
+    [Environment]::SetEnvironmentVariable('NX_SETUP_CARD_BOOT', $null, 'Process')
+    $data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)).Split([char]0)
+    if ($data.Length -ne 3) { throw 'Invalid Python helper configuration.' }
+    $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly(
+        [Reflection.AssemblyName]::new('NxCardPython'), [Reflection.Emit.AssemblyBuilderAccess]::Run)
+    $module = $assembly.DefineDynamicModule('Runtime', $false)
+    $type = $module.DefineType('NxCardPython', [Reflection.TypeAttributes]'Public,Sealed,Abstract')
+    $flags = [Reflection.MethodAttributes]'Public,Static,PinvokeImpl'
+    $standard = [Reflection.CallingConventions]::Standard
+    $cdecl = [Runtime.InteropServices.CallingConvention]::Cdecl
+    $unicode = [Runtime.InteropServices.CharSet]::Unicode
+    $method = $type.DefinePInvokeMethod('SetPath', $data[0], 'Py_SetPath', $flags,
+        $standard, [void], [Type[]]@([IntPtr]), $cdecl, $unicode)
+    $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
+    $method = $type.DefinePInvokeMethod('Main', $data[0], 'Py_Main', $flags,
+        $standard, [int], [Type[]]@([int], [IntPtr]), $cdecl, $unicode)
+    $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
+    $native = $type.CreateType()
+    $arguments = @('nx-card-helper', '-I', '-S', '-B', '-u', '-X', 'utf8', $data[2], '--nx-card-helper')
+    $allocations = [Collections.Generic.List[IntPtr]]::new()
+    try {
+        $path = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($data[1])
+        $allocations.Add($path)
+        $argv = [Runtime.InteropServices.Marshal]::AllocHGlobal([IntPtr]::Size * ($arguments.Count + 1))
+        $allocations.Add($argv)
+        for ($i = 0; $i -lt $arguments.Count; $i++) {
+            $value = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($arguments[$i])
+            $allocations.Add($value)
+            [Runtime.InteropServices.Marshal]::WriteIntPtr($argv, $i * [IntPtr]::Size, $value)
+        }
+        [Runtime.InteropServices.Marshal]::WriteIntPtr($argv, $arguments.Count * [IntPtr]::Size, [IntPtr]::Zero)
+        $null = $native.GetMethod('SetPath').Invoke($null, [object[]]@($path))
+        $result = $native.GetMethod('Main').Invoke($null, [object[]]@([int]$arguments.Count, $argv))
+    }
+    finally {
+        foreach ($allocation in $allocations) { [Runtime.InteropServices.Marshal]::FreeHGlobal($allocation) }
+    }
+    exit ([int]$result)
+}
+catch {
+    $error64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.Exception.ToString()))
+    [Console]::WriteLine('{"error64":"' + $error64 + '"}')
+    exit 1
+}
+'''
+
+
+def embedded_python_runtime():
+    """Locate the already loaded interpreter DLL; never initialize Python in NX."""
+    if os.name != 'nt':
+        raise RuntimeError('Запуск встроенного Python без python.exe доступен только в Windows.')
+    import ctypes
+    from ctypes import wintypes
+    for name in ('Py_Main', 'Py_SetPath'):
+        if not hasattr(ctypes.pythonapi, name):
+            raise RuntimeError('Встроенный Python NX не предоставляет ' + name)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.GetModuleFileNameW.argtypes = [wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+    kernel.GetModuleFileNameW.restype = wintypes.DWORD
+    kernel.GetSystemDirectoryW.argtypes = [wintypes.LPWSTR, wintypes.UINT]
+    kernel.GetSystemDirectoryW.restype = wintypes.UINT
+    buffer = ctypes.create_unicode_buffer(32768)
+    count = kernel.GetModuleFileNameW(ctypes.pythonapi._handle, buffer, len(buffer))
+    if not 0 < count < len(buffer):
+        raise RuntimeError('Не удалось определить DLL встроенного Python NX.')
+    dll = io_path(buffer.value)
+    if dll.suffix.lower() != '.dll' or not dll.is_file():
+        raise RuntimeError('DLL встроенного Python NX недоступна: ' + display_file_name(dll))
+    count = kernel.GetSystemDirectoryW(buffer, len(buffer))
+    if not 0 < count < len(buffer):
+        raise RuntimeError('Не удалось определить системную папку Windows.')
+    powershell = io_path(buffer.value) / 'WindowsPowerShell' / 'v1.0' / 'powershell.exe'
+    if not powershell.is_file():
+        raise RuntimeError('Штатный Windows PowerShell недоступен.')
+    # Start with verified locations of stdlib modules. Keep absolute NX runtime
+    # paths, including zip libraries and extension modules, without adding cwd.
+    import encodings
+    paths, seen = [], set()
+    def add(value):
+        if not isinstance(value, str) or not value or not Path(value).is_absolute():
+            return
+        value = display_file_name(io_path(value))
+        if ';' in value or '\0' in value:
+            raise RuntimeError('Недопустимый путь библиотеки встроенного Python.')
+        key = os.path.normcase(value)
+        if key not in seen:
+            seen.add(key)
+            paths.append(value)
+    for module, depth in ((encodings, 2), (json, 2), (os, 1), (zlib, 1), (math, 1)):
+        location = getattr(module, '__file__', '')
+        if location:
+            path = Path(location)
+            for _ in range(depth):
+                path = path.parent
+            add(str(path))
+    excluded = {os.path.normcase(display_file_name(io_path(os.getcwd()))),
+                os.path.normcase(display_file_name(io_path(__file__).parent))}
+    for entry in sys.path:
+        if isinstance(entry, str) and entry and Path(entry).is_absolute():
+            if os.path.normcase(display_file_name(io_path(entry))) not in excluded:
+                add(entry)
+    if not paths:
+        raise RuntimeError('Не найдены библиотеки встроенного Python NX.')
+    return powershell, dll, paths
+
+
+def embedded_python_launch():
+    """An in-memory host for the same worker, without PS1/EXE/DLL output files."""
+    powershell, dll, paths = embedded_python_runtime()
+    # Data is passed separately from PowerShell code: paths are never commands.
+    payload = '\0'.join((display_file_name(dll), ';'.join(paths), str(io_path(__file__))))
+    encoded = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+    if len(encoded) > 30000:
+        raise RuntimeError('Слишком длинная конфигурация библиотек Python NX для запуска помощника.')
+    environment = os.environ.copy()
+    environment['NX_SETUP_CARD_BOOT'] = encoded
+    command = [display_file_name(powershell), '-NoLogo', '-NoProfile', '-NonInteractive',
+               '-Command', EMBEDDED_PYTHON_BOOTSTRAP]
+    return command, environment
+
+
 class RemoteCardHelper:
     """Control the file-only server through private pipes, not NX Python threads."""
     # Journal replay creates new Python classes; isinstance is not stable then.
     external_protocol = 1
 
-    def __init__(self, executable):
-        self.serial, self.responses = 0, queue.Queue()
+    def __init__(self, executable=None):
+        self.serial, self.responses, self.startup_errors = 0, queue.Queue(), ''
         self.control_lock = threading.RLock()
+        if executable is None:
+            command, environment = embedded_python_launch()
+        else:
+            command = [str(executable), '-I', '-S', '-B', str(io_path(__file__)), '--nx-card-helper']
+            environment = None
         self.process = subprocess.Popen(
-            [str(executable), '-I', '-S', '-B', str(io_path(__file__)), '--nx-card-helper'],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            encoding='utf-8', bufsize=1, close_fds=True,
+            command, env=environment,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding='utf-8', errors='replace', bufsize=1, close_fds=True,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
         def receive():
@@ -506,12 +639,23 @@ class RemoteCardHelper:
             finally:
                 self.responses.put({'error': 'Локальный помощник завершил работу.'})
         self.reader = threading.Thread(target=receive, name='NX card helper replies', daemon=True)
+        def receive_errors():
+            try:
+                for line in self.process.stderr:
+                    self.startup_errors = (self.startup_errors + line)[-4000:]
+            except Exception:
+                pass
+        self.error_reader = threading.Thread(target=receive_errors, name='NX card helper startup', daemon=True)
         try:
             self.reader.start()
-            hello = self.responses.get(timeout=5)
+            self.error_reader.start()
+            hello = self.responses.get(timeout=10 if executable is None else 5)
+            if hello.get('error64'):
+                detail = base64.b64decode(hello['error64']).decode('utf-8', errors='replace')
+                raise RuntimeError('Не запустился встроенный Python NX: ' + detail[:1600])
             if hello.get('ready') != SCRIPT_VERSION:
                 raise RuntimeError('Не запустился совместимый Python-помощник.')
-        except Exception:
+        except Exception as exc:
             self.process.stdin.close()  # No cards registered: startup can be stopped safely.
             try:
                 self.process.wait(timeout=2)
@@ -520,8 +664,13 @@ class RemoteCardHelper:
                 self.process.wait(timeout=2)
             if self.reader.ident is not None:
                 self.reader.join(timeout=2)
+            if self.error_reader.ident is not None:
+                self.error_reader.join(timeout=2)
             self.process.stdout.close()
-            raise
+            self.process.stderr.close()
+            detail = self.startup_errors.strip()[-1600:]
+            raise RuntimeError((str(exc) or 'Помощник не подтвердил запуск вовремя.') +
+                               ('\n' + detail if detail else '')) from exc
 
     def request(self, action, **data):
         with self.control_lock:
@@ -628,9 +777,15 @@ def local_card_url(path):
                     break
                 except Exception as exc:
                     failures.append(str(exc))
+            if helper is None and os.name == 'nt':
+                try:
+                    helper = RemoteCardHelper()
+                except Exception as exc:
+                    failures.append(str(exc))
             if helper is None:
-                raise RuntimeError('Не найден доступный отдельный Python для автосохранения. '
-                                   'NX и браузер не будут ожидать зависший сервер.' +
+                raise RuntimeError('Не удалось запустить локальный помощник автосохранения '
+                                   'через доступный Python или встроенный Python NX. '
+                                   'Готовая карта сохранена.' +
                                    ('\n' + failures[-1] if failures else ''))
             runtime['helper'] = helper
         return helper.register(path)

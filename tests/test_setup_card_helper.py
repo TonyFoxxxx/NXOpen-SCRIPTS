@@ -1,5 +1,6 @@
 """Real independent helper: readiness, NX replay, exclusion and safe fallback."""
 from concurrent.futures import ThreadPoolExecutor
+import base64
 import ctypes
 import hashlib
 import http.client
@@ -31,12 +32,15 @@ def document(revision='a' * 32):
 
 
 class RemoteTests(unittest.TestCase):
+    def make_helper(self):
+        return CARD.RemoteCardHelper(sys.executable)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / 'Карта с пробелами.html'
         self.path.write_bytes(document())
-        self.helper = CARD.RemoteCardHelper(sys.executable)
+        self.helper = self.make_helper()
         self.addCleanup(self.stop)
         self.runtime = {'lock': CARD.threading.RLock(), 'helper': self.helper}
         runtime_patch = patch.object(CARD, 'local_card_runtime', return_value=self.runtime)
@@ -57,7 +61,9 @@ class RemoteTests(unittest.TestCase):
                 self.helper.process.kill()  # Only this test's process and temporary fixture.
                 self.helper.process.wait(timeout=5)
         self.helper.reader.join(timeout=3)
+        self.helper.error_reader.join(timeout=3)
         self.helper.process.stdout.close()
+        self.helper.process.stderr.close()
 
     def request(self, method='GET', revision='b' * 32, previous='a' * 32):
         connection = http.client.HTTPConnection(self.address.netloc, timeout=5)
@@ -177,6 +183,24 @@ class RemoteTests(unittest.TestCase):
             CARD.cleanup_work_files(deep.parent.parent, [])
 
 
+@unittest.skipUnless(os.name == 'nt', 'Real Windows PowerShell hosting the already loaded Python DLL')
+class EmbeddedRemoteTests(RemoteTests):
+    """Run the full helper contract with no standalone Python process."""
+    def make_helper(self):
+        helper = CARD.RemoteCardHelper()
+        self.assertTrue(helper.process.args[0].lower().endswith('powershell.exe'))
+        self.assertNotIn('python.exe', [str(arg).lower() for arg in helper.process.args])
+        return helper
+
+    def test_no_python_exe_selects_embedded_runtime_automatically(self):
+        self.runtime['helper'] = None
+        with patch.object(CARD, 'helper_python_candidates', return_value=iter(())), \
+                patch.object(CARD, 'RemoteCardHelper', return_value=self.helper) as start:
+            self.assertEqual(CARD.local_card_url(self.path), self.url)
+        start.assert_called_once_with()
+        self.assertEqual(self.request('POST')[0], 200)
+
+
 class FallbackTests(unittest.TestCase):
     def test_unavailable_helper_opens_file_automatically_not_dead_url(self):
         card = Path('/card/карта.html')
@@ -193,10 +217,32 @@ class FallbackTests(unittest.TestCase):
         runtime = {'lock': CARD.threading.RLock(), 'helper': None}
         with patch.object(CARD, 'local_card_runtime', return_value=runtime), \
                 patch.object(CARD, 'helper_python_candidates', return_value=iter(())), \
-                patch.object(CARD, 'RemoteCardHelper') as launch:
-            with self.assertRaisesRegex(RuntimeError, 'отдельный Python'):
+                patch.object(CARD, 'RemoteCardHelper', side_effect=RuntimeError('Runtime unavailable')) as launch:
+            with self.assertRaisesRegex(RuntimeError, 'Не удалось запустить локальный помощник'):
                 CARD.local_card_url(Path('card.html'))
-        launch.assert_not_called()
+        if os.name == 'nt':
+            launch.assert_called_once_with()
+        else:
+            launch.assert_not_called()
+
+    def test_embedded_launch_keeps_paths_as_data_and_parent_environment_unchanged(self):
+        from pathlib import PureWindowsPath
+        dll = PureWindowsPath("C:/NX ' $()/python311.dll")
+        ps = PureWindowsPath('C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe')
+        libraries = ["C:\\NX ' $()\\Lib", 'C:\\NX\\python311.zip']
+        original = dict(os.environ)
+        with patch.object(CARD, 'embedded_python_runtime', return_value=(ps, dll, libraries)):
+            command, environment = CARD.embedded_python_launch()
+        self.assertEqual(command[0], str(ps))
+        self.assertEqual(command[-1], CARD.EMBEDDED_PYTHON_BOOTSTRAP)
+        self.assertNotIn(str(dll), command[-1])
+        decoded = base64.b64decode(environment['NX_SETUP_CARD_BOOT']).decode('utf-8').split('\0')
+        self.assertEqual(decoded[:2], [str(dll), ';'.join(libraries)])
+        self.assertEqual(decoded[2], str(CARD.io_path(SOURCE)))
+        self.assertEqual(dict(os.environ), original)
+        self.assertNotIn('-ExecutionPolicy', command)
+        self.assertNotIn('Add-Type', command[-1])
+        self.assertIn('AssemblyBuilderAccess]::Run)', command[-1])
 
 
 if __name__ == '__main__':
