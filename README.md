@@ -12,7 +12,7 @@
 
 | Файл | Версия | Назначение | Руководство |
 | --- | --- | --- | --- |
-| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.37 | Создание редактируемой карты наладки с видами, инструментами и операциями. | [Все функции](docs/setup-card.md) |
+| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.38 | Создание редактируемой карты наладки с видами, инструментами и операциями. | [Все функции](docs/setup-card.md) |
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.35 | Вывод управляющих программ и FANUC BIN в папку станка или на носитель. | [Все функции](docs/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.02 | Добавление минимального Z траектории к именам операций. | [Все функции](docs/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |

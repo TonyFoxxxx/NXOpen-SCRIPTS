@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.37
+# SCRIPT_VERSION: V2.38
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -11,7 +11,9 @@
 Одна выбранная папка — один установ со всеми её операциями и вложенными папками.
 Имя, ракурсы и IPW — от MCS первой операции внутри выбранной папки.
 Таблицы карты содержат выбранные операции, независимо от источника IPW.
-Zmin — минимум рассчитанной траектории в СКС операции, в единицах CAM-детали.
+Zmin — минимум рассчитанной траектории по фактической оси ToolAxis каждого движения,
+относительно начала СКС операции, в единицах CAM-детали.
+При поворотной обработке начало СКС должно лежать на оси вращения детали.
 Для отсутствующей, устаревшей или недоступной траектории поле Zmin пустое.
 Свободное поле — не менее 5% ширины/высоты окна с каждой стороны.
 Пробных снимков и пересъёмок нет: один снимок с IPW и один без IPW на ракурс.
@@ -43,6 +45,9 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 Масштаб 1–10000%; на печати границей остаётся формат A4.
 Порядок и сквозная нумерация сохраняются при сохранении и повторном экспорте.
 Результат — один автономный HTML для редактирования и печати.
+Карта открывается через встроенный локальный помощник и сохраняет правки автоматически.
+Помощник работает в памяти, пока открыт NX; отдельной установки и служебных файлов нет.
+При открытии HTML напрямую остаётся прежнее сохранение средствами браузера.
 Во время создания карты отображаются текущий этап и полоса прогресса 0–100%.
 При повторном экспорте готовый HTML заменяет предыдущий файл без копий.
 Отчёты и диагностические файлы не создаются; снимки встраиваются в HTML.
@@ -50,12 +55,14 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 """
 
 import base64
+import builtins
 import configparser
 import copy
 import datetime
 import hashlib
 import html
 from html.parser import HTMLParser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
 import os
@@ -65,11 +72,12 @@ import re
 import struct
 import time
 import tempfile
+import threading
 import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.37"
+SCRIPT_VERSION = "V2.38"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -81,6 +89,265 @@ SETTINGS_FILENAME = 'NX_Setup_Prototype.ini'
 # never open a diagnostic file or start a watchdog.
 DIAGNOSTIC_CALLBACK = None
 EXPORT_PROGRESS = None
+
+
+def local_card_runtime():
+    """Survive Journal / Play repeats without files, processes or NX callbacks."""
+    key = '_nx_setup_card_local_runtime_v1'
+    runtime = getattr(builtins, key, None)
+    if runtime is None:
+        runtime = {'lock': threading.RLock(), 'helper': None}
+        setattr(builtins, key, runtime)
+    return runtime
+
+
+def local_card_identity(source):
+    """Read only the small metadata prefix, not the possibly large 3D model."""
+    class Metadata(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.values = {}
+
+        def handle_starttag(self, tag, attrs):
+            values = dict(attrs)
+            name = values.get('name', '')
+            if tag == 'meta' and name in ('nx-card-id', 'nx-card-revision', 'nx-card-format'):
+                if name in self.values:
+                    raise ValueError('Повторяется служебное поле HTML.')
+                self.values[name] = values.get('content', '')
+
+    parser = Metadata()
+    parser.feed(source[:8192])
+    values = parser.values
+    ident, revision = values.get('nx-card-id', ''), values.get('nx-card-revision', '')
+    if (not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', ident) or
+            not re.fullmatch(r'[a-f0-9]{32}', revision) or
+            values.get('nx-card-format') != 'setup-sections-v1'):
+        raise ValueError('Не найдены идентификатор и редакция карты наладки.')
+    return ident, revision
+
+
+def replace_local_card_contents(path, payload, previous):
+    """Keep the same file; roll back write errors from memory, without sidecars.
+
+    The caller holds the shared export/save lock. Unlike the export's existing
+    staging/replace operation, this in-place write is not power-failure atomic.
+    """
+    with path.open('r+b') as stream:
+        try:
+            if stream.write(payload) != len(payload):
+                raise OSError('Неполная запись HTML.')
+            stream.truncate()
+            stream.flush()
+            os.fsync(stream.fileno())
+        except Exception:
+            stream.seek(0)
+            stream.write(previous)
+            stream.truncate()
+            stream.flush()
+            os.fsync(stream.fileno())
+            raise
+
+
+class LocalCardServer(ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
+    allow_reuse_address = False
+    request_queue_size = 8
+
+    def __init__(self, helper):
+        self.helper = helper
+        self.slots = threading.BoundedSemaphore(8)
+        super().__init__(('127.0.0.1', 0), LocalCardRequest)
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(30)
+        return connection, address
+
+    def verify_request(self, request, address):
+        return address[0] == '127.0.0.1'
+
+    def process_request(self, request, address):
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, address)
+        except Exception:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, address):
+        try:
+            super().process_request_thread(request, address)
+        finally:
+            self.slots.release()
+
+    def handle_error(self, request, address):
+        pass  # No console tracebacks or diagnostic files in normal operation.
+
+
+class LocalCardRequest(BaseHTTPRequestHandler):
+    """Same-origin loopback only; the client cannot supply a destination path."""
+    def log_message(self, *args):
+        pass
+
+    def reply(self, status, payload=b'', content_type='application/json; charset=utf-8'):
+        if not isinstance(payload, bytes):
+            payload = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(payload)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Content-Security-Policy', "frame-ancestors 'none'")
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.close_connection = True
+        if self.command != 'HEAD':
+            self.wfile.write(payload)
+
+    def send_error(self, code, message=None, explain=None):
+        self.reply(code, {'error': 'Запрос отклонён.'})
+
+    def entry(self, saving=False):
+        helper = self.server.helper
+        if (self.headers.get_all('Host', []) != [helper.authority] or
+                self.headers.get('Sec-Fetch-Site') == 'cross-site'):
+            self.send_error(403)
+            return None
+        route = self.path[:-4] if saving and self.path.endswith('save') else self.path
+        with helper.lock:
+            entry = helper.entries.get(route)
+        if entry is None or (saving and self.path != route + 'save'):
+            self.send_error(404)
+            return None
+        if saving and (self.headers.get_all('Origin', []) != [helper.origin] or
+                       self.headers.get_all('X-NX-Card-Key', []) != [entry['key']]):
+            self.send_error(403)
+            return None
+        return entry
+
+    def do_GET(self):
+        entry = self.entry()
+        if entry is None:
+            return
+        try:
+            with self.server.helper.lock:
+                source = entry['path'].read_text(encoding='utf-8-sig')
+            if local_card_identity(source)[0] != entry['id']:
+                self.send_error(409)
+                return
+            session = json.dumps({'protocol': 1, 'id': entry['id'], 'key': entry['key'],
+                                  'save': entry['route'] + 'save'}, separators=(',', ':'))
+            session = '<script id="nx-local-session" type="application/json">' + session + '</script>'
+            source, count = re.subn(r'(<body\b[^>]*>)', lambda match: match[0] + session,
+                                   source, count=1, flags=re.I)
+            if count != 1:
+                raise ValueError('Не найдено содержимое HTML.')
+            self.reply(200, source.encode('utf-8'), 'text/html; charset=utf-8')
+        except FileNotFoundError:
+            self.send_error(404)
+        except (OSError, ValueError):
+            self.send_error(500)
+
+    do_HEAD = do_GET
+
+    def do_POST(self):
+        entry = self.entry(saving=True)
+        if entry is None:
+            return
+        try:
+            lengths = self.headers.get_all('Content-Length', [])
+            if (len(lengths) != 1 or not lengths[0].isdigit() or
+                    self.headers.get('Transfer-Encoding') is not None or
+                    self.headers.get('Content-Type') != 'text/html; charset=utf-8'):
+                self.send_error(400)
+                return
+            length = int(lengths[0])
+            if not 0 < length <= 256 * 1024 * 1024:
+                self.send_error(413)
+                return
+            previous = self.headers.get('X-NX-Card-Revision', '')
+            following = self.headers.get('X-NX-Card-Next', '')
+            if (not re.fullmatch(r'[a-f0-9]{32}', previous) or
+                    not re.fullmatch(r'[a-f0-9]{32}', following) or previous == following):
+                self.send_error(400)
+                return
+            payload = self.rfile.read(length)
+            if len(payload) != length:
+                self.send_error(400)
+                return
+            source = payload.decode('utf-8')
+            if (local_card_identity(source) != (entry['id'], following) or
+                    not source.lstrip().lower().startswith('<!doctype html>') or
+                    not source.rstrip().lower().endswith('</html>') or
+                    re.search(r'<script\b[^>]*\bid=[\'"]nx-local-session[\'"]', source, re.I)):
+                self.send_error(422)
+                return
+            with self.server.helper.lock:
+                current = entry['path'].read_bytes()
+                ident, revision = local_card_identity(current.decode('utf-8-sig'))
+                # Retrying the same bytes after a lost response is safe. Never
+                # retry an old snapshot over a different, newer export/save.
+                if ident != entry['id'] or (revision != previous and current != payload):
+                    self.send_error(409)
+                    return
+                if current != payload:
+                    replace_local_card_contents(entry['path'], payload, current)
+            self.reply(200, {'id': entry['id'], 'revision': following})
+        except FileNotFoundError:
+            self.send_error(404)
+        except (UnicodeError, ValueError):
+            self.send_error(422)
+        except OSError:
+            self.send_error(500)
+
+
+class LocalCardHelper:
+    """File IO only on daemon threads. Never call NXOpen outside its UI thread."""
+    def __init__(self, lock):
+        self.lock, self.entries, self.paths = lock, {}, {}
+        self.server = LocalCardServer(self)
+        self.authority = '127.0.0.1:%d' % self.server.server_address[1]
+        self.origin = 'http://' + self.authority
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       name='NX setup card save', daemon=True)
+        try:
+            self.thread.start()
+        except Exception:
+            self.server.server_close()
+            raise
+
+    def register(self, path):
+        path = path.resolve(strict=True)
+        if path.suffix.lower() not in ('.html', '.htm') or not path.is_file():
+            raise ValueError('Не найден готовый HTML карты.')
+        with self.lock:
+            ident, _ = local_card_identity(path.read_text(encoding='utf-8-sig'))
+            key = os.path.normcase(str(path))
+            entry = self.paths.get(key)
+            if entry is None or entry['id'] != ident:
+                if entry is not None:
+                    self.entries.pop(entry['route'], None)
+                route = '/card/' + uuid.uuid4().hex + '/'
+                entry = {'path': path, 'id': ident, 'route': route,
+                         'key': uuid.uuid4().hex + uuid.uuid4().hex}
+                self.paths[key], self.entries[route] = entry, entry
+            return self.origin + entry['route']
+
+
+def local_card_url(path):
+    runtime = local_card_runtime()
+    with runtime['lock']:
+        helper = runtime['helper']
+        if helper is None or not helper.thread.is_alive():
+            helper = runtime['helper'] = LocalCardHelper(runtime['lock'])
+        return helper.register(path)
+
 
 def diagnostic_event(event, **details):
     if EXPORT_PROGRESS is not None:
@@ -1709,13 +1976,52 @@ def arc_path_zmin(start, end, center, axis, clockwise, z_axis, origin, revolutio
     return finite_number(minimum)
 
 
-def toolpath_zmin(nx, operation, basis, origin, progress=None):
-    """Read the existing CL path once; never generate, post or edit a path.
+def path_axis_mode(nx, path):
+    """Validate the supported NX path storage formats.
 
-    NXOpen CAM path positions are in work-part coordinates. Project them onto
-    the operation's physical MCS Z axis, including the MCS origin offset.
-    Unsupported/incomplete data invalidates the entire result, not just one
-    motion, so a partial minimum cannot be mistaken for the true Zmin.
+    The supplied NX diagnostic demonstrates that 'Three' also contains a
+    meaningful, fixed ToolAxis tilted relative to the operation MCS. Neither
+    format determines the physical tool direction or the machine axis count.
+    """
+    axis_type = getattr(nx.CAM, 'CamPathToolAxisType', None)
+    try:
+        mode = enum_name(path.ToolAxisType, axis_type, ('Three', 'Five'))
+    except Exception as exc:
+        raise ValueError('Не удалось определить формат оси инструмента: ' + str(exc))
+    if mode not in ('Three', 'Five'):
+        raise ValueError('Неизвестный формат оси инструмента: ' + str(mode))
+    return mode
+
+
+def motion_z_axis(motion):
+    # Read the actual CL vector for BOTH Three and Five, including indexed cuts.
+    # Using MCS Z for Three caused wrong Z values on 16 operations in the
+    # supplied diagnostic. Stored CAM parameter vectors can also differ from
+    # this motion's vector after a toolpath transformation: use the path itself.
+    try:
+        return unit(path_point(motion.ToolAxis))
+    except Exception as exc:
+        # Falling back to fixed MCS Z here would recreate the +/-150 error.
+        raise ValueError('Недоступно направление оси инструмента в траектории: ' + str(exc))
+
+
+def toolpath_zmin(nx, operation, basis, origin, progress=None):
+    """Read the existing CL path; never generate, post or modify it.
+
+    EndPoint and ToolAxis are used together for Three and Five paths. With MCS origin
+    O on the rotary axis, Z at each stored position is dot(P - O, unit(IJK)).
+    Under the same rigid rotation of P - O and IJK their dot product is
+    invariant. No abs(), radius substitution or guessed A/B angle is used.
+
+    For variable-axis linear CL output evaluate each stored position with its
+    own vector. Do not interpolate a Cartesian chord between rotated CL points
+    and project it onto an invented intermediate vector: this would falsely
+    reduce Z even for constant-height rotation. This is a CL-coordinate result,
+    not a postprocessed machine-axis or controller-smoothing simulation.
+
+    Arcs/helices with a constant axis retain the analytic interior extrema.
+    Without orientation interpolation data, changing-axis arcs are rejected
+    rather than reporting a partial or guessed minimum for the operation.
     """
     path = operation.GetPath()
     if path is None:
@@ -1725,10 +2031,12 @@ def toolpath_zmin(nx, operation, basis, origin, progress=None):
     count = int(path.NumberOfToolpathEvents)
     if count <= 0:
         return None
+    path_axis_mode(nx, path)
     shapes = nx.CAM.CamPathMotionShapeType
     directions = nx.CAM.CamPathDir
-    z_axis = basis[2]
-    minimum, previous, event = None, None, None
+    if not all(math.isfinite(c) for c in origin):
+        raise ValueError('Некорректное начало СКС операции.')
+    minimum, previous, previous_axis, event = None, None, None, None
     if progress is not None:
         progress(0, count)
     try:
@@ -1751,8 +2059,14 @@ def toolpath_zmin(nx, operation, basis, origin, progress=None):
                     else:
                         raise ValueError('Zmin: неподдерживаемая форма движения ' + str(shape))
                     end = path_point(motion.EndPoint)
+                    z_axis = motion_z_axis(motion)
                     value = dot(tuple(end[i] - origin[i] for i in range(3)), z_axis)
                     if shape != shapes.Linear:
+                        if previous_axis is not None:
+                            difference = tuple(z_axis[i] - previous_axis[i] for i in range(3))
+                            if dot(difference, difference) > 1e-16:
+                                raise ValueError('Дуга или винтовое движение с изменением оси инструмента: '
+                                                 'недостаточно данных для пересчёта Z между точками.')
                         direction = motion.Direction
                         if direction not in (directions.Clockwise, directions.Counterclockwise):
                             raise ValueError('Не определено направление дуги траектории.')
@@ -1762,6 +2076,7 @@ def toolpath_zmin(nx, operation, basis, origin, progress=None):
                                               motion.NumberOfRevolutions if shape == shapes.Helical else None)
                     minimum = value if minimum is None else min(minimum, value)
                     previous = end
+                    previous_axis = z_axis
                 finally:
                     release_path_data(motion)
             if (index + 1) % 256 == 0 and progress is not None:
@@ -4098,7 +4413,7 @@ SETUP_TEMPLATE = r"""
 
 CARD_TEMPLATE = r"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="nx-operation-options" content="__OPERATION_OPTIONS__">
 <meta name="nx-card-id" content="__CARD_ID__">
 <meta name="nx-card-revision" content="__CARD_REVISION__">
@@ -4443,9 +4758,21 @@ table[data-fit-family] tbody>tr.operation-selected>td{background:#dcf2ff}
 'use strict';
 const DOC = __DOCUMENT_CONTEXT__;
 const SLIDER_RESET_HINT = "Нажмите дважды для возврата к исходному масштабу";
+// Only the NX loopback server injects this session. It is never stored in the
+// saved/shared HTML, and neither the browser nor the request chooses a path.
+const LOCAL_SESSION=(()=>{
+ try{
+  const value=JSON.parse(document.getElementById('nx-local-session')?.textContent||'null');
+  if(location.protocol!=='http:'||location.hostname!=='127.0.0.1'||!/^\/card\/[a-f0-9]{32}\/$/.test(location.pathname))return null;
+  if(value?.protocol!==1||value.id!==DOC.id||! /^[a-f0-9]{64}$/.test(value.key)||value.save!==location.pathname+'save')return null;
+  return value;
+ }catch(e){return null;}
+})();
 let changed=false, saving=false, editRevision=0;
 let fileHandle=null, expectedRevision=document.querySelector('meta[name="nx-card-revision"]').content;
-const fileKey='nx-card-file:'+location.href.split('#')[0];
+const fileKey=LOCAL_SESSION?'nx-card-file:local:'+DOC.id:'nx-card-file:'+location.href.split('#')[0];
+let autosaveTimer=0,autosaveBlocked=false,autosaveFailures=0,pendingLocalSave=null,composing=false;
+const activePointers=new Set();
 function revisionDraftKey(revision){return 'nx-card-v2.05:'+DOC.id+'|'+revision+'|'+fileKey;}
 let draftKey=revisionDraftKey(expectedRevision);
 function acceptSavedRevision(revision){
@@ -4924,7 +5251,18 @@ function placeProjectTools(){
  document.querySelector('meta[name="nx-project-tools-position"]').content='first';
 }
 function saveDraft(){try{localStorage.setItem(draftKey,JSON.stringify({options:ColumnOptions.state(),projectImageScale:ProjectImage.value(),projectModel:ProjectModel.state(),setups:Object.fromEntries(editors.map(e=>[e.id,e.state()]))}));}catch(e){}}
-function markChanged(){changed=true;editRevision++;saveDraft();}
+function markChanged(){changed=true;editRevision++;saveDraft();queueLocalSave();}
+function queueLocalSave(delay=900){
+ if(!LOCAL_SESSION||!changed||autosaveBlocked)return;
+ clearTimeout(autosaveTimer);autosaveTimer=setTimeout(()=>saveLocalCard(true),delay);
+}
+// An autosave must not commit/cancel a drag preview or interrupt IME entry.
+document.addEventListener('pointerdown',event=>activePointers.add(event.pointerId),true);
+for(const name of ['pointerup','pointercancel'])document.addEventListener(name,event=>{activePointers.delete(event.pointerId);queueLocalSave();},true);
+document.addEventListener('compositionstart',()=>{composing=true;});
+document.addEventListener('compositionend',()=>{composing=false;queueLocalSave();});
+window.addEventListener('blur',()=>{activePointers.clear();composing=false;queueLocalSave();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&LOCAL_SESSION&&changed&&!autosaveBlocked)saveLocalCard(true);});
 function renumber(){
  const pages=[...document.querySelectorAll('.setup-pages>.page')];pages.forEach((p,i)=>{p.querySelector('.page-number').textContent=i+1;p.querySelector('.page-count').textContent=pages.length;});
  // Controls travel with their own paper. Reserve enough shared space above
@@ -4951,7 +5289,7 @@ function serializedCard(revision){
  copy.querySelectorAll('.project-model canvas').forEach(c=>c.remove());
  copy.querySelectorAll('.project-model').forEach(n=>n.classList.remove('model-ready'));
  copy.querySelector('meta[name="nx-card-revision"]').content=revision;copy.querySelector('#nx-local-session')?.remove();
- copy.querySelector('#save').disabled=false;copy.querySelector('#save-copy').hidden=true;
+ copy.querySelector('#save').disabled=false;copy.querySelector('#save').textContent='Сохранить карту';copy.querySelector('#save-copy').hidden=true;
  copy.querySelectorAll('#setup-jump option').forEach(o=>o.removeAttribute('selected'));
  return '<!doctype html>\n'+copy.outerHTML;
 }
@@ -4969,7 +5307,41 @@ async function selectSaveFile(){
  if(!handle)throw new DOMException('Файл не выбран.','AbortError');
  return handle;
 }
+async function saveLocalCard(automatic=false){
+ if(!LOCAL_SESSION||saving||(!changed&&!pendingLocalSave&&automatic))return;
+ if(automatic&&(activePointers.size||composing||window.matchMedia('print').matches||
+    [...document.querySelectorAll('.cell-grid-picker')].some(node=>node.getClientRects().length))){queueLocalSave();return;}
+ clearTimeout(autosaveTimer);saving=true;
+ const button=document.getElementById('save');button.disabled=true;button.textContent='Сохранение…';
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),30000);
+ try{
+  if(!pendingLocalSave){
+   if(!automatic)paginate();
+   const next=newRevision(),content=serializedCard(next);
+   pendingLocalSave={previous:expectedRevision,next,content,edit:editRevision};
+  }
+  const pending=pendingLocalSave;
+  const response=await fetch(LOCAL_SESSION.save,{method:'POST',mode:'same-origin',credentials:'omit',cache:'no-store',redirect:'error',signal:controller.signal,
+   headers:{'Content-Type':'text/html; charset=utf-8','X-NX-Card-Key':LOCAL_SESSION.key,'X-NX-Card-Revision':pending.previous,'X-NX-Card-Next':pending.next},body:pending.content});
+  if(!response.ok){const error=new Error('Не удалось сохранить HTML.');error.status=response.status;throw error;}
+  const result=await response.json();
+  if(result.id!==DOC.id||result.revision!==pending.next)throw new Error('Не подтверждена запись HTML.');
+  acceptSavedRevision(pending.next);pendingLocalSave=null;autosaveBlocked=false;autosaveFailures=0;
+  if(editRevision===pending.edit){changed=false;try{localStorage.removeItem(draftKey);}catch(e){}}
+  else saveDraft();
+  document.getElementById('save-copy').hidden=true;button.textContent='Сохранить карту';
+ }catch(e){
+  saveDraft();autosaveFailures++;autosaveBlocked=[400,403,404,409,413,422].includes(e.status);
+  // No popups or warning banners. A failed write keeps the draft and exposes
+  // the existing explicit download action; it never falls back to a picker.
+  document.getElementById('save-copy').hidden=false;button.textContent='Повторить сохранение';
+ }finally{
+  clearTimeout(timeout);saving=false;button.disabled=false;
+  if(changed||pendingLocalSave)queueLocalSave(autosaveFailures?Math.min(30000,5000*autosaveFailures):900);
+ }
+}
 async function saveCard(){
+ if(LOCAL_SESSION){await saveLocalCard();return;}
  if(saving)return;
  saving=true;const button=document.getElementById('save');button.disabled=true;let writable=null;
  try{
@@ -6646,7 +7018,7 @@ document.getElementById('setup-jump').addEventListener('change',event=>{
  const rect=scope.getBoundingClientRect(),cover=scope.querySelector('.setup-pages>.cover-page');
  window.scrollTo({left:window.scrollX+(cover||scope).getBoundingClientRect().left-18,top:window.scrollY+rect.top-projectBar.getBoundingClientRect().height,behavior:'smooth'});
 });
-(document.fonts?document.fonts.ready:Promise.resolve()).then(()=>{paginate();editors.forEach(e=>e.fitFields());});
+(document.fonts?document.fonts.ready:Promise.resolve()).then(()=>{paginate();editors.forEach(e=>e.fitFields());queueLocalSave();});
 </script></body></html>
 """
 
@@ -7353,10 +7725,11 @@ def identity_key(identity):
 
 def read_existing_card(path):
     """Read the saved HTML once. Invalid input must never become a fresh export."""
-    if not path.exists():
-        return None
     try:
-        raw = path.read_bytes()
+        with local_card_runtime()['lock']:
+            if not path.exists():
+                return None
+            raw = path.read_bytes()
         markup = CardMarkup(raw.decode('utf-8-sig'))
         meta = {n['attrs'].get('name'): n['attrs'].get('content') for n in markup.nodes if n['tag'] == 'meta'}
         card_id = meta.get('nx-card-id', '')
@@ -7923,11 +8296,17 @@ def copy_card_path(card, report):
 
 
 def open_output_folder(card, report, open_folder=True):
-    """Open the standalone HTML and output folder without a helper process."""
+    """Open the loopback editor and usual folder; the helper lives inside NX."""
     if card is None or not export_is_complete(report) or os.name != 'nt':
         return []
     errors = []
-    targets = [(card, 'карту')]
+    try:
+        editor = local_card_url(card)
+    except Exception as exc:
+        editor = card
+        errors.append('Карта сохранена, но локальное автосохранение не запущено: %s\n'
+                      'HTML откроется с обычным сохранением через браузер.' % exc)
+    targets = [(editor, 'карту')]
     if open_folder:
         targets.append((card.parent, 'папку результата'))
     for target, label in targets:
@@ -7940,13 +8319,14 @@ def open_output_folder(card, report, open_folder=True):
 
 def publish_output(card, destination, expected_digest):
     """Replace one complete HTML atomically, without moving the previous file."""
-    actual_digest = hashlib.sha256(destination.read_bytes()).hexdigest() if destination.exists() else None
-    if actual_digest != expected_digest:
-        raise RuntimeError('HTML-карта изменилась во время экспорта. Чтобы не потерять правки, '
-                           'запись отменена. Сохраните изменения и повторите запуск.')
-    # Staging is inside the destination folder, so replacement stays on one volume.
-    # If replacement fails, the previous HTML remains at its original path.
-    card.replace(destination)
+    with local_card_runtime()['lock']:
+        actual_digest = hashlib.sha256(destination.read_bytes()).hexdigest() if destination.exists() else None
+        if actual_digest != expected_digest:
+            raise RuntimeError('HTML-карта изменилась во время экспорта. Чтобы не потерять правки, '
+                               'запись отменена. Сохраните изменения и повторите запуск.')
+        # Staging is inside the destination folder, so replacement stays on one volume.
+        # If replacement fails, the previous HTML remains at its original path.
+        card.replace(destination)
     return destination
 
 
