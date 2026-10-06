@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.43
+# SCRIPT_VERSION: V2.44
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -86,7 +86,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.43"
+SCRIPT_VERSION = "V2.44"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -4861,7 +4861,7 @@ def uf_struct_value(obj, name):
 
 SETUP_TEMPLATE = r"""
 <div class="toolbar"><span class="brand">Установ __SETUP_LABEL__</span><label class="axes-control" for="mcs-size">Стрелки СКС на детали <input id="mcs-size" type="range" min="50" max="180" step="5" value="100"><output id="mcs-size-value" for="mcs-size">100%</output></label><label class="axes-control" for="mcs-outline-color">Контур <select id="mcs-outline-color"><option value="white" selected>Белый</option><option value="black">Чёрный</option></select></label><label class="axes-control" for="mcs-outline-width">Толщина контура <input id="mcs-outline-width" type="range" min="50" max="250" step="10" value="100"><output id="mcs-outline-width-value" for="mcs-outline-width">100%</output></label><div class="actions"><button id="gallery-reset" type="button" title="Выровнять размеры ячеек и вернуть доступную высоту блока, сохранив содержимое">Выровнять ячейки</button><button id="columns-auto" type="button" disabled title="Вернуть всем таблицам ширину столбцов по содержимому">Автоширина</button></div>
-<div class="layout-toolbar"><button id="cell-add" type="button" aria-haspopup="dialog" aria-controls="cell-grid-picker" aria-expanded="false" title="Выберите место, число столбцов и строк">+ Ячейки изображений ▾</button><button id="cell-undo" type="button" disabled title="Отменить последнее добавление, удаление или перемещение ячеек">Отменить ячейки</button><output id="cell-selection-status" class="cell-selection-status" aria-live="polite"></output><button id="cell-clear-selection" type="button" hidden>Снять выделение</button><button id="operations-to-cover" type="button" disabled>На первый лист ↑</button><button id="operations-to-next" type="button" disabled>На следующие листы ↓</button><output id="operations-status" aria-live="polite"></output></div></div>
+<div class="layout-toolbar"><button id="cell-add" type="button" aria-haspopup="dialog" aria-controls="cell-grid-picker" aria-expanded="false" title="Выберите место, число столбцов и строк">+ Ячейки изображений ▾</button><button id="cell-undo" type="button" disabled title="Отменить последнее добавление, удаление или перемещение ячеек">Отменить действие</button><output id="cell-selection-status" class="cell-selection-status" aria-live="polite"></output><button id="cell-clear-selection" type="button" hidden>Снять выделение</button><button id="operations-to-cover" type="button" disabled>На первый лист ↑</button><button id="operations-to-next" type="button" disabled>На следующие листы ↓</button><output id="operations-status" aria-live="polite"></output></div></div>
 <div hidden id="editor-service"><output id="gallery-size-status"></output><output id="column-size-status"></output></div>
 
 <div id="pages" class="setup-pages">__BODY__</div>
@@ -5210,7 +5210,7 @@ table[data-fit-family] tbody>tr.operation-selected>td{background:#dcf2ff}
 @media print{.note-height-grip{display:none!important}}
 </style></head><body>
 
-<div class="project-toolbar"><span class="brand">Карта наладки</span><details id="operation-options"><summary>Столбцы</summary><div class="operation-options-panel"><strong id="operation-options-title"></strong><div id="operation-column-list"></div></div></details><label>Установ <select id="setup-jump" aria-label="Перейти к установу">__SETUP_OPTIONS__</select></label><div class="actions"><button id="save" type="button">Сохранить карту</button><button id="save-copy" type="button" hidden>Скачать копию</button><button id="print" class="primary" type="button">Печать</button></div></div>
+<div class="project-toolbar"><span class="brand">Карта наладки</span><details id="operation-options"><summary>Столбцы</summary><div class="operation-options-panel"><strong id="operation-options-title"></strong><div id="operation-column-list"></div></div></details><label>Установ <select id="setup-jump" aria-label="Перейти к установу">__SETUP_OPTIONS__</select></label><div class="actions"><button id="undo" type="button" disabled title="Отменить последнее действие (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z">Отменить</button><button id="save" type="button">Сохранить карту</button><button id="save-copy" type="button" hidden>Скачать копию</button><button id="print" class="primary" type="button">Печать</button></div></div>
 <main id="setup-documents">__SETUPS__</main>
 <script>
 'use strict';
@@ -5226,7 +5226,7 @@ const LOCAL_SESSION=(()=>{
   return value;
  }catch(e){return null;}
 })();
-let changed=false, saving=false, editRevision=0;
+let changed=false, saving=false, editRevision=0,CardHistory=null;
 let fileHandle=null, expectedRevision=document.querySelector('meta[name="nx-card-revision"]').content;
 const fileKey=LOCAL_SESSION?'nx-card-file:local:'+DOC.id:'nx-card-file:'+location.href.split('#')[0];
 let autosaveTimer=0,autosaveBlocked=false,autosaveFailures=0,pendingLocalSave=null,composing=false;
@@ -5647,7 +5647,7 @@ const ProjectModel=(()=>{
  });
  document.addEventListener('click',event=>{const button=event.target.closest('[data-project-model-action]');if(button){if(button.dataset.projectModelAction==='fit')fit();else reset();}});
  window.addEventListener('blur',()=>finish(true));window.addEventListener('resize',()=>queue());
- return{active,state,restore,prepare,mount,queue,layout,geometry,adoptScale,aspect:()=>data?.aspect||44/32};
+ return{active,state,restore,prepare,mount,queue,layout,geometry,adoptScale,cancel:()=>finish(true),aspect:()=>data?.aspect||44/32};
 })();
 // The first-sheet view belongs to the project, even if its owning setup changes.
 const ProjectImage=(()=>{
@@ -5709,7 +5709,73 @@ function placeProjectTools(){
  document.querySelector('meta[name="nx-project-tools-position"]').content='first';
 }
 function saveDraft(){try{localStorage.setItem(draftKey,JSON.stringify({options:ColumnOptions.state(),projectImageScale:ProjectImage.value(),projectModel:ProjectModel.state(),setups:Object.fromEntries(editors.map(e=>[e.id,e.state()]))}));}catch(e){}}
-function markChanged(){changed=true;editRevision++;saveDraft();queueLocalSave();}
+function markChanged(){if(CardHistory?.restoring())return;CardHistory?.record();changed=true;editRevision++;saveDraft();queueLocalSave();}
+
+// Session-only history stores editable state, not whole documents or mesh data.
+// Immutable image strings are shared across steps; deleted original views remain
+// in their setup's cell pool until the document closes.
+function createCardHistory(){
+ const steps=[],limit=100;let current=null,busy=false,group=null,pointer=null,key=null,typing=null,wheel=null,wheelTimer=0;
+ const clone=value=>Array.isArray(value)?value.map(clone):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).map(([k,v])=>[k,clone(v)])):value;
+ function same(a,b){
+  if(a===b)return true;if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
+  const keys=Object.keys(a);return keys.length===Object.keys(b).length&&keys.every(k=>Object.prototype.hasOwnProperty.call(b,k)&&same(a[k],b[k]));
+ }
+ function capture(){return clone({options:ColumnOptions.state(),projectImageScale:ProjectImage.value(),projectModel:ProjectModel.state(),setups:Object.fromEntries(editors.map(e=>[e.id,e.state()]))});}
+ function sync(){document.querySelectorAll('#undo,[data-editor-id="cell-undo"]').forEach(button=>{button.disabled=busy||!steps.length;button.title='Отменить последнее действие (Ctrl+Z)';});}
+ function endGroup(){group=pointer=key=typing=wheel=null;clearTimeout(wheelTimer);}
+ function editable(target){return target instanceof Element&&(target.isContentEditable||!!target.closest('textarea,input:not([type]),input[type="text"],input[type="search"],input[type="number"]'));}
+ function targetKey(target){
+  const setup=target.closest?.('.setup-document')?.dataset.setupId||'project',page=target.closest?.('.page')?.dataset.pageKey||'';
+  return [setup,page,target.dataset?.field||target.dataset?.scaleTarget||target.dataset?.editorId||target.closest?.('[data-image]')?.dataset.image||target.tagName].join('|');
+ }
+ function record(){
+  if(busy)return;
+  const next=capture();if(current===null){current=next;return;}if(same(current,next))return;
+  const previous=steps.at(-1);
+  if(group&&previous?.group===group){previous.after=next;if(same(previous.before,next))steps.pop();}
+  else{steps.push({before:current,after:next,group});if(steps.length>limit)steps.shift();}
+  current=next;sync();
+ }
+ function undo(){
+  if(busy||!steps.length||composing)return;
+  const entry=steps.pop(),scroll=[window.scrollX,window.scrollY];busy=true;endGroup();
+  try{
+   ProjectModel.cancel();editors.forEach(e=>e.cancel());
+   ColumnOptions.set(entry.before.options);ProjectImage.set(entry.before.projectImageScale);ProjectModel.restore(entry.before.projectModel);
+   editors.forEach(e=>e.restore(clone(entry.before.setups[e.id]),true));paginate();ProjectModel.queue(true);
+   current=capture();
+  }finally{busy=false;sync();}
+  // Undo is a new edit for autosave/revision checks, but not a new undo step.
+  changed=true;editRevision++;saveDraft();queueLocalSave();window.scrollTo(...scroll);
+ }
+ document.addEventListener('pointerdown',event=>{endGroup();current=capture();pointer=event.pointerId;group={};},true);
+ for(const type of ['pointerup','pointercancel'])document.addEventListener(type,event=>{
+  if(pointer!==event.pointerId)return;const token=group;queueMicrotask(()=>{if(group===token)endGroup();});
+ },true);
+ document.addEventListener('beforeinput',event=>{
+  if(!editable(event.target))return;const next=targetKey(event.target);
+  if(typing!==next){endGroup();current=capture();typing=next;group={};}
+ },true);
+ document.addEventListener('focusout',()=>{if(typing)endGroup();},true);
+ document.addEventListener('keydown',event=>{
+  if((event.ctrlKey||event.metaKey)&&!event.shiftKey&&!event.altKey&&(event.code==='KeyZ'||event.key.toLowerCase()==='z')){
+   if(editable(event.target)||event.isComposing)return;
+   event.preventDefault();event.stopImmediatePropagation();undo();return;
+  }
+  if(editable(event.target))return;
+  const next=targetKey(event.target)+'|'+event.code;
+  if(!event.repeat||key!==next){endGroup();current=capture();key=next;group={};}
+ },true);
+ document.addEventListener('keyup',()=>{if(key)endGroup();},true);
+ document.addEventListener('wheel',event=>{
+  const next=targetKey(event.target);if(wheel!==next){endGroup();current=capture();wheel=next;group={};}
+  clearTimeout(wheelTimer);wheelTimer=setTimeout(endGroup,350);
+ },{capture:true,passive:true});
+ document.addEventListener('click',event=>{if(event.target.closest?.('#undo'))undo();});
+ window.addEventListener('blur',endGroup);
+ current=capture();sync();return{record,undo,sync,restoring:()=>busy,refresh:()=>{if(!steps.length&&!group)current=capture();}};
+}
 function queueLocalSave(delay=900){
  if(!LOCAL_SESSION||!changed||autosaveBlocked)return;
  clearTimeout(autosaveTimer);autosaveTimer=setTimeout(()=>saveLocalCard(true),delay);
@@ -5748,6 +5814,7 @@ function serializedCard(revision){
  copy.querySelectorAll('.project-model').forEach(n=>n.classList.remove('model-ready'));
  copy.querySelector('meta[name="nx-card-revision"]').content=revision;copy.querySelector('#nx-local-session')?.remove();
  copy.querySelector('#save').disabled=false;copy.querySelector('#save').textContent='Сохранить карту';copy.querySelector('#save-copy').hidden=true;
+ copy.querySelector('#undo').disabled=true;
  copy.querySelectorAll('#setup-jump option').forEach(o=>o.removeAttribute('selected'));
  return '<!doctype html>\n'+copy.outerHTML;
 }
@@ -5835,6 +5902,7 @@ async function saveCard(){
 
 function createSetupEditor(scope){
  const prefix=scope.dataset.setupId+'-',local=id=>scope.querySelector('[data-editor-id="'+id+'"]');
+ local('cell-undo').textContent='Отменить действие';
  local('operations-to-cover').textContent='На первый лист ←';local('operations-to-next').textContent='На следующие листы →';
  scope.querySelectorAll('input[type=range]').forEach(input=>{const label=input.closest('label');if(label){label.title=SLIDER_RESET_HINT;label.classList.add('slider-label');}});
 // Delegate to the setup so newly created/reopened sheet controls also reset.
@@ -6611,7 +6679,7 @@ function setMcsOutline(mode,width,dirty=false){
 const GalleryLayout=(()=>{
  const root=scope.querySelector('.gallery'),grid=root.querySelector('.gallery-grid'),W=194;
  const cells=new Map(),rects=new Map(),splits=new Map(),selection=new Set(),copy=x=>JSON.parse(JSON.stringify(x));
- let tree=null,height=225.5,preferredHeight=225.5,availableHeight=225.5,selected=null,drag=null,undo=null,queued=false,swapFrom=null,swapScroll=0;
+ let tree=null,height=225.5,preferredHeight=225.5,availableHeight=225.5,selected=null,drag=null,queued=false,swapFrom=null,swapScroll=0;
  let picker=null,pickerTarget='tools',pickerSide='bottom',pickerCols=1,pickerRows=1,suppressPickClick=false,gridPreview=null;
  const dropPreview=document.createElement('div');dropPreview.className='cell-drop-preview';dropPreview.hidden=true;root.append(dropPreview);
  const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
@@ -6620,6 +6688,7 @@ const GalleryLayout=(()=>{
   const id=node.dataset.cellId||(node.matches('.tool-panel')?'tools':node.dataset.image||'view-'+index);
   node.dataset.cellId=id;cells.set(id,node);
  });
+ const originalCells=new Map([...cells].filter(([,node])=>!node.matches('.user-photo')));
  const original={iso:[...cells].find(([,n])=>n.matches('.iso-photo'))?.[0],
   top:[...cells].find(([,n])=>n.matches('.top-photo'))?.[0],
   side:[...cells].find(([,n])=>n.matches('.side-photo'))?.[0]};
@@ -6731,11 +6800,12 @@ const GalleryLayout=(()=>{
   edge.setAttribute('aria-valuetext',height.toFixed(1)+' мм');
   edge.title='Тяните нижнюю границу вверх или вниз. Стрелки — 1 мм; Shift — 5 мм; двойной щелчок — доступная высота.';
   root.dataset.galleryLayout=JSON.stringify({tree,preferredHeight});
-  local('cell-undo').disabled=!undo;
-  if(refreshNow)refresh();else if(scheduleRefresh)queue();
+  CardHistory?.sync();
+ if(refreshNow)refresh();else if(scheduleRefresh)queue();
  }
- function restore(data){
+ function restore(data,deferred=false){
   preferredHeight=Number.isFinite(data?.preferredHeight)?clamp(data.preferredHeight,50,225.5):225.5;
+  originalCells.forEach((node,id)=>{if(!cells.has(id)){cells.set(id,node);grid.append(node);}});
   if(data?.users){
    for(const [id,node] of cells)if(node.matches('.user-photo')){node.remove();cells.delete(id);}
    for(const item of data.users){if(typeof item.id==='string'&&!cells.has(item.id))createUser(item.id,item.src,item.label);}
@@ -6745,7 +6815,7 @@ const GalleryLayout=(()=>{
    tree=candidate;const retained=new Set(ids());
    for(const [id,node] of cells)if(!retained.has(id)){node.remove();cells.delete(id);}
   }else if(!tree)tree=defaults();
-  height=clamp(Math.min(preferredHeight,availableHeight),minimumHeight(),225.5);select(null);apply();
+  height=clamp(Math.min(preferredHeight,availableHeight),minimumHeight(),225.5);select(null);if(!deferred)apply();
  }
  function values(){
   const saved=gridPreview?.base||(drag?.kind==='height'?drag:null);
@@ -6800,7 +6870,7 @@ const GalleryLayout=(()=>{
  function swap(a,b){
   if(a===b||!imageCell(a)||!imageCell(b))return false;
   function exchange(n){if(n.id){if(n.id===a)n.id=b;else if(n.id===b)n.id=a;}else{exchange(n.a);exchange(n.b);}}
-  undo=snapshot();exchange(tree);clearSwap();select(a);apply({refreshNow:true});markChanged();return true;
+  exchange(tree);clearSwap();select(a);apply({refreshNow:true});markChanged();return true;
  }
  function moveGroup(list,target,side='bottom'){
   const moving=new Set(list.filter(imageCell));
@@ -6808,7 +6878,7 @@ const GalleryLayout=(()=>{
   const block=subset(tree,moving),remainder=subset(tree,new Set(ids().filter(id=>!moving.has(id))));
   const candidate=mutate(remainder,target,beside(target,block,side));
   if(!fits(candidate))return false;
-  undo=snapshot();tree=redistribute(candidate);clearSwap();selectMany([...moving]);changedLayout();return true;
+  tree=redistribute(candidate);clearSwap();selectMany([...moving]);changedLayout();return true;
  }
  function swapTarget(x,y){
   const node=document.elementFromPoint(x,y)?.closest('.gallery-grid>[data-cell-id]'),id=node?.dataset.cellId;
@@ -6838,14 +6908,11 @@ const GalleryLayout=(()=>{
  }
  function remove(id){
   if(id==='tools'||!cells.has(id))return;
-  closePicker();PhotoPan.finish();finish(true);clearSwap();undo=snapshot();
+  closePicker();PhotoPan.finish();finish(true);clearSwap();
   cells.get(id).remove();cells.delete(id);tree=mutate(tree,id,null);select(null);changedLayout();
  }
  function undoRemove(){
-  if(!undo)return;finish(true);closePicker();clearSwap();const saved=undo;undo=null;
-  cells.forEach((n,id)=>{if(!saved.cells.has(id))n.remove();});cells.clear();
-  saved.cells.forEach((n,id)=>{cells.set(id,n);grid.append(n);});tree=saved.tree;height=saved.height;preferredHeight=saved.preferredHeight;
-  selectMany(saved.selected);changedLayout();
+  CardHistory?.undo();
  }
  function imageSource(src){return typeof src==='string'&&/^data:image\/(?:png|jpeg|webp|gif|bmp);base64,[A-Za-z0-9+/=\r\n]+$/.test(src);}
  function createUser(id,src='',label='Своё изображение'){
@@ -6900,12 +6967,12 @@ const GalleryLayout=(()=>{
   finish(true);clearSwap();const signature=[cols,rows,target,side].join('|');
   let created;
   if(gridPreview?.signature===signature&&gridPreview.created){
-   undo=gridPreview.base;created=gridPreview.created;gridPreview=null;
+   created=gridPreview.created;gridPreview=null;
    created.forEach(id=>delete cells.get(id).dataset.cellPreview);
   }else{
    cancelGridPreview();const candidate=gridCandidate(cols,rows,target,side);
    if(!candidate)return false;
-   undo=snapshot();tree=candidate.tree;created=candidate.created;created.forEach(id=>createUser(id));
+   tree=candidate.tree;created=candidate.created;created.forEach(id=>createUser(id));
   }
   closePicker();selectMany(created);
   changedLayout();return created;
@@ -7094,7 +7161,7 @@ const GalleryLayout=(()=>{
  window.addEventListener('resize',positionPicker);
  window.addEventListener('scroll',positionPicker,{passive:true});
  local('gallery-reset').addEventListener('click',()=>{
-  finish(true);closePicker();clearSwap();undo=snapshot();preferredHeight=225.5;
+  finish(true);closePicker();clearSwap();preferredHeight=225.5;
   // Reset proportions, preserving every user-added cell and every deletion.
   function reset(n){if(!n.id){n.ratio=.5;reset(n.a);reset(n.b);}}
   reset(tree);setHeight(availableHeight);markChanged();
@@ -7466,14 +7533,15 @@ scope.addEventListener('paste',event=>{const field=event.target.closest('[data-f
 scope.addEventListener('click',event=>{if(event.target.closest('.photo-view-tools,.cell-remove,.cell-move,.gallery-grip,.gallery-height-grip'))return;const photo=event.target.closest('.photo[data-paired]');if(photo)togglePhoto(photo);});
 
 function state(){const variants={};scope.querySelectorAll('.photo[data-image]:not([data-cell-preview])').forEach(photo=>{variants[photo.dataset.image]=photo.dataset.variant;});return{fields:values(),variants,axesSize:Number(local('mcs-size').value),outlineColor:local('mcs-outline-color').value,outlineWidth:Number(local('mcs-outline-width').value),columnWidths,photoZooms:photoZoomValues(),photoPans:photoPanValues(),galleryLayout:CardFlow.galleryValues(),pageScales:PageScale.state(),pageWraps:PageScale.wrapState(),coverToolScale:PageScale.toolsValue(),coverOperations:CardFlow.values(),coverPlacement:CardFlow.mode(),operationLimit:CardFlow.limit(),noteHeights:NoteLayout.state()};}
-function restoreState(draft){
+function restoreState(draft,deferred=false){
  if(!draft?.fields)return;applyValues(draft.fields);if(draft.noteHeights)NoteLayout.restore(draft.noteHeights);
- if(draft.galleryLayout)GalleryLayout.restore(draft.galleryLayout);PageScale.restore(draft.pageScales,draft.rowScale,draft.coverToolScale,draft.pageWraps);if(draft.coverOperations)CardFlow.restore(draft.coverOperations,draft.coverPlacement,draft.operationLimit);
+ if(draft.galleryLayout)GalleryLayout.restore(draft.galleryLayout,deferred);PageScale.restore(draft.pageScales,draft.rowScale,draft.coverToolScale,draft.pageWraps);if(draft.coverOperations)CardFlow.restore(draft.coverOperations,draft.coverPlacement,draft.operationLimit);
  if(draft.photoZooms)applyPhotoZoomValues(draft.photoZooms);if(draft.photoPans)applyPhotoPanValues(draft.photoPans);if(draft.columnWidths)columnWidths=readColumnWidths(draft.columnWidths);
  if(draft.axesSize!=null)setMcsSize(draft.axesSize);if(draft.outlineColor!=null||draft.outlineWidth!=null)setMcsOutline(draft.outlineColor,draft.outlineWidth??100);
  scope.querySelectorAll('.photo[data-paired]').forEach(photo=>{const variant=draft.variants?.[photo.dataset.image];if(variant==='ipw'||variant==='no-ipw')setVariant(photo,variant==='no-ipw');});
 }
 function prepare(){NoteLayout.finish(true);PhotoPan.finish();GalleryLayout.closePicker();GalleryLayout.finish(true);finishColumnDrag();CardFlow.finish(true);positionMcsAnchors();}
+function cancel(){NoteLayout.finish(true);PhotoPan.finish(true);GalleryLayout.closePicker();GalleryLayout.finish(true);finishColumnDrag(true);CardFlow.finish(true);DatumEditor.close();}
 function serialize(){
  const copy=scope.cloneNode(true),fields=values();
  copy.querySelectorAll('input[data-field],select[data-field]').forEach(el=>setFieldValue(el,fields[el.dataset.field]));
@@ -7488,13 +7556,13 @@ function serialize(){
 scope.querySelectorAll('.datum-input').forEach(field=>setFieldValue(field,field.value));
 scope.querySelectorAll('.photo[data-image]').forEach(photo=>{setPhotoZoom(photo,photo.dataset.zoom??100);setVariant(photo,photo.dataset.variant==='no-ipw');});
 window.addEventListener('scroll',event=>{if(!event.target.closest?.('.datum-suggestions'))DatumEditor.close();},true);
-return{id:scope.dataset.setupId,state,restore:restoreState,serialize,prepare,fitFields,paginate,waitImages:()=>Promise.all([...scope.querySelectorAll('.photo-stage img[src],.project-isometry img[src]')].map(img=>img.decode?img.decode():Promise.resolve())),beforePrint:()=>{paginate();fitFields();positionMcsAnchors();},flow:CardFlow,gallery:GalleryLayout};
+return{id:scope.dataset.setupId,state,restore:restoreState,serialize,prepare,cancel,fitFields,paginate,waitImages:()=>Promise.all([...scope.querySelectorAll('.photo-stage img[src],.project-isometry img[src]')].map(img=>img.decode?img.decode():Promise.resolve())),beforePrint:()=>{paginate();fitFields();positionMcsAnchors();},flow:CardFlow,gallery:GalleryLayout};
 
 }
 
 document.querySelectorAll('.setup-document').forEach(scope=>editors.push(createSetupEditor(scope)));
 try{const draft=JSON.parse(localStorage.getItem(draftKey)||'null');if(draft?.setups){if(draft.options)ColumnOptions.set(draft.options);if(draft.projectImageScale!=null)ProjectImage.set(draft.projectImageScale);if(draft.projectModel)ProjectModel.restore(draft.projectModel);editors.forEach(e=>e.restore(draft.setups[e.id]));changed=true;editRevision++;}}catch(e){}
-placeProjectTools();ProjectModel.queue();
+placeProjectTools();ProjectModel.queue();CardHistory=createCardHistory();
 document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&(event.key.toLowerCase()==='s'||event.code==='KeyS')){event.preventDefault();saveCard();}else if((event.ctrlKey||event.metaKey)&&(event.key.toLowerCase()==='p'||event.code==='KeyP')){event.preventDefault();printCard();}});
 document.getElementById('save').addEventListener('click',saveCard);document.getElementById('print').addEventListener('click',printCard);document.getElementById('save-copy').addEventListener('click',downloadCopy);
 window.addEventListener('beforeprint',()=>{editors.forEach(e=>e.beforePrint());renumber();ProjectModel.prepare();});
@@ -7514,7 +7582,7 @@ document.getElementById('setup-jump').addEventListener('change',event=>{
  const rect=scope.getBoundingClientRect(),cover=scope.querySelector('.setup-pages>.cover-page');
  window.scrollTo({left:window.scrollX+(cover||scope).getBoundingClientRect().left-18,top:window.scrollY+rect.top-projectBar.getBoundingClientRect().height,behavior:'smooth'});
 });
-(document.fonts?document.fonts.ready:Promise.resolve()).then(()=>{paginate();editors.forEach(e=>e.fitFields());queueLocalSave();});
+(document.fonts?document.fonts.ready:Promise.resolve()).then(()=>{paginate();editors.forEach(e=>e.fitFields());CardHistory.refresh();queueLocalSave();});
 </script></body></html>
 """
 
