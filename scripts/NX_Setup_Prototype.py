@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.40
+# SCRIPT_VERSION: V2.41
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -86,7 +86,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.40"
+SCRIPT_VERSION = "V2.41"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -5054,15 +5054,13 @@ table[data-fit-family="cover-tools"] .cell-text{height:calc(var(--cover-row,3.8m
 .catalog-heading{display:flex;align-items:center;justify-content:space-between;gap:3mm}
 .catalog-heading .catalog-title{min-width:0}
 .project-tool-plane{position:relative;overflow:hidden}
-.rows-area,.cover-operations,.catalog-scroll,.tool-table-scroll{overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:#8aa7ad #eff4f5}
-.rows-area::-webkit-scrollbar,.catalog-scroll::-webkit-scrollbar,.tool-table-scroll::-webkit-scrollbar{height:10px}
-.rows-area::-webkit-scrollbar-thumb,.catalog-scroll::-webkit-scrollbar-thumb,.tool-table-scroll::-webkit-scrollbar-thumb{background:#8aa7ad;border-radius:5px}
+.rows-area,.cover-operations,.catalog-scroll,.tool-table-scroll{overflow:hidden}
 .catalog-scroll{flex:none;min-width:0;width:100%}
 .tool-table-plane{position:relative;overflow:hidden}
 @media print{
  
  .rows-area,.cover-operations,.catalog-scroll,.tool-table-scroll{overflow:visible!important;scrollbar-width:none}
- table[data-fit-family]:not(.column-probe){width:var(--print-table-width,100%)!important}
+ table[data-fit-family]:not(.column-probe){width:var(--print-source-width,100%)!important}
  .ops[data-fit-family]:not(.column-probe){width:var(--print-source-width,100%)!important;zoom:var(--print-table-scale,1)}
  .tool-table-plane{width:100%!important}
 }
@@ -5325,7 +5323,7 @@ function migrateOperationTables(root){
     text.textContent=value;text.title=value;cell.title=value;
    }
   }
-  table.dataset.opsSchema='3';ColumnOptions.apply(table);
+  table.dataset.opsSchema='3';table.dataset.flexCols='3';ColumnOptions.apply(table);
  });
  root.querySelectorAll('template').forEach(t=>migrateOperationTables(t.content));
 }
@@ -6086,21 +6084,24 @@ function tableViewport(table){
 }
 function applyColumnLayout(family,metrics,widths){
  const font=metrics.base,visible=widths.map((w,i)=>metrics.shown[i]?w:0),total=visible.reduce((a,b)=>a+b,0);metrics.widths=widths.slice();metrics.font=font;
+ const fit=Math.min(1,metrics.target/Math.max(1,total));metrics.widthScale=fit;
+ metrics.layoutScale=(metrics.renderScale||1)*fit;
  const apply=table=>{
   const viewport=tableViewport(table);if(!viewport)return;
-  table.style.width=total+'px';table.style.setProperty('--print-table-width',Math.min(total,metrics.target)+'px');
-  // Fit a wide operations table proportionally on paper, without squeezing
-  // its name column into one-character lines at large text scales.
-  if(family==='operations'){table.style.setProperty('--print-source-width',total+'px');table.style.setProperty('--print-table-scale',Math.min(1,metrics.target/Math.max(1,total)));}
+  table.style.width=total+'px';table.style.setProperty('--print-source-width',total+'px');
+  // At extreme font scales or manual widths fit the entire table, keeping
+  // complete values and the same layout on screen and on paper.
+  if(family==='operations'){table.style.zoom=String(fit);table.style.setProperty('--print-table-scale',fit);}
   table.style.fontSize=font+'pt';table.dataset.widthMode=columnWidths[family]?'manual':'auto';
   [...table.querySelectorAll('colgroup>col')].forEach((col,i)=>{col.style.width=(total?visible[i]/total*100:0)+'%';});
   if(family==='cover-tools'||family==='project-tools'){
-   const plane=viewport.querySelector(family==='cover-tools'?'.tool-table-plane':'.project-tool-plane'),scale=metrics.renderScale||1;
+   const plane=viewport.querySelector(family==='cover-tools'?'.tool-table-plane':'.project-tool-plane'),scale=metrics.layoutScale;
+   table.style.transform='scale('+scale+')';
    plane.style.width=total*scale+'px';plane.style.height=(table.offsetHeight*scale+1)+'px';
   }
   ensureColumnHandles(table);restoreCellText(table);alignNumericText(table);
   table.querySelectorAll('.column-grip').forEach(grip=>{
-   const index=Number(grip.dataset.column),unit=25.4/96*(metrics.renderScale||1),mm=widths[index]*unit;
+   const index=Number(grip.dataset.column),unit=25.4/96*metrics.layoutScale,mm=widths[index]*unit;
    grip.setAttribute('aria-valuenow',mm.toFixed(1));grip.setAttribute('aria-valuemin',(metrics.floor[index]*unit).toFixed(1));
    grip.setAttribute('aria-valuemax',(4000*unit).toFixed(1));
    grip.setAttribute('aria-valuetext',mm.toFixed(1)+' мм');
@@ -6123,7 +6124,7 @@ function moveColumnBoundary(table,index,initial,delta){
 }
 function showColumnSize(table,index){
  const metrics=columnMetrics.get(table);if(!metrics)return;
- local('column-size-status').textContent=columnLabel(table,index)+': '+(metrics.widths[index]*25.4/96*(metrics.renderScale||1)).toFixed(1)+' мм';
+ local('column-size-status').textContent=columnLabel(table,index)+': '+(metrics.widths[index]*25.4/96*(metrics.layoutScale||1)).toFixed(1)+' мм';
 }
 function finishColumnDrag(cancel=false){
  const drag=columnDrag;if(!drag)return;
@@ -6146,7 +6147,7 @@ scope.addEventListener('pointerdown',event=>{
  fitDataTables();const metrics=columnMetrics.get(table),rect=table.getBoundingClientRect();if(!metrics||!(rect.width>0))return;
  event.preventDefault();grip.focus({preventScroll:true});
  const viewport=tableViewport(table);
- columnDrag={grip,table,family,viewport,index:Number(grip.dataset.column),pointerId:event.pointerId,start:event.clientX,scroll:viewport?.scrollLeft||0,screenScale:screenPaperScale(table),scale:1/(metrics.renderScale||1),initial:metrics.widths.slice(),previous:columnWidths[family]?JSON.parse(JSON.stringify(columnWidths[family])):null,moved:false};
+ columnDrag={grip,table,family,viewport,index:Number(grip.dataset.column),pointerId:event.pointerId,start:event.clientX,scroll:viewport?.scrollLeft||0,screenScale:screenPaperScale(table),scale:1/(metrics.layoutScale||1),initial:metrics.widths.slice(),previous:columnWidths[family]?JSON.parse(JSON.stringify(columnWidths[family])):null,moved:false};
  scope.classList.add('columns-dragging');grip.classList.add('dragging');
  try{grip.setPointerCapture(event.pointerId);}catch(e){}
  showColumnSize(table,columnDrag.index);
@@ -6167,22 +6168,45 @@ scope.addEventListener('keydown',event=>{
  event.preventDefault();finishColumnDrag();
  const table=grip.closest('table'),family=table.dataset.fitFamily,index=Number(grip.dataset.column);
  if(!columnMetrics.has(table))fitDataTables();const metrics=columnMetrics.get(table);if(!metrics)return;
- const delta=(event.key==='ArrowRight'?1:-1)*(event.shiftKey?5:1)*96/25.4/(metrics.renderScale||1);
+ const delta=(event.key==='ArrowRight'?1:-1)*(event.shiftKey?5:1)*96/25.4/(metrics.layoutScale||1);
  if(moveColumnBoundary(table,index,metrics.widths,delta)){CardFlow.reflow();markChanged();showColumnSize(table,index);}
 });
 local('columns-auto').addEventListener('click',()=>resetColumnWidths());
 
 function autoColumnWidths(natural,floor,flex,target){
  const widths=natural.map((n,i)=>Math.max(n,floor[i]));
- let excess=Math.max(0,widths.reduce((a,b)=>a+b,0)-target);
- for(const indices of [flex,widths.map((_,i)=>i).filter(i=>!flex.includes(i))]){
-  const room=indices.reduce((s,i)=>s+widths[i]-floor[i],0),take=Math.min(excess,room);
-  if(take>0&&room>0){indices.forEach(i=>{widths[i]-=take*(widths[i]-floor[i])/room;});excess-=take;}
- }
+ // All other columns keep their measured content width. Only a tool name
+ // receives the remainder and may use ellipsis; never squeeze numeric data.
+ flex.forEach(i=>widths[i]=floor[i]);
  const slack=Math.max(0,target-widths.reduce((a,b)=>a+b,0)),recipients=flex.length?flex:widths.map((_,i)=>i).filter(i=>floor[i]>0||natural[i]>0);
- const weight=recipients.reduce((s,i)=>s+widths[i],0);
- if(weight>0)recipients.forEach(i=>{widths[i]+=slack*widths[i]/weight;});
+ const weight=recipients.reduce((s,i)=>s+Math.max(natural[i],floor[i]),0);
+ if(weight>0)recipients.forEach(i=>{widths[i]+=slack*Math.max(natural[i],floor[i])/weight;});
  return widths;
+}
+
+function fitAutoColumns(family,metrics,flex,hiddenWidths){
+ const natural=metrics.natural.slice(),range=document.createRange();
+ for(let pass=0;pass<4;pass++){
+  const widths=autoColumnWidths(natural,metrics.floor,flex,metrics.target).map((n,i)=>metrics.shown[i]?n:Math.max(1,hiddenWidths[i]));
+  applyColumnLayout(family,metrics,widths);
+  if(pass===3)break;
+  // At very small screen zooms the browser still paints a border at least
+  // one pixel wide. Measure the final cells as well as the unscaled probe.
+  const extra=natural.map(()=>0);
+  for(const table of metrics.tables){
+   if(table.hidden)continue;
+   const scale=screenPaperScale(table)*metrics.layoutScale;
+   for(const node of table.querySelectorAll('th .cell-text,td .cell-text')){
+    const cell=node.closest('th,td'),i=cell.cellIndex;if(!metrics.shown[i]||flex.includes(i)||!node.textContent)continue;
+    const bounds=node.getBoundingClientRect();if(!(bounds.width>0))continue;
+    range.selectNodeContents(node);
+    const overflow=Math.max(node.scrollWidth-node.clientWidth,(range.getBoundingClientRect().width-bounds.width)/scale);
+    if(overflow>.01)extra[i]=Math.max(extra[i],overflow+1/scale);
+   }
+  }
+  if(!extra.some(n=>n>0))break;
+  extra.forEach((n,i)=>natural[i]+=n);
+ }
 }
 
 const PageScale=(()=>{
@@ -6331,9 +6355,9 @@ function fitDataTables(only=null){
   const scale=family==='cover-tools'?Number(first.dataset.coverScale)||1:PageScale.factor(first);
   const base=Number(first.dataset.basePt)*scale,allFloor=first.dataset.minMm.split(',').map(x=>Number(x)*96/25.4*scale);
   const shown=allFloor.map((_,i)=>family!=='operations'||ColumnOptions.shown(OP_COLUMNS[i][0]));
-  const floor=allFloor.map((x,i)=>shown[i]?x:0),flex=first.dataset.flexCols.split(',').map(Number).filter(i=>shown[i]);
+  const floor=allFloor.map((x,i)=>shown[i]?x:0),flex=(family==='operations'?[3]:first.dataset.flexCols.split(',').map(Number)).filter(i=>shown[i]);
   const holder=document.createElement('div');holder.style.cssText='position:absolute;left:-30000px;top:0;visibility:hidden;width:max-content;pointer-events:none;';holder.style.setProperty('--data-scale',scale);
-  const probe=first.cloneNode(false);probe.classList.add('column-probe');probe.classList.remove('wrap-operation-names');probe.style.width='max-content';probe.style.tableLayout='auto';probe.style.fontSize=base+'pt';for(const property of ['transform','transform-origin','position','left','top'])probe.style.removeProperty(property);
+  const probe=first.cloneNode(false);probe.classList.add('column-probe');probe.classList.remove('wrap-operation-names');probe.style.width='max-content';probe.style.tableLayout='auto';probe.style.fontSize=base+'pt';for(const property of ['transform','transform-origin','position','left','top','zoom'])probe.style.removeProperty(property);
   probe.append(first.tHead.cloneNode(true));const body=document.createElement('tbody');probe.append(body);
   const sample=family==='operations'?[...local('operation-source').content.querySelectorAll('tbody>tr')]:tables.flatMap(t=>[...t.tBodies[0].rows]);
   sample.forEach(row=>{const clone=row.cloneNode(true);restoreCellText(clone);body.append(clone);if(family==='operations'&&row.dataset.kind==='group'&&!row.dataset.repeat)body.append(repeatGroup(clone));});
@@ -6346,15 +6370,12 @@ function fitDataTables(only=null){
    const word=Math.max(...OP_COLUMNS[i][1].split(' ').map(w=>ellipsisContext.measureText(w).width));
    floor[i]=Math.max(floor[i],word+(parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0)+3);
   });
-  const natural=headerCells.map((cell,i)=>shown[i]?cell.getBoundingClientRect().width+.35:0);holder.remove();
+  const natural=headerCells.map((cell,i)=>shown[i]?cell.getBoundingClientRect().width+2:0);holder.remove();
   if(natural.some((x,i)=>shown[i]&&!(x>.35)))continue;
   const metrics={target,base,natural,floor,renderScale,tables,shown};tables.forEach(t=>columnMetrics.set(t,metrics));
   const manual=columnWidths[family]&&safeManualWidths(metrics,columnWidths[family]);
   if(manual){applyColumnLayout(family,metrics,manual);continue;}
-  const autoFloor=floor.slice();if(family==='operations'&&shown[3])autoFloor[3]=Math.max(autoFloor[3],natural[3]+1);
-  const shrink=family==='operations'?(shown[0]?[0]:flex):flex;
-  const widths=autoColumnWidths(natural,autoFloor,shrink,target).map((n,i)=>shown[i]?n:Math.max(1,allFloor[i]));
-  applyColumnLayout(family,metrics,widths);
+  fitAutoColumns(family,metrics,flex,allFloor);
  }
 }
 
@@ -6362,7 +6383,9 @@ function fitDataTables(only=null){
 // in the HTML, tooltips and source table; browser text-overflow cannot shift them.
 const ellipsisCanvas=document.createElement('canvas'),ellipsisContext=ellipsisCanvas.getContext('2d');
 function alignNumericText(table){
- if(!ellipsisContext)return;
+ // Auto width already reserves the complete rendered text. Canvas rounding
+ // must not replace a value that actually fits with an artificial ellipsis.
+ if(!ellipsisContext||table.dataset.widthMode==='auto')return;
  table.querySelectorAll('td.numeric:not([hidden]) .cell-text').forEach(node=>{
   if(node.querySelector('svg'))return;
   const full=node.textContent;if(!full)return;
@@ -7142,11 +7165,14 @@ const CardFlow=(()=>{
  }
  function metrics(rows=master,key='cover'){
   const p=measurePage(template.content.firstElementChild.cloneNode(true),key),table=p.querySelector('.ops'),tbody=table.tBodies[0];
+  // Measure with the same screen zoom: subpixel table borders otherwise round
+  // differently on the hidden page and can push its last row below the sheet.
+  const screen=window.matchMedia('print').matches?1:paperScreenScale;p.style.zoom=String(screen);
   const repeated=rows.map(r=>r.dataset.kind==='group'?repeatGroup(r):r.cloneNode(true));
   tbody.replaceChildren(...rows.map(r=>r.cloneNode(true)),...repeated.map(r=>r.cloneNode(true)));decorate(p);ColumnOptions.apply(table);fitDataTables([table]);
-  const minimum=3.8*PageScale.factor(key)*mm,heights=[...tbody.rows].map(r=>Math.max(minimum,r.getBoundingClientRect().height));
+  const minimum=3.8*PageScale.factor(key)*mm*(columnMetrics.get(table)?.widthScale||1),heights=[...tbody.rows].map(r=>Math.max(minimum,r.getBoundingClientRect().height/screen));
   const head=table.tHead.getBoundingClientRect(),end=p.querySelector('.rows-area').getBoundingClientRect();
-  const header=head.height||minimum,budget=end.bottom-head.bottom-14;
+  const header=head.height/screen||minimum,budget=(end.bottom-head.bottom)/screen-14;
   p.remove();return{heights:heights.slice(0,rows.length),repeatHeights:heights.slice(rows.length),header,budget:Math.max(minimum,budget),rows};
  }
  function coverHeight(ids,m){
@@ -7527,26 +7553,23 @@ def text_width_em(value, bold=False):
 
 
 def fitted_columns(samples, width_mm, base_pt, minima, flexible):
-    """Fit column widths, never the font. Long values are clipped by CSS."""
+    """Reserve complete values first; the tool name receives the remaining width."""
     needed = [max([minimum] + [em * base_pt * 25.4 / 72 + extra for em, extra in column])
               for column, minimum in zip(samples, minima)]
-    if width_mm <= 0 or sum(minima) > width_mm:
-        raise ValueError('Недостаточная ширина таблицы для минимальных столбцов.')
-    excess = max(0., sum(needed) - width_mm)
-    # Keep ordinary numeric columns readable where possible; shorten names first.
-    for indices in (flexible, [i for i in range(len(needed)) if i not in flexible]):
-        room = sum(needed[i] - minima[i] for i in indices)
-        take = min(excess, room)
-        if take > 0 and room > 0:
-            for i in indices:
-                needed[i] -= take * (needed[i] - minima[i]) / room
-            excess -= take
+    if width_mm <= 0:
+        raise ValueError('Недостаточная ширина таблицы.')
+    natural = needed[:]
+    for i in flexible:
+        needed[i] = minima[i]
     slack = max(0., width_mm - sum(needed))
     recipients = flexible or list(range(len(needed)))
-    weight = sum(needed[i] for i in recipients)
+    weight = sum(natural[i] for i in recipients)
     for i in recipients:
-        needed[i] += slack * needed[i] / weight
-    return base_pt, needed
+        needed[i] += slack * natural[i] / weight
+    # Initial static HTML also stays inside the sheet. JavaScript refines this
+    # using the actual font and scales the whole table only when necessary.
+    fit = min(1.0, width_mm / sum(needed))
+    return base_pt * fit, [value * fit for value in needed]
 
 
 def clipped_cell(content, full_text, indent_mm=None):
@@ -7582,8 +7605,8 @@ def operation_layout(report):
                     value = str(value) + ' · продолжение'
             samples[i].append((text_width_em(value, row['kind'] == 'group' or i == 3 or (i == 0 and bool(re.search(r'(?<![^\W_])R0(?![^\W_]|[.,][0-9])', str(value), re.IGNORECASE)))), extra))
     minima = (8, 5, 4, 8, 4, 7, 7, 7, 7, 7, 7)
-    font, widths = fitted_columns(samples, 193.4, 7, minima, (0, 3))
-    attrs, cols = layout_attributes('operations', font, widths, 7, minima, (0, 3))
+    font, widths = fitted_columns(samples, 193.4, 7, minima, (3,))
+    attrs, cols = layout_attributes('operations', font, widths, 7, minima, (3,))
     for key in OP_KEYS:
         cols = cols.replace('<col style=', '<col data-column-id="%s" style=' % key, 1)
     return attrs + ' data-ops-schema="3"', cols
