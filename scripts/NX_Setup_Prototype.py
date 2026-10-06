@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.38
+# SCRIPT_VERSION: V2.39
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -46,7 +46,8 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 Порядок и сквозная нумерация сохраняются при сохранении и повторном экспорте.
 Результат — один автономный HTML для редактирования и печати.
 Карта открывается через встроенный локальный помощник и сохраняет правки автоматически.
-Помощник работает в памяти, пока открыт NX; отдельной установки и служебных файлов нет.
+Помощник запускается отдельным процессом доступного Python, без NXOpen и служебных файлов.
+До открытия браузера проверяется его ответ; при недоступности открывается обычный HTML.
 При открытии HTML напрямую остаётся прежнее сохранение средствами браузера.
 Во время создания карты отображаются текущий этап и полоса прогресса 0–100%.
 При повторном экспорте готовый HTML заменяет предыдущий файл без копий.
@@ -57,19 +58,25 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 import base64
 import builtins
 import configparser
+from contextlib import contextmanager
 import copy
 import datetime
 import hashlib
 import html
+import http.client
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+import ntpath
 import os
 import shutil
 from pathlib import Path
+import queue
 import re
 import struct
+import subprocess
+import sys
 import time
 import tempfile
 import threading
@@ -77,7 +84,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.38"
+SCRIPT_VERSION = "V2.39"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -91,14 +98,117 @@ DIAGNOSTIC_CALLBACK = None
 EXPORT_PROGRESS = None
 
 
+def display_file_name(path):
+    """Keep Win32 namespace prefixes out of UI, clipboard and shell paths."""
+    value = os.fspath(path)
+    if value[:8].upper() == '\\\\?\\UNC\\':
+        return '\\\\' + value[8:]
+    if value.startswith('\\\\?\\') and re.match(r'[A-Za-z]:\\', value[4:]):
+        return value[4:]
+    return value
+
+
+def windows_io_name(path):
+    """An absolute DOS/UNC path in the extended Unicode namespace; no OS changes."""
+    value = ntpath.normpath(display_file_name(path))
+    drive, tail = ntpath.splitdrive(value)
+    if value.startswith(('\\\\.\\', '\\\\?\\')):
+        raise ValueError('Путь к устройству Windows не является путём к файлу проекта.')
+    share = drive[2:].split('\\') if drive.startswith('\\\\') else []
+    if len(share) == 2 and all(share):
+        result = '\\\\?\\UNC\\' + value[2:]
+    elif re.fullmatch(r'[A-Za-z]:', drive) and tail.startswith('\\'):
+        result = '\\\\?\\' + value
+    else:
+        raise ValueError('Требуется абсолютный путь к файлу проекта или UNC-путь.')
+    if len(result.encode('utf-16-le')) // 2 >= 32760:
+        raise ValueError('Путь превышает предел расширенного пути Windows.')
+    return result
+
+
+def io_path(path):
+    if os.name != 'nt':
+        return Path(path)
+    return Path(windows_io_name(os.path.abspath(display_file_name(path))))
+
+
+def windows_short_name(path):
+    """Read existing 8.3 aliases only; never enable them or create a mapping."""
+    if os.name != 'nt':
+        return display_file_name(path)
+    import ctypes
+    from ctypes import wintypes
+    function = ctypes.WinDLL('kernel32', use_last_error=True).GetShortPathNameW
+    function.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    function.restype = wintypes.DWORD
+    source = str(io_path(path))
+    size = function(source, None, 0)
+    if not size:
+        raise ctypes.WinError(ctypes.get_last_error())
+    for attempt in range(2):
+        buffer = ctypes.create_unicode_buffer(size)
+        length = function(source, buffer, size)
+        if not length:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if length < size:
+            return display_file_name(buffer.value)
+        size = length + 1
+    raise OSError('Не удалось получить короткий путь Windows.')
+
+
+def nx_image_file_name(path):
+    """NX receives an ordinary short path, never an unverified namespace form."""
+    path = io_path(path)
+    value = display_file_name(path)
+    if os.name != 'nt' or len(value.encode('utf-16-le')) // 2 < 260:
+        return value
+    try:
+        value = ntpath.join(windows_short_name(path.parent), path.name)
+    except OSError:
+        pass
+    if len(value.encode('utf-16-le')) // 2 >= 260:
+        raise RuntimeError('Папка самого проекта слишком глубоко вложена для безопасного экспорта '
+                           'изображений NX; короткий путь Windows недоступен.\n'
+                           'Сохраните проект средствами NX в папке с более коротким путём и повторите запуск.\n'
+                           'Имена проекта и готовой карты скрипт не меняет.\n' + display_file_name(path))
+    return value
+
+
 def local_card_runtime():
-    """Survive Journal / Play repeats without files, processes or NX callbacks."""
+    """Keep one helper across Journal / Play repeats, without files or NX callbacks."""
     key = '_nx_setup_card_local_runtime_v1'
     runtime = getattr(builtins, key, None)
     if runtime is None:
         runtime = {'lock': threading.RLock(), 'helper': None}
         setattr(builtins, key, runtime)
     return runtime
+
+
+@contextmanager
+def local_card_guard():
+    """Share export/read exclusion with the independent helper, without a lock file."""
+    runtime = local_card_runtime()
+    with runtime['lock']:
+        helper = runtime['helper']
+        remote = getattr(helper, 'external_protocol', None) == 1
+        if remote and helper.process.poll() is not None:
+            runtime['helper'] = helper = None
+            remote = False
+        try:
+            if remote:
+                helper.request('lock')
+            yield
+        finally:
+            if remote:
+                # Also enqueue unlock after a timeout: a late lock reply must
+                # not leave the helper permanently blocked.
+                try:
+                    helper.request('unlock')
+                except Exception:
+                    if helper.process.poll() is None:
+                        raise
+                    # A terminated process cannot race with the published file.
+                    runtime['helper'] = None
 
 
 def local_card_identity(source):
@@ -133,7 +243,7 @@ def replace_local_card_contents(path, payload, previous):
     The caller holds the shared export/save lock. Unlike the export's existing
     staging/replace operation, this in-place write is not power-failure atomic.
     """
-    with path.open('r+b') as stream:
+    with io_path(path).open('r+b') as stream:
         try:
             if stream.write(payload) != len(payload):
                 raise OSError('Неполная запись HTML.')
@@ -237,7 +347,7 @@ class LocalCardRequest(BaseHTTPRequestHandler):
             return
         try:
             with self.server.helper.lock:
-                source = entry['path'].read_text(encoding='utf-8-sig')
+                source = io_path(entry['path']).read_text(encoding='utf-8-sig')
             if local_card_identity(source)[0] != entry['id']:
                 self.send_error(409)
                 return
@@ -289,7 +399,10 @@ class LocalCardRequest(BaseHTTPRequestHandler):
                 self.send_error(422)
                 return
             with self.server.helper.lock:
-                current = entry['path'].read_bytes()
+                if not entry.get('active', True):
+                    self.send_error(409)
+                    return
+                current = io_path(entry['path']).read_bytes()
                 ident, revision = local_card_identity(current.decode('utf-8-sig'))
                 # Retrying the same bytes after a lost response is safe. Never
                 # retry an old snapshot over a different, newer export/save.
@@ -323,12 +436,12 @@ class LocalCardHelper:
             raise
 
     def register(self, path):
-        path = path.resolve(strict=True)
+        path = io_path(io_path(path).resolve(strict=True))
         if path.suffix.lower() not in ('.html', '.htm') or not path.is_file():
             raise ValueError('Не найден готовый HTML карты.')
         with self.lock:
             ident, _ = local_card_identity(path.read_text(encoding='utf-8-sig'))
-            key = os.path.normcase(str(path))
+            key = os.path.normcase(display_file_name(path))
             entry = self.paths.get(key)
             if entry is None or entry['id'] != ident:
                 if entry is not None:
@@ -340,12 +453,186 @@ class LocalCardHelper:
             return self.origin + entry['route']
 
 
+def helper_python_candidates():
+    """Use an existing runtime only; never install Python or launch ugraf.exe."""
+    candidates, folders = [], []
+    if re.fullmatch(r'python(?:[0-9.]+)?(?:\.exe)?', Path(sys.executable).name, re.I):
+        candidates.append(Path(sys.executable))
+    for value in (sys.prefix, sys.base_prefix, os.environ.get('UGII_PYTHON_LIBRARY_DIR')):
+        if value:
+            folders.append(Path(value.strip('"')))
+    module_file = getattr(os, '__file__', '')
+    if module_file:
+        folders.append(Path(module_file).parent.parent)
+    for variable in ('UGII_BASE_DIR', 'UGII_ROOT_DIR'):
+        value = os.environ.get(variable)
+        if value:
+            base = Path(value.strip('"'))
+            folders.extend((base, base / 'python', base / 'nxbin' / 'python', base / 'UGII' / 'python'))
+    for folder in folders:
+        candidates.extend(folder / name for name in ('python.exe', 'python3.exe'))
+    seen = set()
+    for path in candidates:
+        key = os.path.normcase(os.path.abspath(path))
+        if key not in seen:
+            seen.add(key)
+            try:
+                if io_path(path).is_file():
+                    yield path
+            except OSError:
+                continue
+
+
+class RemoteCardHelper:
+    """Control the file-only server through private pipes, not NX Python threads."""
+    # Journal replay creates new Python classes; isinstance is not stable then.
+    external_protocol = 1
+
+    def __init__(self, executable):
+        self.serial, self.responses = 0, queue.Queue()
+        self.control_lock = threading.RLock()
+        self.process = subprocess.Popen(
+            [str(executable), '-I', '-S', '-B', str(io_path(__file__)), '--nx-card-helper'],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            encoding='utf-8', bufsize=1, close_fds=True,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+
+        def receive():
+            try:
+                for line in self.process.stdout:
+                    self.responses.put(json.loads(line))
+            except Exception:
+                pass
+            finally:
+                self.responses.put({'error': 'Локальный помощник завершил работу.'})
+        self.reader = threading.Thread(target=receive, name='NX card helper replies', daemon=True)
+        try:
+            self.reader.start()
+            hello = self.responses.get(timeout=5)
+            if hello.get('ready') != SCRIPT_VERSION:
+                raise RuntimeError('Не запустился совместимый Python-помощник.')
+        except Exception:
+            self.process.stdin.close()  # No cards registered: startup can be stopped safely.
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=2)
+            if self.reader.ident is not None:
+                self.reader.join(timeout=2)
+            self.process.stdout.close()
+            raise
+
+    def request(self, action, **data):
+        with self.control_lock:
+            if self.process.poll() is not None:
+                raise RuntimeError('Локальный помощник завершил работу.')
+            self.serial += 1
+            ident = self.serial
+            self.process.stdin.write(json.dumps(dict(data, action=action, request=ident)) + '\n')
+            self.process.stdin.flush()
+            deadline = time.monotonic() + 15
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise RuntimeError('Локальный помощник не ответил вовремя.')
+                try:
+                    reply = self.responses.get(timeout=left)
+                except queue.Empty:
+                    raise RuntimeError('Локальный помощник не ответил вовремя.')
+                if reply.get('error') and 'request' not in reply:
+                    raise RuntimeError(reply['error'])
+                if reply.get('request') != ident:
+                    continue
+                if reply.get('error'):
+                    raise RuntimeError(reply['error'])
+                return reply
+
+    def register(self, path):
+        url = self.request('register', path=display_file_name(io_path(path)))['url']
+        match = re.fullmatch(r'http://(127\.0\.0\.1:[0-9]+)/card/[a-f0-9]{32}/', url)
+        if not match:
+            raise RuntimeError('Помощник вернул неверный адрес карты.')
+        # A real HTTP response, not just a listening socket or a running thread.
+        connection = http.client.HTTPConnection(match[1], timeout=8)
+        try:
+            connection.request('HEAD', url.split(match[1], 1)[1])
+            response = connection.getresponse()
+            if response.status != 200 or not response.getheader('Content-Type', '').startswith('text/html'):
+                raise RuntimeError('Локальный помощник не подтвердил готовность HTML.')
+        finally:
+            connection.close()
+        return url
+
+
+def local_card_worker():
+    """Standalone stdlib mode. EOF on the parent's pipe ends the helper safely."""
+    helper = LocalCardHelper(threading.RLock())
+    held = 0
+    print(json.dumps({'ready': SCRIPT_VERSION}), flush=True)
+    try:
+        for line in sys.stdin:
+            command = json.loads(line)
+            reply = {'request': command.get('request')}
+            try:
+                action = command.get('action')
+                if action == 'register':
+                    reply['url'] = helper.register(Path(command['path']))
+                elif action == 'lock':
+                    helper.lock.acquire()
+                    held += 1
+                elif action == 'unlock':
+                    if held:
+                        helper.lock.release()
+                        held -= 1
+                else:
+                    raise ValueError('Неизвестная команда помощника.')
+            except Exception as exc:
+                reply['error'] = str(exc)
+            print(json.dumps(reply), flush=True)
+    finally:
+        while held:
+            helper.lock.release()
+            held -= 1
+        with helper.lock:
+            # Drain any in-progress disk write; pending requests cannot start
+            # another write once the NX process closes its control pipe.
+            for entry in helper.entries.values():
+                entry['active'] = False
+        helper.server.shutdown()
+        helper.server.server_close()
+
+
 def local_card_url(path):
     runtime = local_card_runtime()
     with runtime['lock']:
         helper = runtime['helper']
-        if helper is None or not helper.thread.is_alive():
-            helper = runtime['helper'] = LocalCardHelper(runtime['lock'])
+        if helper is not None and getattr(helper, 'external_protocol', None) != 1:
+            # Retire an in-process helper left by V2.38. Revoke entries under
+            # its shared lock so a pending old request cannot overwrite a file.
+            for entry in helper.entries.values():
+                entry['id'] = uuid.uuid4().hex
+            helper.server.shutdown()
+            helper.server.server_close()
+            runtime['helper'] = helper = None
+        if helper is not None and helper.process.poll() is not None:
+            runtime['helper'] = helper = None
+        if helper is None:
+            failures = []
+            deadline = time.monotonic() + 15
+            for executable in helper_python_candidates():
+                if time.monotonic() >= deadline:
+                    break
+                try:
+                    helper = RemoteCardHelper(executable)
+                    break
+                except Exception as exc:
+                    failures.append(str(exc))
+            if helper is None:
+                raise RuntimeError('Не найден доступный отдельный Python для автосохранения. '
+                                   'NX и браузер не будут ожидать зависший сервер.' +
+                                   ('\n' + failures[-1] if failures else ''))
+            runtime['helper'] = helper
         return helper.register(path)
 
 
@@ -598,8 +885,8 @@ def read_card_settings(settings_path=None):
     info = {'source': 'default'}
     result = {'author': DEFAULT_PROGRAMMER, 'author_settings': info}
     try:
-        path = Path(settings_path) if settings_path is not None else Path(__file__).resolve().with_name(SETTINGS_FILENAME)
-        info['file'] = str(path)
+        path = io_path(settings_path) if settings_path is not None else io_path(__file__).resolve().with_name(SETTINGS_FILENAME)
+        info['file'] = display_file_name(path)
         raw = path.read_bytes()
         if raw.startswith((b'\xff\xfe', b'\xfe\xff')):
             text = raw.decode('utf-16')
@@ -3099,6 +3386,8 @@ def png_size(path):
 
 
 def export_png(nx, part, path):
+    path = io_path(path)
+    filename = nx_image_file_name(path)
     progress = EXPORT_PROGRESS
     if progress is not None:
         progress.hide_for_capture(True)
@@ -3106,7 +3395,7 @@ def export_png(nx, part, path):
         builder = part.Views.CreateImageExportBuilder()
         try:
             builder.FileFormat = nx.Gateway.ImageExportBuilder.FileFormats.Png
-            builder.FileName = str(path)
+            builder.FileName = filename
             builder.RegionMode = False
             builder.BackgroundOption = nx.Gateway.ImageExportBuilder.BackgroundOptions.CustomColor
             builder.SetCustomBackgroundColor([1.0, 1.0, 1.0])
@@ -4102,9 +4391,10 @@ def project_file_from_part(part):
     if not raw_path or not path.is_absolute() or path.suffix.lower() != ".prt":
         raise RuntimeError("Сначала сохрани текущий CAM-проект в файл .prt "
                            "и повтори запуск журнала.")
+    path = io_path(path)
     if not path.is_file():
         raise RuntimeError("Файл проекта не найден или недоступен:\n%s\n"
-                           "Сохрани проект и проверь доступ к его папке." % path)
+                           "Сохрани проект и проверь доступ к его папке." % display_file_name(path))
     return path
 
 
@@ -4343,10 +4633,25 @@ def ask_warning(nx, question, details=''):
 
 
 def make_output_folder(project_folder, project_name, setup_name=None):
-    """Stage one project document; final cards never have setup subfolders."""
-    project = Path(project_folder) / 'Карты Наладки' / safe_file_component(project_name, True)
+    """Reuse one short staging folder beside the PRT, on the target volume."""
+    project_folder = io_path(project_folder)
+    project = project_folder / 'Карты Наладки' / safe_file_component(project_name, True)
     project.mkdir(parents=True, exist_ok=True)
-    return Path(tempfile.mkdtemp(prefix='.nx_export_', dir=str(project)))
+    # A junction may put the result on another volume. Keep atomic replacement
+    # there rather than falling back to copying over the previous card.
+    parent = project_folder if project_folder.stat().st_dev == project.stat().st_dev else project
+    return io_path(tempfile.mkdtemp(prefix='.nx_', dir=str(parent)))
+
+
+def prepare_capture_folders(staging, jobs):
+    """Check every NX image path before costly meshing or changes to NX views."""
+    for index, job in enumerate(jobs, 1):
+        output = io_path(staging) / str(index)
+        output.mkdir()
+        job['output'] = output
+        for filename, _label, _eye, _up in VIEW_PRESETS:
+            nx_image_file_name(output / filename)
+            nx_image_file_name(output / (Path(filename).stem + '_no_ipw.png'))
 
 
 def axes_svg(axes, basis):
@@ -7726,7 +8031,8 @@ def identity_key(identity):
 def read_existing_card(path):
     """Read the saved HTML once. Invalid input must never become a fresh export."""
     try:
-        with local_card_runtime()['lock']:
+        path = io_path(path)
+        with local_card_guard():
             if not path.exists():
                 return None
             raw = path.read_bytes()
@@ -7784,7 +8090,7 @@ def read_existing_card(path):
                 'operation_options': json.loads(meta.get('nx-operation-options') or '{}')}
     except Exception as exc:
         raise RuntimeError('Существующая HTML-карта не изменена. Не удалось безопасно прочитать её:\n%s\n%s'
-                           % (path, exc)) from exc
+                           % (display_file_name(path), exc)) from exc
 
 
 def plan_setup_update(existing, reports):
@@ -8179,6 +8485,7 @@ def retain_setup_annotations(markup, saved_markup):
 
 def write_preview(output, report):
     """Render selected setups and carry saved, unselected sections forward."""
+    output = io_path(output)
     existing = report.get('_existing_card')
     setups = report.get('setups', [report])
     entries, report['merge_result'] = plan_setup_update(existing, setups)
@@ -8289,14 +8596,14 @@ def copy_card_path(card, report):
     if not card.is_file():
         return '\n\nПуть не скопирован: HTML-файл не найден.'
     try:
-        copy_windows_text(str(card.parent.resolve()))
+        copy_windows_text(display_file_name(card.parent.resolve()))
         return '\n\nПуть к папке с картой наладки скопирован в буфер обмена Windows.'
     except Exception as exc:
         return '\n\nКарта сохранена. Не удалось скопировать путь к папке в буфер обмена: %s' % exc
 
 
 def open_output_folder(card, report, open_folder=True):
-    """Open the loopback editor and usual folder; the helper lives inside NX."""
+    """Open only a responding helper, otherwise open the finished HTML directly."""
     if card is None or not export_is_complete(report) or os.name != 'nt':
         return []
     errors = []
@@ -8311,7 +8618,13 @@ def open_output_folder(card, report, open_folder=True):
         targets.append((card.parent, 'папку результата'))
     for target, label in targets:
         try:
-            os.startfile(str(target))
+            value = display_file_name(target)
+            if not value.startswith('http://') and len(value.encode('utf-16-le')) // 2 >= 260:
+                try:
+                    value = windows_short_name(target)
+                except OSError:
+                    pass
+            os.startfile(value)
         except OSError as exc:
             errors.append('Не удалось открыть %s: %s\n%s' % (label, target, exc))
     return errors
@@ -8319,22 +8632,24 @@ def open_output_folder(card, report, open_folder=True):
 
 def publish_output(card, destination, expected_digest):
     """Replace one complete HTML atomically, without moving the previous file."""
-    with local_card_runtime()['lock']:
+    card, destination = io_path(card), io_path(destination)
+    with local_card_guard():
         actual_digest = hashlib.sha256(destination.read_bytes()).hexdigest() if destination.exists() else None
         if actual_digest != expected_digest:
             raise RuntimeError('HTML-карта изменилась во время экспорта. Чтобы не потерять правки, '
                                'запись отменена. Сохраните изменения и повторите запуск.')
-        # Staging is inside the destination folder, so replacement stays on one volume.
+        # Staging was created on the destination volume for atomic replacement.
         # If replacement fails, the previous HTML remains at its original path.
         card.replace(destination)
     return destination
 
 
-def finalize_output(output, report):
+def finalize_output(output, report, destination=None):
     # A failed batch must not publish a partial card or a diagnostic bundle.
     if not export_is_complete(report):
         return None
-    project = output.parent
+    output = io_path(output)
+    project = io_path(destination) if destination is not None else output.parent
     if '_existing_card' not in report:
         report['_existing_card'] = read_existing_card(project / (report['document_stem'] + '.html'))
     card = write_preview(output, report)
@@ -8346,6 +8661,7 @@ def finalize_output(output, report):
 def cleanup_work_files(staging, created_directories):
     """Remove only this run's capture files and newly created empty folders."""
     errors = []
+    staging = io_path(staging) if staging is not None else None
     if staging is not None and staging.exists():
         try:
             shutil.rmtree(staging)
@@ -8353,7 +8669,7 @@ def cleanup_work_files(staging, created_directories):
             errors.append('Не удалось удалить временные файлы снимков: %s\n%s' % (staging, exc))
     for path in reversed(created_directories):
         try:
-            path.rmdir()
+            io_path(path).rmdir()
         except OSError:
             pass  # The result or another process may now use the folder.
     return errors
@@ -8445,7 +8761,7 @@ def main():
             project_camera['axes'] = [xyz(display.ModelingViews.WorkView.GetAxis(axis)) for axis in
                                       (nx.XYZAxis.XAxis, nx.XYZAxis.YAxis, nx.XYZAxis.ZAxis)]
             project_name, project_file = project_name_from_part(part), project_file_from_part(part)
-            state.update(project_name=project_name, project_file=str(project_file),
+            state.update(project_name=project_name, project_file=display_file_name(project_file),
                          document_stem=safe_file_component(project_name), format='nx-setup-document')
             jobs = resolve_setup_jobs(nx, ui, part, state)
             confirm_duplicate_tool_numbers(nx, part, state)
@@ -8454,7 +8770,7 @@ def main():
                 report = job['report']
                 report['tool_number_check'] = copy.deepcopy(state['tool_number_check'])
                 report['data_issues'].extend(copy.deepcopy(state['data_issues']))
-                report.update(project_name=project_name, project_file=str(project_file),
+                report.update(project_name=project_name, project_file=display_file_name(project_file),
                               document_stem=state['document_stem'], html_file=state['document_stem'] + '.html')
             choices = ask_all_setup_components(nx, components, jobs)
             for job, selected in zip(jobs, choices):
@@ -8468,6 +8784,7 @@ def main():
             EXPORT_PROGRESS = progress
             created_directories.extend(path for path in (destination.parent, destination) if not path.exists())
             staging = make_output_folder(project_file.parent, project_name)
+            prepare_capture_folders(staging, jobs)
             processing = True
             progress.mesh()
             state['project_model'] = collect_project_model(nx, display, project_camera)
@@ -8476,8 +8793,6 @@ def main():
                 report, context = job['report'], job['context']
                 progress.setup(index, setup_label(report))
                 try:
-                    job['output'] = staging / '.capture' / ('setup-%d' % index)
-                    job['output'].mkdir(parents=True)
                     activate_first_mcs(nx, part, context, report)
                     try:
                         components.apply(context['visible_component_keys'])
@@ -8540,7 +8855,7 @@ def main():
                     progress.update(94, 'Подготовка файла карты', 'Объединение видов всех установов')
                     collect_document_assets(staging, jobs)
                     progress.update(96, 'Сохранение карты', 'Формирование и запись HTML')
-                    card = finalize_output(staging, state)
+                    card = finalize_output(staging, state, destination)
             except Exception as exc:
                 state.update(status='error', error=state.get('error', '') + '\nНе удалось сохранить общий документ: ' + str(exc))
     finally:
@@ -8569,7 +8884,7 @@ def main():
         if state.get('stopped_after_setup_error'):
             message += '\nОставшиеся установы не выполнялись после ошибки; лишние циклы съёмки остановлены.'
     if card is not None:
-        message += '\n\nHTML:\n%s' % card
+        message += '\n\nHTML:\n%s' % display_file_name(card)
         merged = state.get('merge_result', {})
         if merged:
             message += '\n\nВ общей карте: %d установов. Обновлено: %d; добавлено: %d; сохранено без обновления: %d.' % (
@@ -8619,24 +8934,26 @@ def namespace_editor_markup(markup, key):
 
 def collect_document_assets(staging, jobs):
     """Flatten captured files with stable per-setup prefixes, for all selected setups."""
+    staging = io_path(staging)
     for index, job in enumerate(jobs, 1):
         output, report = job['output'], job['report']
         mapping = {}
         if output is not None:
+            output = io_path(output)
             for path in sorted(output.iterdir()):
                 if path.is_file():
                     name = 's%02d_%s' % (index, path.name)
                     shutil.copyfile(path, staging / name)
                     mapping[path.name] = name
+            # Only remove this run's known per-setup folder after copying assets.
+            if output.parent == staging and output.name == str(index):
+                shutil.rmtree(output)
         for view in report.get('views', []):
             view.setdefault('logical_file', view['file'])
             for field_name in ('file', 'no_ipw_file'):
                 if view.get(field_name) in mapping:
                     view[field_name] = mapping[view[field_name]]
         report['assets'] = mapping
-    capture = staging / '.capture'
-    if capture.exists():
-        shutil.rmtree(capture)
 
 
 def render_setup(output, report, key, counter):
@@ -8676,4 +8993,7 @@ def project_card_header(report):
 
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:] == ['--nx-card-helper']:
+        local_card_worker()
+    else:
+        main()
