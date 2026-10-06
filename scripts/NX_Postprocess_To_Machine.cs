@@ -1,6 +1,6 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.37
-// Configure TCL/DEF paths in the UI; optionally number NX operations per output program.
+// SCRIPT_VERSION: V1.38
+// Configure postprocessor paths and machine folders in the UI; optional operation numbering.
 // Preserve NC processing, modal validation, output paths and other INI settings.
 // Siemens NX / Designcenter, Windows. C# journal with an external INI.
 // Keep NX_Postprocess_To_Machine.ini next to this journal.
@@ -140,7 +140,7 @@ public class NX_Postprocess_To_Machine
                 stage = "\u0427\u0442\u0435\u043D\u0438\u0435 \u043F\u0430\u043F\u043E\u043A \u0441\u0442\u0430\u043D\u043A\u043E\u0432";
                 List<MachineTarget> machines = config.GetAvailableMachines(out machineWarnings);
                 stage = "\u0412\u044B\u0431\u043E\u0440 \u043C\u0435\u0441\u0442\u0430 \u0432\u044B\u0432\u043E\u0434\u0430 \u0438 \u043D\u043E\u0441\u0438\u0442\u0435\u043B\u044F";
-                using (MachinePicker dialog = new MachinePicker(jobs, programPosts, machines, machineWarnings, config, projectFile, projectDirectory, preferences))
+                using (MachinePicker dialog = new MachinePicker(jobs, programPosts, machines, machineWarnings, config, projectFile, projectDirectory, preferences, GetNXEnvironment))
                 {
                     string response = dialog.ShowDialog(owner);
                     if (response == "Retry") continue;
@@ -2256,6 +2256,144 @@ internal sealed class WorkOffsetPicker : RouterDialog
 }
 
 
+internal sealed class MachineRootsDialog : RouterDialog
+{
+    private readonly PostIniDocument document;
+    private readonly Func<string, string> environment;
+    private readonly object list = RuntimeForms.New("ListBox");
+    private readonly object nameInput = RuntimeForms.New("TextBox");
+    private readonly object pathInput = RuntimeForms.New("TextBox");
+    private readonly object details = RuntimeForms.New("Panel");
+    private readonly object remove;
+    private int active = -1;
+    private bool updating;
+    internal List<MachineTarget> Machines { get { return document.EditedMachines; } }
+    internal List<string> Warnings { get { return document.MachineWarnings; } }
+
+    internal MachineRootsDialog(string configPath, Func<string, string> environment) : base("\u041F\u0430\u043F\u043A\u0438 \u0441\u043E \u0441\u0442\u0430\u043D\u043A\u0430\u043C\u0438", 72)
+    {
+        this.environment = environment; document = new PostIniDocument(configPath);
+        object hint = Label("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043E\u0431\u0449\u0443\u044E \u043F\u0430\u043F\u043A\u0443: \u0435\u0451 \u043F\u043E\u0434\u043F\u0430\u043F\u043A\u0438 \u0441 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u044F\u043C\u0438 \u0438\u0437 \u0446\u0438\u0444\u0440 \u043F\u043E\u044F\u0432\u044F\u0442\u0441\u044F \u043A\u0430\u043A \u0441\u0442\u0430\u043D\u043A\u0438.\n\u0418\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F \u043F\u0440\u0438\u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F \u043F\u043E\u0441\u043B\u0435 \u043D\u0430\u0436\u0430\u0442\u0438\u044F \u00AB\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C\u00BB.", 0, 0, 760, 62);
+        RuntimeForms.SetEnum(hint, "Anchor", "Top, Left, Right");
+        RuntimeForms.Call(Tips, "SetToolTip", hint, document.Path); RuntimeForms.Add(Header, hint);
+        RuntimeForms.Call(RuntimeForms.Get(Window, "Controls"), "Remove", Grid); RuntimeForms.Dispose(Grid);
+        object body = RuntimeForms.New("Panel"); RuntimeForms.SetEnum(body, "Dock", "Fill");
+        RuntimeForms.Add(Window, body); RuntimeForms.Call(RuntimeForms.Get(Window, "Controls"), "SetChildIndex", body, 0);
+        object left = RuntimeForms.New("Panel"); RuntimeForms.Set(left, "Width", 244); RuntimeForms.SetEnum(left, "Dock", "Left");
+        object actions = RuntimeForms.New("Panel"); RuntimeForms.Set(actions, "Height", 46); RuntimeForms.SetEnum(actions, "Dock", "Bottom");
+        RuntimeForms.SetEnum(list, "Dock", "Fill"); RuntimeForms.Set(list, "IntegralHeight", false); RuntimeForms.Set(list, "HorizontalScrollbar", true);
+        object add = Button("\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C\u2026", 118, 36); Position(add, 0, 8, 118, 36);
+        remove = Button("\u0423\u0431\u0440\u0430\u0442\u044C", 114, 36); Position(remove, 126, 8, 114, 36);
+        RuntimeForms.Call(Tips, "SetToolTip", remove, "\u0423\u0431\u0440\u0430\u0442\u044C \u043F\u0443\u0442\u044C \u0438\u0437 \u0441\u043F\u0438\u0441\u043A\u0430. \u041F\u0430\u043F\u043A\u0438 \u0441\u0442\u0430\u043D\u043A\u043E\u0432 \u0438 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u044B \u043D\u0435 \u0443\u0434\u0430\u043B\u044F\u044E\u0442\u0441\u044F.");
+        RuntimeForms.Add(actions, add); RuntimeForms.Add(actions, remove); RuntimeForms.Add(left, list); RuntimeForms.Add(left, actions);
+        RuntimeForms.SetEnum(details, "Dock", "Fill"); RuntimeForms.Set(details, "Width", 536);
+        RuntimeForms.Add(body, details); RuntimeForms.Add(body, left);
+        RuntimeForms.Add(details, Label("\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435", 16, 8, 480, 22));
+        Position(nameInput, 16, 32, 506, 28); RuntimeForms.SetEnum(nameInput, "Anchor", "Top, Left, Right"); RuntimeForms.Add(details, nameInput);
+        RuntimeForms.Add(details, Label("\u041E\u0431\u0449\u0430\u044F \u043F\u0430\u043F\u043A\u0430 \u0441\u043E \u0441\u0442\u0430\u043D\u043A\u0430\u043C\u0438", 16, 80, 480, 22));
+        Position(pathInput, 16, 104, 392, 28); RuntimeForms.SetEnum(pathInput, "Anchor", "Top, Left, Right"); RuntimeForms.Add(details, pathInput);
+        object browse = Button("\u041E\u0431\u0437\u043E\u0440\u2026", 104, 30); Position(browse, 418, 102, 104, 30); RuntimeForms.SetEnum(browse, "Anchor", "Top, Right"); RuntimeForms.Add(details, browse);
+        object explanation = Label("\u041C\u043E\u0436\u043D\u043E \u0432\u044B\u0431\u0440\u0430\u0442\u044C \u043B\u043E\u043A\u0430\u043B\u044C\u043D\u0443\u044E \u0438\u043B\u0438 \u0441\u0435\u0442\u0435\u0432\u0443\u044E \u043F\u0430\u043F\u043A\u0443 \u043B\u0438\u0431\u043E \u0432\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0435\u0451 \u043F\u0443\u0442\u044C.\n\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440, \u043F\u043E\u0434\u043F\u0430\u043F\u043A\u0438 01, 02 \u0438 15 \u043F\u043E\u044F\u0432\u044F\u0442\u0441\u044F \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u044B\u043C\u0438 \u043A\u043D\u043E\u043F\u043A\u0430\u043C\u0438.\n\u0412\u043B\u043E\u0436\u0435\u043D\u043D\u044B\u0435 \u0443\u0440\u043E\u0432\u043D\u0438 \u043D\u0435 \u043F\u0440\u043E\u0441\u043C\u0430\u0442\u0440\u0438\u0432\u0430\u044E\u0442\u0441\u044F.", 16, 156, 506, 110);
+        RuntimeForms.SetEnum(explanation, "Anchor", "Top, Left, Right"); RuntimeForms.Add(details, explanation);
+        object save = Button("\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C", 124, 38); Position(save, 536, 6, 124, 38);
+        RuntimeForms.SetEnum(save, "Anchor", "Bottom, Right"); RuntimeForms.Add(Footer, save); RuntimeForms.Set(Window, "AcceptButton", save);
+        RuntimeForms.On(list, "SelectedIndexChanged", delegate { SelectEntry(); });
+        RuntimeForms.On(nameInput, "TextChanged", delegate { EditEntry(); }); RuntimeForms.On(pathInput, "TextChanged", delegate { EditEntry(); });
+        RuntimeForms.On(add, "Click", delegate { AddRoot(); }); RuntimeForms.On(remove, "Click", delegate { RemoveRoot(); });
+        RuntimeForms.On(browse, "Click", delegate { Browse(); }); RuntimeForms.On(save, "Click", delegate { Save(); });
+        RefreshList(document.MachineRoots.Count > 0 ? 0 : -1);
+    }
+    private void RefreshList(int selected)
+    {
+        updating = true;
+        try
+        {
+            object items = RuntimeForms.Get(list, "Items"); RuntimeForms.Call(list, "BeginUpdate");
+            try { RuntimeForms.Call(items, "Clear"); foreach (MachineRootEntry root in document.MachineRoots) RuntimeForms.Call(items, "Add", root.Name.Length == 0 ? "\u0411\u0435\u0437 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u044F" : root.Name); }
+            finally { RuntimeForms.Call(list, "EndUpdate"); }
+            RuntimeForms.Set(list, "SelectedIndex", selected);
+        }
+        finally { updating = false; }
+        SelectEntry();
+    }
+    private void SelectEntry()
+    {
+        if (updating) return;
+        active = (int)RuntimeForms.Get(list, "SelectedIndex"); updating = true;
+        try
+        {
+            bool selected = active >= 0 && active < document.MachineRoots.Count;
+            MachineRootEntry root = selected ? document.MachineRoots[active] : null;
+            RuntimeForms.Set(details, "Enabled", selected); RuntimeForms.Set(remove, "Enabled", selected);
+            RuntimeForms.Set(nameInput, "Text", selected ? root.Name : ""); RuntimeForms.Set(pathInput, "Text", selected ? root.DirectoryPath : "");
+            RuntimeForms.Call(Tips, "SetToolTip", pathInput, selected ? root.DirectoryPath : "");
+        }
+        finally { updating = false; }
+    }
+    private void EditEntry()
+    {
+        if (updating || active < 0) return;
+        MachineRootEntry root = document.MachineRoots[active]; string name = (string)RuntimeForms.Get(nameInput, "Text"); bool renamed = name != root.Name;
+        root.Name = name; root.DirectoryPath = (string)RuntimeForms.Get(pathInput, "Text");
+        if (renamed)
+        {
+            updating = true;
+            try { RuntimeForms.Get(list, "Items").GetType().GetProperty("Item").SetValue(RuntimeForms.Get(list, "Items"), name.Length == 0 ? "\u0411\u0435\u0437 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u044F" : name, new object[] { active }); }
+            finally { updating = false; }
+        }
+        RuntimeForms.Call(Tips, "SetToolTip", pathInput, root.DirectoryPath);
+    }
+    private string PickFolder(string current)
+    {
+        object dialog = RuntimeForms.New("FolderBrowserDialog");
+        try
+        {
+            RuntimeForms.Set(dialog, "Description", ScriptInfo.WindowTitle("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043E\u0431\u0449\u0443\u044E \u043F\u0430\u043F\u043A\u0443 \u0441\u043E \u0441\u0442\u0430\u043D\u043A\u0430\u043C\u0438"));
+            PropertyInfo useTitle = dialog.GetType().GetProperty("UseDescriptionForTitle");
+            if (useTitle != null && useTitle.CanWrite) useTitle.SetValue(dialog, true, null);
+            RuntimeForms.Set(dialog, "ShowNewFolderButton", false);
+            if (!String.IsNullOrWhiteSpace(current))
+            {
+                try { RuntimeForms.Set(dialog, "SelectedPath", RouterConfig.ResolvePath(current, IOPath.GetDirectoryName(document.Path), environment)); }
+                catch { /* An obsolete path must not block choosing its replacement. */ }
+            }
+            if (RuntimeForms.Show(dialog, Window) != "OK") return null;
+            string path = (string)RuntimeForms.Get(dialog, "SelectedPath");
+            if (String.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) throw new DirectoryNotFoundException("\u041F\u0430\u043F\u043A\u0430 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0430:\n" + path);
+            return IOPath.GetFullPath(path);
+        }
+        finally { RuntimeForms.Dispose(dialog); }
+    }
+    private void AddRoot()
+    {
+        try
+        {
+            string path = PickFolder(active >= 0 ? document.MachineRoots[active].DirectoryPath : ""); if (path == null) return;
+            string name = IOPath.GetFileName(path.TrimEnd(new char[] { '\\', '/' }));
+            document.MachineRoots.Add(new MachineRootEntry { Name = document.UniqueMachineRootName(name), DirectoryPath = path });
+            RefreshList(document.MachineRoots.Count - 1); RuntimeForms.Call(nameInput, "Focus");
+        }
+        catch (Exception ex) { ShowProblem(ex); }
+    }
+    private void Browse()
+    {
+        try
+        {
+            if (active < 0) return;
+            string path = PickFolder(document.MachineRoots[active].DirectoryPath); if (path == null) return;
+            document.MachineRoots[active].DirectoryPath = path; RefreshList(active);
+        }
+        catch (Exception ex) { ShowProblem(ex); }
+    }
+    private void RemoveRoot()
+    { if (active >= 0) { int previous = active; document.MachineRoots.RemoveAt(active); RefreshList(Math.Min(previous, document.MachineRoots.Count - 1)); } }
+    private void Save()
+    {
+        try { document.SaveMachineRoots(environment); Finish("OK"); }
+        catch (Exception ex) { ShowProblem(ex); }
+    }
+}
+
 internal sealed class MachinePicker : RouterDialog
 {
     private readonly string[] outputExtensions;
@@ -2287,14 +2425,17 @@ internal sealed class MachinePicker : RouterDialog
     private readonly List<object> nameInputs = new List<object>();
     private readonly List<ProgramJob> jobs;
     private readonly string projectFile;
+    private readonly string configPath;
+    private readonly Func<string, string> environment;
     private readonly RouterPreferences preferences;
     public MachineChoice Choice;
 
     public MachinePicker(List<ProgramJob> jobs, PostDefinition[] posts, List<MachineTarget> machines,
-        List<string> machineWarnings, RouterConfig config, string projectFile, string projectDirectory, RouterPreferences preferences)
+        List<string> machineWarnings, RouterConfig config, string projectFile, string projectDirectory, RouterPreferences preferences, Func<string, string> environment = null)
         : base("\u041A\u0443\u0434\u0430 \u0432\u044B\u0432\u0435\u0441\u0442\u0438 \u0423\u041F?", 256)
     {
         this.jobs = jobs; this.projectFile = projectFile; this.preferences = preferences;
+        configPath = config.FilePath; this.environment = environment ?? Environment.GetEnvironmentVariable;
         outputExtensions = ProgramPostAssignments.Extensions(posts, jobs.Count, config.DefaultExtension);
         callOrder = ProgramCallChain.Identity(jobs.Count);
         destinationLabel = machineHint;
@@ -2307,6 +2448,10 @@ internal sealed class MachinePicker : RouterDialog
         RuntimeForms.Set(summary, "AutoEllipsis", true);
         RuntimeForms.Call(Tips, "SetToolTip", summary, ProgramPostAssignments.Describe(names.ToArray(), posts, outputExtensions));
         RuntimeForms.Add(Header, summary);
+        object configureMachines = Button("\u041F\u0430\u043F\u043A\u0438 \u0441\u043E \u0441\u0442\u0430\u043D\u043A\u0430\u043C\u0438\u2026", 294, 34); Position(configureMachines, 490, 44, 294, 34);
+        RuntimeForms.SetEnum(configureMachines, "Anchor", "Top, Right"); RuntimeForms.Add(Header, configureMachines);
+        RuntimeForms.Call(Tips, "SetToolTip", configureMachines, "\u0412\u044B\u0431\u0440\u0430\u0442\u044C \u043E\u0431\u0449\u0443\u044E \u043F\u0430\u043F\u043A\u0443, \u0432\u043D\u0443\u0442\u0440\u0438 \u043A\u043E\u0442\u043E\u0440\u043E\u0439 \u043D\u0430\u0445\u043E\u0434\u044F\u0442\u0441\u044F \u043F\u0430\u043F\u043A\u0438 \u0441\u0442\u0430\u043D\u043A\u043E\u0432.");
+        RuntimeForms.On(configureMachines, "Click", delegate { ConfigureMachineRoots(); });
         RuntimeForms.Set(binEnabled, "Text", "FANUCPRG.BIN");
         Position(binEnabled, 0, 48, 260, 28);
         RuntimeForms.Set(binEnabled, "Checked", false); // Always off on each new run.
@@ -2391,20 +2536,8 @@ internal sealed class MachinePicker : RouterDialog
             RuntimeForms.On(input, "TextChanged", delegate { RefreshCallSummary(); });
         }
         RuntimeForms.Add(Header, machineHint);
-        RuntimeForms.Set(machineHint, "Text", "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u0435\u0441\u0442\u043E \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u044F \u0438 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \u00AB\u0412\u044B\u0432\u0435\u0441\u0442\u0438\u00BB.");
-        if (machineWarnings.Count > 0)
-        {
-            RuntimeForms.Set(machineHint, "Text", "\u0427\u0430\u0441\u0442\u044C \u043F\u0430\u043F\u043E\u043A \u0441\u0442\u0430\u043D\u043A\u043E\u0432 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0430. \u041C\u043E\u0436\u043D\u043E \u0432\u044B\u0431\u0440\u0430\u0442\u044C \u043F\u0430\u043F\u043A\u0443 \u0432\u0440\u0443\u0447\u043D\u0443\u044E \u0438\u043B\u0438 \u0432\u043D\u0435\u0448\u043D\u0438\u0439 \u043D\u043E\u0441\u0438\u0442\u0435\u043B\u044C.");
-            RuntimeForms.Call(Tips, "SetToolTip", machineHint, String.Join("\n\n", machineWarnings.ToArray()));
-        }
         RuntimeForms.On(assignNames, "CheckedChanged", delegate { RefreshNames(); RefreshCallSummary(); }); RefreshNames();
-        foreach (MachineTarget target in machines)
-        {
-            MachineTarget machine = target;
-            object button = Tile(machine.Name, machine.DirectoryPath, 180, 68);
-            RuntimeForms.On(button, "Click", delegate { SelectTarget(machine, null); });
-        }
-        if (machines.Count == 0) RuntimeForms.Add(Grid, Label("\u041D\u0435\u0442 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B\u0445 \u0441\u0442\u0430\u043D\u043A\u043E\u0432. \u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043F\u0430\u043F\u043A\u0443 \u0438\u043B\u0438 \u0432\u043D\u0435\u0448\u043D\u0438\u0439 \u043D\u043E\u0441\u0438\u0442\u0435\u043B\u044C \u0432\u043D\u0438\u0437\u0443 \u043E\u043A\u043D\u0430.", 0, 0, 700, 42));
+        DrawMachines(machines, machineWarnings);
         // Folder selection above; navigation and the explicit Output action below.
         RuntimeForms.Set(Footer, "Height", 104);
         object calls = Button("\u0412\u044B\u0437\u043E\u0432 \u043F\u043E\u0434\u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C", 216, 38); Position(calls, 552, 20, 216, 38);
@@ -2521,6 +2654,38 @@ internal sealed class MachinePicker : RouterDialog
             try { LayoutContent(CurrentContentWidth()); }
             finally { arranging = false; }
         });
+    }
+
+    private void DrawMachines(List<MachineTarget> machines, List<string> warnings)
+    {
+        ClearGrid();
+        foreach (MachineTarget target in machines)
+        {
+            MachineTarget machine = target;
+            object button = Tile(machine.Name, machine.DirectoryPath, 180, 68);
+            RuntimeForms.On(button, "Click", delegate { SelectTarget(machine, null); });
+        }
+        if (machines.Count == 0) RuntimeForms.Add(Grid, Label("\u041D\u0435\u0442 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B\u0445 \u0441\u0442\u0430\u043D\u043A\u043E\u0432. \u041D\u0430\u0436\u043C\u0438\u0442\u0435 \u00AB\u041F\u0430\u043F\u043A\u0438 \u0441\u043E \u0441\u0442\u0430\u043D\u043A\u0430\u043C\u0438\u2026\u00BB \u0438\u043B\u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u0435\u0441\u0442\u043E \u0432\u044B\u0432\u043E\u0434\u0430 \u0432\u043D\u0438\u0437\u0443 \u043E\u043A\u043D\u0430.", 0, 0, 700, 42));
+        RuntimeForms.Set(machineHint, "Text", warnings.Count > 0 ? "\u0427\u0430\u0441\u0442\u044C \u043F\u0430\u043F\u043E\u043A \u0441\u0442\u0430\u043D\u043A\u043E\u0432 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0430. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u00AB\u041F\u0430\u043F\u043A\u0438 \u0441\u043E \u0441\u0442\u0430\u043D\u043A\u0430\u043C\u0438\u2026\u00BB \u0438\u043B\u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u0435\u0441\u0442\u043E \u0432\u044B\u0432\u043E\u0434\u0430 \u0432\u0440\u0443\u0447\u043D\u0443\u044E." : "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u0435\u0441\u0442\u043E \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u044F \u0438 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \u00AB\u0412\u044B\u0432\u0435\u0441\u0442\u0438\u00BB.");
+        RuntimeForms.Call(Tips, "SetToolTip", machineHint, warnings.Count > 0 ? String.Join("\n\n", warnings.ToArray()) : "");
+    }
+    private void ConfigureMachineRoots()
+    {
+        try
+        {
+            List<MachineTarget> machines; List<string> warnings;
+            using (MachineRootsDialog dialog = new MachineRootsDialog(configPath, environment))
+            {
+                if (dialog.ShowDialog(Window) != "OK") return;
+                machines = dialog.Machines; warnings = dialog.Warnings;
+            }
+            // Settings may replace/remove the selected machine; require a fresh destination choice.
+            selectedTarget = null; selectedMedia = null; Choice = null;
+            RuntimeForms.Set(outputButton, "Enabled", false);
+            DrawMachines(machines, warnings);
+            RefreshSections();
+        }
+        catch (Exception ex) { ShowProblem(ex); }
     }
 
     private string[] CurrentProgramNames()
@@ -3613,7 +3778,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.37";
+    internal const string SCRIPT_VERSION = "V1.38";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
 
     internal static string WindowTitle(string detail)
@@ -3821,10 +3986,19 @@ internal sealed class PostPathEntry
 }
 
 // Edits only explicit post sections. Other sections and untouched lines are preserved.
+internal sealed class MachineRootEntry
+{
+    internal string Name = "", DirectoryPath = "";
+    internal IniEntry Original;
+}
+
 internal sealed class PostIniDocument
 {
     internal readonly string Path;
     internal readonly List<PostPathEntry> Posts = new List<PostPathEntry>();
+    internal readonly List<MachineRootEntry> MachineRoots = new List<MachineRootEntry>();
+    internal List<MachineTarget> EditedMachines;
+    internal List<string> MachineWarnings;
     private readonly byte[] originalBytes;
     private readonly string originalText, newline;
     private readonly Encoding encoding;
@@ -3855,12 +4029,88 @@ internal sealed class PostIniDocument
         sections = IniReader.Parse(originalText, Path);
         foreach (IniSection section in sections)
         {
+            if (String.Equals(section.Name, "MachineRoots", StringComparison.OrdinalIgnoreCase))
+                foreach (IniEntry entry in section.Entries)
+                    MachineRoots.Add(new MachineRootEntry { Name = entry.Key, DirectoryPath = entry.Value, Original = entry });
             if (!section.Name.StartsWith("Post ", StringComparison.OrdinalIgnoreCase)) continue;
             Posts.Add(new PostPathEntry { Name = section.Name.Substring(5).Trim(),
                 Tcl = Value(section, "Tcl"), Def = Value(section, "Def"),
                 Extension = section.Find("Extension") == null ? null : Value(section, "Extension"), Original = section });
         }
     }
+
+    internal string UniqueMachineRootName(string name)
+    {
+        if (String.IsNullOrWhiteSpace(name)) name = "\u041F\u0430\u043F\u043A\u0430 \u0441\u0442\u0430\u043D\u043A\u043E\u0432";
+        string result = name; int suffix = 2;
+        while (MachineRoots.Exists(delegate(MachineRootEntry p) { return String.Equals(p.Name.Trim(), result, StringComparison.OrdinalIgnoreCase); }))
+            result = name + "_" + (suffix++).ToString(CultureInfo.InvariantCulture);
+        return result;
+    }
+
+    internal string BuildMachineRootsText(Func<string, string> environment)
+    {
+        HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (MachineRootEntry root in MachineRoots)
+        {
+            root.Name = root.Name.Trim(); root.DirectoryPath = root.DirectoryPath.Trim();
+            if (root.DirectoryPath.Length >= 2 && root.DirectoryPath.StartsWith("\"") && root.DirectoryPath.EndsWith("\""))
+                root.DirectoryPath = root.DirectoryPath.Substring(1, root.DirectoryPath.Length - 2).Trim();
+            CheckText(root.Name, "\u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043F\u0430\u043F\u043A\u0438 \u0441\u0442\u0430\u043D\u043A\u043E\u0432", true);
+            if (root.Name.IndexOf('=') >= 0 || root.Name.StartsWith(";") || root.Name.StartsWith("#"))
+                throw new ArgumentException("\u041D\u0435\u0434\u043E\u043F\u0443\u0441\u0442\u0438\u043C\u043E\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043F\u0430\u043F\u043A\u0438 \u0441\u0442\u0430\u043D\u043A\u043E\u0432: " + root.Name);
+            CheckText(root.DirectoryPath, "\u043F\u0443\u0442\u044C \u043A \u043F\u0430\u043F\u043A\u0435 \u00AB" + root.Name + "\u00BB", false);
+            if (!names.Add(root.Name)) throw new ArgumentException("\u041F\u043E\u0432\u0442\u043E\u0440\u044F\u0435\u0442\u0441\u044F \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u00AB" + root.Name + "\u00BB.");
+            // Keep an unchanged offline root; validate newly chosen paths without creating files.
+            if (root.Original == null || root.DirectoryPath != root.Original.Value)
+            {
+                string resolved = RouterConfig.ResolvePath(root.DirectoryPath, IOPath.GetDirectoryName(Path), environment);
+                PostFiles.Machines(resolved);
+            }
+        }
+        if (originalBytes == null && MachineRoots.Count == 0) throw new ArgumentException("\u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 \u043F\u0430\u043F\u043A\u0443 \u0441\u043E \u0441\u0442\u0430\u043D\u043A\u0430\u043C\u0438 \u043F\u0435\u0440\u0435\u0434 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u0435\u043C.");
+        List<string> lines = new List<string>();
+        foreach (Match line in Regex.Matches(originalText, @"[^\r\n]*(?:\r\n|\r|\n|$)"))
+            if (line.Length > 0) lines.Add(line.Value);
+        IniSection section = sections.Find(delegate(IniSection s) { return String.Equals(s.Name, "MachineRoots", StringComparison.OrdinalIgnoreCase); });
+        Dictionary<int, string> edits = new Dictionary<int, string>();
+        int insertion = lines.Count;
+        if (section != null)
+        {
+            int index = sections.IndexOf(section);
+            if (index + 1 < sections.Count) insertion = sections[index + 1].Line - 1;
+            foreach (IniEntry entry in section.Entries)
+            {
+                MachineRootEntry draft = MachineRoots.Find(delegate(MachineRootEntry p) { return p.Original == entry; });
+                if (draft == null) { edits[entry.Line - 1] = ""; continue; }
+                if (draft.Name == entry.Key && draft.DirectoryPath == entry.Value) continue;
+                string oldLine = lines[entry.Line - 1];
+                string prefix = draft.Name == entry.Key ? oldLine.Substring(0, oldLine.IndexOf('=') + 1) : draft.Name + "=";
+                edits[entry.Line - 1] = ReplaceLine(oldLine, prefix + draft.DirectoryPath);
+            }
+        }
+        StringBuilder added = new StringBuilder();
+        foreach (MachineRootEntry root in MachineRoots)
+            if (root.Original == null) added.Append(root.Name + "=" + root.DirectoryPath + newline);
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i <= lines.Count; i++)
+        {
+            if (i == insertion && added.Length > 0)
+            {
+                EnsureLineEnd(result);
+                if (section == null) result.Append(newline + "[MachineRoots]" + newline);
+                result.Append(added);
+            }
+            if (i < lines.Count) { string edit; result.Append(edits.TryGetValue(i, out edit) ? edit : lines[i]); }
+        }
+        string text = result.ToString();
+        RouterConfig candidate = RouterConfig.Parse(text, Path, environment);
+        EditedMachines = candidate.GetAvailableMachines(out MachineWarnings); // Detect ambiguous button names before saving.
+        return text;
+    }
+
+    internal void SaveMachineRoots(Func<string, string> environment)
+    { SaveText(BuildMachineRootsText(environment)); }
 
     private static string Value(IniSection section, string key)
     { IniEntry entry = section.Find(key); return entry == null ? "" : entry.Value; }
@@ -3967,12 +4217,19 @@ internal sealed class PostIniDocument
     }
 
     internal void Save(Func<string, string> environment)
+    { SaveText(BuildText(environment)); }
+
+    private void SaveText(string text)
     {
-        string text = BuildText(environment);
         byte[] preamble = encoding.GetPreamble(), body = encoding.GetBytes(text);
         byte[] bytes = new byte[preamble.Length + body.Length];
         Buffer.BlockCopy(preamble, 0, bytes, 0, preamble.Length); Buffer.BlockCopy(body, 0, bytes, preamble.Length, body.Length);
-        if (Same(bytes, originalBytes)) return;
+        if (Same(bytes, originalBytes))
+        {
+            if (!Same(File.ReadAllBytes(Path), originalBytes))
+                throw new IOException("INI \u0438\u0437\u043C\u0435\u043D\u0451\u043D \u0434\u0440\u0443\u0433\u0438\u043C \u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u043C. \u0417\u0430\u043A\u0440\u043E\u0439\u0442\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0438 \u043E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0438\u0445 \u0441\u043D\u043E\u0432\u0430.");
+            return;
+        }
         if (File.Exists(Path) && (File.GetAttributes(Path) & FileAttributes.ReadOnly) != 0)
             throw new IOException("INI \u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u0447\u0442\u0435\u043D\u0438\u044F. \u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u0435 \u0437\u0430\u043F\u0438\u0441\u044C \u0432 \u0444\u0430\u0439\u043B:\n" + Path);
         // No sidecar, backup or temporary file: validate first, then write this INI under an exclusive writer lock.
