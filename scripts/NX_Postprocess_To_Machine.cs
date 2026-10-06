@@ -1,7 +1,7 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.35
-// Assign a postprocessor to each program; preserve the selected-operation output mode.
-// Preserve NC processing, modal validation, output paths and INI behavior.
+// SCRIPT_VERSION: V1.37
+// Configure TCL/DEF paths in the UI; optionally number NX operations per output program.
+// Preserve NC processing, modal validation, output paths and other INI settings.
 // Siemens NX / Designcenter, Windows. C# journal with an external INI.
 // Keep NX_Postprocess_To_Machine.ini next to this journal.
 // v1.21 | 2026-09-25: restore external-drive picker and volume checks.
@@ -43,7 +43,7 @@
 // v1.3: INI controls machine roots, explicit destinations, posts, extensions
 // Read on each launch or with the Reload button.
 // Relative paths are resolved against the INI directory; no CWD fallback.
-// The journal reads configuration only; save INI edits in the text editor.
+// Save post-path edits to the same INI after explicit confirmation in the UI.
 // Choose whole O-prefixed program folders in the opening checklist.
 // Project copy is optional. Only O-header digits change when explicitly assigned.
 // Existing outputs require confirmation; replacements do NOT receive backups.
@@ -93,10 +93,12 @@ public class NX_Postprocess_To_Machine
             owner = RuntimeForms.CreateOwner();
             stage = "\u0412\u044B\u0431\u043E\u0440 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C \u0434\u043B\u044F \u0432\u044B\u0432\u043E\u0434\u0430";
             List<ProgramJob> jobs;
+            bool numberOperations;
             using (ProgramFolderPicker dialog = new ProgramFolderPicker(setup.GetRoot(CamSetup.View.ProgramOrder), selectedOperations))
             {
                 if (dialog.ShowDialog(owner) != "OK") return;
                 jobs = dialog.Jobs;
+                numberOperations = dialog.NumberOperations;
             }
             // Project-wide: include unused tools and tools outside the selected jobs.
             // This gate runs after program selection, before configuration, posting and file writes.
@@ -147,8 +149,10 @@ public class NX_Postprocess_To_Machine
                 }
                 break;
             }
-            stage = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435 \u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u0435 \u0423\u041F/BIN";
-            string message = PostprocessPrograms(setup, jobs, programPosts, choice, projectFile, projectDirectory, owner, copies, ref published);
+            stage = numberOperations ? "\u041D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u044F \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439, \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435 \u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u0435 \u0423\u041F/BIN" : "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435 \u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u0435 \u0423\u041F/BIN";
+            string message = OperationNumbering.Run(session, jobs, numberOperations,
+                delegate { return PostprocessPrograms(setup, jobs, programPosts, choice, projectFile, projectDirectory, owner, copies, ref published); },
+                delegate { return published; });
             stage = "\u041F\u043E\u043A\u0430\u0437 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u0430 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u044F";
             if (message != null)
                 RuntimeForms.Message(owner, message, ScriptInfo.WindowTitle("\u0420\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442"), "OK", "Information", "Button1");
@@ -700,6 +704,85 @@ internal sealed class OperationSelectionSnapshot
     }
 }
 
+internal sealed class OperationNumbering
+{
+    private readonly List<NXOpen.CAM.Operation> operations = new List<NXOpen.CAM.Operation>();
+    private readonly List<string> names = new List<string>();
+
+    internal static OperationNumbering Plan(List<ProgramJob> jobs)
+    {
+        OperationNumbering result = new OperationNumbering();
+        HashSet<Tag> seen = new HashSet<Tag>();
+        foreach (ProgramJob job in jobs)
+        {
+            List<NXOpen.CAM.Operation> ordered = new List<NXOpen.CAM.Operation>();
+            HashSet<Tag> groups = new HashSet<Tag>();
+            foreach (CamObject obj in job.Objects) Collect(obj, ordered, groups);
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                NXOpen.CAM.Operation operation = ordered[i];
+                if (!seen.Add(operation.Tag)) throw new InvalidOperationException("\u041E\u043F\u0435\u0440\u0430\u0446\u0438\u044F \u043F\u043E\u043F\u0430\u043B\u0430 \u0432 \u043D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u043E \u0432\u044B\u0432\u043E\u0434\u0438\u043C\u044B\u0445 \u0423\u041F: " + operation.Name);
+                string original = operation.Name ?? "";
+                string body = Regex.Replace(original, @"\A(?:[0-9]+_)+", "");
+                if (body.Length == 0)
+                {
+                    Match numeric = Regex.Match(original, @"([0-9]+)_$");
+                    body = numeric.Success ? numeric.Groups[1].Value : "\u041E\u043F\u0435\u0440\u0430\u0446\u0438\u044F";
+                }
+                string name = (i + 1).ToString(CultureInfo.InvariantCulture) + "_" + body;
+                if (name == original) continue;
+                result.operations.Add(operation); result.names.Add(name);
+            }
+        }
+        return result;
+    }
+    private static void Collect(CamObject obj, List<NXOpen.CAM.Operation> result, HashSet<Tag> groups)
+    {
+        NXOpen.CAM.Operation operation = obj as NXOpen.CAM.Operation;
+        if (operation != null) { result.Add(operation); return; }
+        NCGroup group = obj as NCGroup;
+        if (group == null) return;
+        if (!groups.Add(group.Tag)) throw new InvalidOperationException("\u041F\u043E\u0432\u0442\u043E\u0440\u043D\u0430\u044F \u043F\u0430\u043F\u043A\u0430 \u043F\u0440\u0438 \u043D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u0438 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439: " + group.Name);
+        foreach (CamObject member in group.GetMembers()) Collect(member, result, groups);
+    }
+    private void Apply()
+    {
+        // Free old numbered names before assigning the new order, including swaps.
+        string temporary = "NXRN_" + Guid.NewGuid().ToString("N").Substring(0, 16) + "_";
+        for (int i = 0; i < operations.Count; i++) operations[i].SetName(temporary + i.ToString(CultureInfo.InvariantCulture));
+        for (int i = 0; i < operations.Count; i++)
+        {
+            operations[i].SetName(names[i]);
+            if (!String.Equals(operations[i].Name, names[i], StringComparison.Ordinal))
+                throw new InvalidOperationException("NX \u043D\u0435 \u043F\u0440\u0438\u043D\u044F\u043B \u0438\u043C\u044F \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u00AB" + names[i] + "\u00BB. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u0441\u043E\u0432\u043F\u0430\u0434\u0430\u044E\u0449\u0438\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u044F.");
+        }
+    }
+    internal static string Run(Session session, List<ProgramJob> jobs, bool enabled, Func<string> output, Func<bool> published)
+    {
+        if (!enabled) return output();
+        OperationNumbering plan = Plan(jobs);
+        if (plan.operations.Count == 0) return output();
+        Session.UndoMarkId mark = session.SetUndoMark(Session.MarkVisibility.Visible, ScriptInfo.WindowTitle("\u041D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u044F \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439"));
+        Exception processingError = null;
+        try { plan.Apply(); return output(); }
+        catch (Exception ex) { processingError = ex; throw; }
+        finally
+        {
+            // Cancel/failure before any published NC file restores the exact NX names.
+            // Successful (or partially published) output retains matching names and its undo mark.
+            if (!published())
+            {
+                try { session.UndoToMark(mark, null); session.DeleteUndoMark(mark, null); }
+                catch (Exception restoreError)
+                {
+                    throw new InvalidOperationException("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C \u0438\u043C\u0435\u043D\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439. \u0418\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439\u0442\u0435 \u043E\u0442\u043C\u0435\u043D\u0443 \u0432 NX \u0438 \u043F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u0434\u0435\u0440\u0435\u0432\u043E \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C.",
+                        processingError == null ? restoreError : new AggregateException(processingError, restoreError));
+                }
+            }
+        }
+    }
+}
+
 internal static class ProgramSelection
 {
     public static List<ProgramJob> Build(NCGroup root, Tag[] tags)
@@ -1246,10 +1329,12 @@ internal sealed class ProgramFolderPicker : RouterDialog
     private readonly List<object> nodes = new List<object>();
     private readonly object tree = RuntimeForms.New("TreeView");
     private readonly object countLabel, next;
+    private readonly object numberOperations = RuntimeForms.New("CheckBox");
     private bool updating;
     internal List<ProgramJob> Jobs;
+    internal bool NumberOperations { get { return (bool)RuntimeForms.Get(numberOperations, "Checked"); } }
 
-    internal ProgramFolderPicker(NCGroup programRoot, OperationSelectionSnapshot selectedOperations) : base("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u044B \u0434\u043B\u044F \u0432\u044B\u0432\u043E\u0434\u0430", 158)
+    internal ProgramFolderPicker(NCGroup programRoot, OperationSelectionSnapshot selectedOperations) : base("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u044B \u0434\u043B\u044F \u0432\u044B\u0432\u043E\u0434\u0430", 194)
     {
         this.programRoot = programRoot; this.selectedOperations = selectedOperations;
         entries = ProgramFolderCatalog.Read(programRoot);
@@ -1259,6 +1344,12 @@ internal sealed class ProgramFolderPicker : RouterDialog
         Position(selectedButton, 0, 108, 760, 38); RuntimeForms.SetEnum(selectedButton, "Anchor", "Top, Left, Right");
         RuntimeForms.Call(Tips, "SetToolTip", selectedButton, "\u0418\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u044E\u0442\u0441\u044F \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438, \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0435 \u0432 \u043D\u0430\u0432\u0438\u0433\u0430\u0442\u043E\u0440\u0435 NX \u043F\u0435\u0440\u0435\u0434 \u0437\u0430\u043F\u0443\u0441\u043A\u043E\u043C \u0441\u043A\u0440\u0438\u043F\u0442\u0430.");
         RuntimeForms.On(selectedButton, "Click", delegate { EditSelectedOperations(); }); RuntimeForms.Add(Header, selectedButton);
+        Position(numberOperations, 0, 156, 760, 28);
+        RuntimeForms.Set(numberOperations, "Text", "\u041D\u0443\u043C\u0435\u0440\u043E\u0432\u0430\u0442\u044C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438");
+        RuntimeForms.Set(numberOperations, "Checked", false);
+        RuntimeForms.SetEnum(numberOperations, "Anchor", "Top, Left, Right");
+        RuntimeForms.Call(Tips, "SetToolTip", numberOperations, "\u041F\u0435\u0440\u0435\u0434 \u0432\u044B\u0432\u043E\u0434\u043E\u043C \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C 1_, 2_, ... \u043A \u0438\u043C\u0435\u043D\u0430\u043C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u0432 \u0434\u0435\u0440\u0435\u0432\u0435 NX. \u0412 \u043A\u0430\u0436\u0434\u043E\u0439 \u0423\u041F \u043D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u044F \u043D\u0430\u0447\u0438\u043D\u0430\u0435\u0442\u0441\u044F \u0441 1. \u0411\u0435\u0437 \u0433\u0430\u043B\u043E\u0447\u043A\u0438 \u0438\u043C\u0435\u043D\u0430 \u043D\u0435 \u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F.");
+        RuntimeForms.Add(Header, numberOperations);
         // Replace the flat FlowLayoutPanel in the same docking position.
         object controls = RuntimeForms.Get(Window, "Controls");
         RuntimeForms.Call(controls, "Remove", Grid); RuntimeForms.Dispose(Grid);
@@ -1499,6 +1590,178 @@ internal sealed class ProgramPostPicker : RouterDialog
     }
 }
 
+internal sealed class PostPathsDialog : RouterDialog
+{
+    private readonly PostIniDocument document;
+    private readonly Func<string, string> environment;
+    private readonly object list = RuntimeForms.New("ListBox");
+    private readonly object nameInput = RuntimeForms.New("TextBox");
+    private readonly object tclInput = RuntimeForms.New("TextBox");
+    private readonly object defInput = RuntimeForms.New("TextBox");
+    private readonly object details = RuntimeForms.New("Panel");
+    private readonly object status;
+    private readonly object remove;
+    private int active = -1;
+    private bool updating;
+
+    internal PostPathsDialog(string configPath, Func<string, string> environment) : base("\u041F\u0443\u0442\u0438 \u043A \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u0430\u043C", 62)
+    {
+        this.environment = environment; document = new PostIniDocument(configPath);
+        object hint = Label("\u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 \u043F\u043E\u0441\u0442 \u0438\u043B\u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0435\u0433\u043E \u0441\u043B\u0435\u0432\u0430. \u0418\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F \u0437\u0430\u043F\u0438\u0441\u044B\u0432\u0430\u044E\u0442\u0441\u044F \u043F\u043E\u0441\u043B\u0435 \u043D\u0430\u0436\u0430\u0442\u0438\u044F \u00AB\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C\u00BB.\nINI: " + document.Path, 0, 0, 760, 52);
+        RuntimeForms.Set(hint, "AutoEllipsis", true); RuntimeForms.SetEnum(hint, "Anchor", "Top, Left, Right");
+        RuntimeForms.Call(Tips, "SetToolTip", hint, document.Path); RuntimeForms.Add(Header, hint);
+        RuntimeForms.Call(RuntimeForms.Get(Window, "Controls"), "Remove", Grid); RuntimeForms.Dispose(Grid);
+        object body = RuntimeForms.New("Panel"); RuntimeForms.SetEnum(body, "Dock", "Fill");
+        RuntimeForms.Add(Window, body); RuntimeForms.Call(RuntimeForms.Get(Window, "Controls"), "SetChildIndex", body, 0);
+        object left = RuntimeForms.New("Panel"); RuntimeForms.Set(left, "Width", 244); RuntimeForms.SetEnum(left, "Dock", "Left");
+        object actions = RuntimeForms.New("Panel"); RuntimeForms.Set(actions, "Height", 46); RuntimeForms.SetEnum(actions, "Dock", "Bottom");
+        RuntimeForms.SetEnum(list, "Dock", "Fill"); RuntimeForms.Set(list, "IntegralHeight", false);
+        RuntimeForms.Set(list, "HorizontalScrollbar", true);
+        object add = Button("\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C\u2026", 118, 36); Position(add, 0, 8, 118, 36);
+        remove = Button("\u0423\u0431\u0440\u0430\u0442\u044C", 114, 36); Position(remove, 126, 8, 114, 36);
+        RuntimeForms.Call(Tips, "SetToolTip", remove, "\u0423\u0431\u0440\u0430\u0442\u044C \u0437\u0430\u043F\u0438\u0441\u044C \u0438\u0437 INI. \u0424\u0430\u0439\u043B\u044B TCL \u0438 DEF \u043D\u0435 \u0443\u0434\u0430\u043B\u044F\u044E\u0442\u0441\u044F.");
+        RuntimeForms.Add(actions, add); RuntimeForms.Add(actions, remove);
+        RuntimeForms.Add(left, list); RuntimeForms.Add(left, actions);
+        RuntimeForms.SetEnum(details, "Dock", "Fill"); RuntimeForms.Set(details, "Width", 536);
+        RuntimeForms.Add(body, details); RuntimeForms.Add(body, left);
+        RuntimeForms.Add(details, Label("\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435", 16, 8, 480, 22));
+        Position(nameInput, 16, 32, 506, 28); RuntimeForms.SetEnum(nameInput, "Anchor", "Top, Left, Right"); RuntimeForms.Add(details, nameInput);
+        RuntimeForms.Add(details, Label("TCL", 16, 80, 480, 22));
+        Position(tclInput, 16, 104, 392, 28); RuntimeForms.SetEnum(tclInput, "Anchor", "Top, Left, Right"); RuntimeForms.Add(details, tclInput);
+        object tclBrowse = Button("\u041E\u0431\u0437\u043E\u0440\u2026", 104, 30); Position(tclBrowse, 418, 102, 104, 30);
+        RuntimeForms.SetEnum(tclBrowse, "Anchor", "Top, Right"); RuntimeForms.Add(details, tclBrowse);
+        RuntimeForms.Add(details, Label("DEF", 16, 152, 480, 22));
+        Position(defInput, 16, 176, 392, 28); RuntimeForms.SetEnum(defInput, "Anchor", "Top, Left, Right"); RuntimeForms.Add(details, defInput);
+        object defBrowse = Button("\u041E\u0431\u0437\u043E\u0440\u2026", 104, 30); Position(defBrowse, 418, 174, 104, 30);
+        RuntimeForms.SetEnum(defBrowse, "Anchor", "Top, Right"); RuntimeForms.Add(details, defBrowse);
+        status = Label("", 16, 224, 506, 90); RuntimeForms.SetEnum(status, "Anchor", "Top, Left, Right"); RuntimeForms.Add(details, status);
+        object save = Button("\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C", 124, 38); Position(save, 536, 6, 124, 38);
+        RuntimeForms.SetEnum(save, "Anchor", "Bottom, Right"); RuntimeForms.Add(Footer, save); RuntimeForms.Set(Window, "AcceptButton", save);
+        RuntimeForms.On(list, "SelectedIndexChanged", delegate { SelectEntry(); });
+        RuntimeForms.On(nameInput, "TextChanged", delegate { EditEntry(); });
+        RuntimeForms.On(tclInput, "TextChanged", delegate { EditEntry(); });
+        RuntimeForms.On(defInput, "TextChanged", delegate { EditEntry(); });
+        RuntimeForms.On(add, "Click", delegate { AddPost(); });
+        RuntimeForms.On(remove, "Click", delegate { RemovePost(); });
+        RuntimeForms.On(tclBrowse, "Click", delegate { Browse(true); });
+        RuntimeForms.On(defBrowse, "Click", delegate { Browse(false); });
+        RuntimeForms.On(save, "Click", delegate { Save(); });
+        RefreshList(document.Posts.Count > 0 ? 0 : -1);
+    }
+    private void RefreshList(int selected)
+    {
+        updating = true;
+        try
+        {
+            object items = RuntimeForms.Get(list, "Items"); RuntimeForms.Call(list, "BeginUpdate");
+            try { RuntimeForms.Call(items, "Clear"); foreach (PostPathEntry p in document.Posts) RuntimeForms.Call(items, "Add", p.Name.Length == 0 ? "\u0411\u0435\u0437 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u044F" : p.Name); }
+            finally { RuntimeForms.Call(list, "EndUpdate"); }
+            RuntimeForms.Set(list, "SelectedIndex", selected);
+        }
+        finally { updating = false; }
+        SelectEntry();
+    }
+    private void SelectEntry()
+    {
+        if (updating) return;
+        active = (int)RuntimeForms.Get(list, "SelectedIndex");
+        updating = true;
+        try
+        {
+            bool selected = active >= 0 && active < document.Posts.Count;
+            PostPathEntry post = selected ? document.Posts[active] : null;
+            RuntimeForms.Set(details, "Enabled", selected); RuntimeForms.Set(remove, "Enabled", selected);
+            RuntimeForms.Set(nameInput, "Text", selected ? post.Name : "");
+            RuntimeForms.Set(tclInput, "Text", selected ? post.Tcl : "");
+            RuntimeForms.Set(defInput, "Text", selected ? post.Def : "");
+            RuntimeForms.Set(status, "Text", !selected ? "" : post.Def.Length == 0 ? "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 DEF-\u0444\u0430\u0439\u043B \u0434\u043B\u044F \u044D\u0442\u043E\u0433\u043E \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u0430." : "\u041F\u0440\u0438 \u0432\u044B\u0431\u043E\u0440\u0435 TCL \u043E\u0434\u043D\u043E\u0438\u043C\u0451\u043D\u043D\u044B\u0439 DEF \u043F\u043E\u0434\u0441\u0442\u0430\u0432\u043B\u044F\u0435\u0442\u0441\u044F \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0438.");
+            RuntimeForms.Call(Tips, "SetToolTip", tclInput, selected ? post.Tcl : "");
+            RuntimeForms.Call(Tips, "SetToolTip", defInput, selected ? post.Def : "");
+        }
+        finally { updating = false; }
+    }
+    private void EditEntry()
+    {
+        if (updating || active < 0) return;
+        PostPathEntry post = document.Posts[active];
+        string name = (string)RuntimeForms.Get(nameInput, "Text"); bool renamed = name != post.Name;
+        post.Name = name; post.Tcl = (string)RuntimeForms.Get(tclInput, "Text"); post.Def = (string)RuntimeForms.Get(defInput, "Text");
+        if (renamed)
+        {
+            updating = true;
+            try { RuntimeForms.Get(list, "Items").GetType().GetProperty("Item").SetValue(RuntimeForms.Get(list, "Items"), name.Length == 0 ? "\u0411\u0435\u0437 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u044F" : name, new object[] { active }); }
+            finally { updating = false; }
+        }
+        RuntimeForms.Call(Tips, "SetToolTip", tclInput, post.Tcl); RuntimeForms.Call(Tips, "SetToolTip", defInput, post.Def);
+        RuntimeForms.Set(status, "Text", post.Def.Length == 0 ? "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 DEF-\u0444\u0430\u0439\u043B \u0434\u043B\u044F \u044D\u0442\u043E\u0433\u043E \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u0430." : "\u0418\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F \u0435\u0449\u0451 \u043D\u0435 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u044B.");
+    }
+    private string PickFile(bool tcl, string current)
+    {
+        object dialog = RuntimeForms.New("OpenFileDialog");
+        try
+        {
+            RuntimeForms.Set(dialog, "Title", ScriptInfo.WindowTitle(tcl ? "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 TCL" : "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 DEF"));
+            RuntimeForms.Set(dialog, "Filter", tcl ? "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440 (*.tcl)|*.tcl" : "\u041E\u043F\u0440\u0435\u0434\u0435\u043B\u0435\u043D\u0438\u0435 \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u0430 (*.def)|*.def");
+            RuntimeForms.Set(dialog, "CheckFileExists", true); RuntimeForms.Set(dialog, "CheckPathExists", true);
+            RuntimeForms.Set(dialog, "Multiselect", false); RuntimeForms.Set(dialog, "RestoreDirectory", true);
+            string initial = IOPath.GetDirectoryName(document.Path);
+            if (!String.IsNullOrWhiteSpace(current))
+            {
+                try
+                {
+                    string resolved = RouterConfig.ResolvePath(current, initial, environment), directory = IOPath.GetDirectoryName(resolved);
+                    if (Directory.Exists(directory)) initial = directory;
+                    if (File.Exists(resolved)) RuntimeForms.Set(dialog, "FileName", resolved);
+                }
+                catch { /* A broken old path must not prevent choosing its replacement. */ }
+            }
+            RuntimeForms.Set(dialog, "InitialDirectory", initial);
+            if (RuntimeForms.Show(dialog, Window) != "OK") return null;
+            string selected = (string)RuntimeForms.Get(dialog, "FileName");
+            string extension = tcl ? ".tcl" : ".def";
+            if (!String.Equals(IOPath.GetExtension(selected), extension, StringComparison.OrdinalIgnoreCase) || !File.Exists(selected))
+                throw new ArgumentException("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0439 \u0444\u0430\u0439\u043B " + extension + ".");
+            return IOPath.GetFullPath(selected);
+        }
+        finally { RuntimeForms.Dispose(dialog); }
+    }
+    private void AddPost()
+    {
+        try
+        {
+            string tcl = PickFile(true, active >= 0 ? document.Posts[active].Tcl : ""); if (tcl == null) return;
+            document.Posts.Add(new PostPathEntry { Name = document.UniqueName(IOPath.GetFileNameWithoutExtension(tcl)), Tcl = tcl, Def = PostIniDocument.CompanionDef(tcl) });
+            RefreshList(document.Posts.Count - 1); RuntimeForms.Call(nameInput, "Focus");
+        }
+        catch (Exception ex) { ShowProblem(ex); }
+    }
+    private void Browse(bool tcl)
+    {
+        try
+        {
+            if (active < 0) return;
+            PostPathEntry post = document.Posts[active];
+            string path = PickFile(tcl, tcl ? post.Tcl : post.Def); if (path == null) return;
+            if (tcl)
+            {
+                string previousName = IOPath.GetFileNameWithoutExtension(post.Tcl);
+                if (String.IsNullOrWhiteSpace(post.Name) || post.Name == previousName) post.Name = IOPath.GetFileNameWithoutExtension(path);
+                post.Tcl = path; post.Def = PostIniDocument.CompanionDef(path);
+            }
+            else post.Def = path;
+            RefreshList(active);
+        }
+        catch (Exception ex) { ShowProblem(ex); }
+    }
+    private void RemovePost()
+    { if (active >= 0) { int previous = active; document.Posts.RemoveAt(active); RefreshList(Math.Min(previous, document.Posts.Count - 1)); } }
+    private void Save()
+    {
+        try { document.Save(environment); Finish("OK"); }
+        catch (Exception ex) { ShowProblem(ex); }
+    }
+}
+
 internal sealed class PostPicker : RouterDialog
 {
     private readonly string configPath;
@@ -1528,9 +1791,12 @@ internal sealed class PostPicker : RouterDialog
         RuntimeForms.Set(source, "AutoEllipsis", true);
         RuntimeForms.SetEnum(source, "Anchor", "Top, Left, Right");
         RuntimeForms.Add(Header, source);
-        object edit = Button("\u041E\u0442\u043A\u0440\u044B\u0442\u044C INI", 170, 38);
-        object reload = Button("\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C", 170, 38);
-        Position(edit, 0, 8, 170, 38); Position(reload, 182, 8, 170, 38);
+        object edit = Button("\u041E\u0442\u043A\u0440\u044B\u0442\u044C INI", 130, 38);
+        object reload = Button("\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C", 122, 38);
+        object configure = Button("\u041F\u0443\u0442\u0438 \u043A \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u0430\u043C", 272, 38);
+        Position(configure, 0, 8, 272, 38); Position(edit, 284, 8, 130, 38); Position(reload, 426, 8, 122, 38);
+        RuntimeForms.Add(Footer, configure);
+        RuntimeForms.On(configure, "Click", delegate { ConfigurePosts(); });
         RuntimeForms.Add(Footer, edit); RuntimeForms.Add(Footer, reload);
         RuntimeForms.On(edit, "Click", delegate { EditConfig(); });
         RuntimeForms.On(reload, "Click", delegate { Reload(); });
@@ -1549,6 +1815,11 @@ internal sealed class PostPicker : RouterDialog
         posts = new List<PostDefinition>();
         try
         {
+            if (!File.Exists(configPath))
+            {
+                RuntimeForms.Set(source, "Text", "\u041D\u0430\u0436\u043C\u0438\u0442\u0435 \u00AB\u041F\u0443\u0442\u0438 \u043A \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u0430\u043C\u00BB, \u0447\u0442\u043E\u0431\u044B \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043F\u043E\u0441\u0442\u044B \u0438 \u0441\u043E\u0437\u0434\u0430\u0442\u044C INI \u0440\u044F\u0434\u043E\u043C \u0441\u043E \u0441\u043A\u0440\u0438\u043F\u0442\u043E\u043C.");
+                RuntimeForms.Set(split, "Enabled", false); DrawPosts(); return;
+            }
             RouterConfig candidate = RouterConfig.Load(configPath, environment);
             List<PostDefinition> loaded = candidate.GetPosts(environment);
             Config = candidate;
@@ -1566,6 +1837,19 @@ internal sealed class PostPicker : RouterDialog
         }
         RuntimeForms.Set(split, "Enabled", Config != null && posts.Count > 0 && jobs.Count > 0);
         DrawPosts();
+    }
+
+    private void ConfigurePosts()
+    {
+        try
+        {
+            using (PostPathsDialog dialog = new PostPathsDialog(configPath, environment))
+            {
+                if (dialog.ShowDialog(Window) != "OK") return;
+            }
+            RuntimeForms.Set(search, "Text", ""); Reload();
+        }
+        catch (Exception ex) { ShowProblem(ex); }
     }
 
     private void SplitPosts()
@@ -1603,7 +1887,7 @@ internal sealed class PostPicker : RouterDialog
             });
         }
         if (visible == 0)
-            RuntimeForms.Add(Grid, Label("\u041D\u0435\u0442 \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u043E\u0432 \u0434\u043B\u044F \u0432\u044B\u0431\u043E\u0440\u0430. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 INI \u0438 \u0441\u0442\u0440\u043E\u043A\u0443 \u043F\u043E\u0438\u0441\u043A\u0430.", 0, 0, 700, 42));
+            RuntimeForms.Add(Grid, Label("\u041D\u0435\u0442 \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u043E\u0432 \u0434\u043B\u044F \u0432\u044B\u0431\u043E\u0440\u0430. \u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 \u0438\u0445 \u0447\u0435\u0440\u0435\u0437 \u00AB\u041F\u0443\u0442\u0438 \u043A \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u0430\u043C\u00BB \u0438\u043B\u0438 \u0438\u0437\u043C\u0435\u043D\u0438\u0442\u0435 \u043F\u043E\u0438\u0441\u043A.", 0, 0, 700, 42));
         RuntimeForms.Call(Grid, "ResumeLayout");
     }
 
@@ -3329,7 +3613,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.35";
+    internal const string SCRIPT_VERSION = "V1.37";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
 
     internal static string WindowTitle(string detail)
@@ -3529,7 +3813,200 @@ public static class PostCatalog
     }
 }
 
-// INI is the authoritative configuration. The journal only reads it.
+// INI is authoritative; the post-path editor preserves unrelated sections.
+internal sealed class PostPathEntry
+{
+    internal string Name = "", Tcl = "", Def = "", Extension;
+    internal IniSection Original;
+}
+
+// Edits only explicit post sections. Other sections and untouched lines are preserved.
+internal sealed class PostIniDocument
+{
+    internal readonly string Path;
+    internal readonly List<PostPathEntry> Posts = new List<PostPathEntry>();
+    private readonly byte[] originalBytes;
+    private readonly string originalText, newline;
+    private readonly Encoding encoding;
+    private readonly List<IniSection> sections;
+
+    internal PostIniDocument(string path)
+    {
+        Path = IOPath.GetFullPath(path);
+        if (File.Exists(Path))
+        {
+            originalBytes = File.ReadAllBytes(Path);
+            int offset = 0;
+            if (originalBytes.Length >= 2 && originalBytes[0] == 255 && originalBytes[1] == 254)
+            { encoding = new UnicodeEncoding(false, true, true); offset = 2; }
+            else if (originalBytes.Length >= 2 && originalBytes[0] == 254 && originalBytes[1] == 255)
+            { encoding = new UnicodeEncoding(true, true, true); offset = 2; }
+            else
+            {
+                bool bom = originalBytes.Length >= 3 && originalBytes[0] == 239 && originalBytes[1] == 187 && originalBytes[2] == 191;
+                encoding = new UTF8Encoding(bom, true); if (bom) offset = 3;
+            }
+            try { originalText = encoding.GetString(originalBytes, offset, originalBytes.Length - offset); }
+            catch (DecoderFallbackException) { throw new FormatException("\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u0435 INI \u0432 UTF-8 \u0438\u043B\u0438 UTF-16 \u0441 BOM:\n" + Path); }
+        }
+        else { encoding = new UTF8Encoding(true, true); originalText = "[Settings]\r\nPostList=auto\r\n"; }
+        Match ending = Regex.Match(originalText, "\\r\\n|\\r|\\n");
+        newline = ending.Success ? ending.Value : "\r\n";
+        sections = IniReader.Parse(originalText, Path);
+        foreach (IniSection section in sections)
+        {
+            if (!section.Name.StartsWith("Post ", StringComparison.OrdinalIgnoreCase)) continue;
+            Posts.Add(new PostPathEntry { Name = section.Name.Substring(5).Trim(),
+                Tcl = Value(section, "Tcl"), Def = Value(section, "Def"),
+                Extension = section.Find("Extension") == null ? null : Value(section, "Extension"), Original = section });
+        }
+    }
+
+    private static string Value(IniSection section, string key)
+    { IniEntry entry = section.Find(key); return entry == null ? "" : entry.Value; }
+
+    internal string UniqueName(string name)
+    {
+        string result = name; int suffix = 2;
+        while (Posts.Exists(delegate(PostPathEntry p) { return String.Equals(p.Name.Trim(), result, StringComparison.OrdinalIgnoreCase); }))
+            result = name + "_" + (suffix++).ToString(CultureInfo.InvariantCulture);
+        return result;
+    }
+
+    internal static string CompanionDef(string tcl)
+    { string path = IOPath.ChangeExtension(tcl, ".def"); return File.Exists(path) ? path : ""; }
+
+    private static void CheckText(string value, string description, bool name)
+    {
+        if (String.IsNullOrWhiteSpace(value)) throw new ArgumentException("\u0423\u043A\u0430\u0436\u0438\u0442\u0435 " + description + ".");
+        foreach (char c in value)
+            if (Char.IsControl(c) || c == '\uFEFF' || (name && (c == '[' || c == ']')))
+                throw new ArgumentException("\u041D\u0435\u0434\u043E\u043F\u0443\u0441\u0442\u0438\u043C\u044B\u0439 \u0441\u0438\u043C\u0432\u043E\u043B: " + description + ".");
+    }
+
+    internal string BuildText(Func<string, string> environment)
+    {
+        HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (PostPathEntry post in Posts)
+        {
+            post.Name = post.Name.Trim(); post.Tcl = post.Tcl.Trim(); post.Def = post.Def.Trim();
+            CheckText(post.Name, "\u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u0430", true);
+            CheckText(post.Tcl, "TCL \u0434\u043B\u044F \u00AB" + post.Name + "\u00BB", false);
+            CheckText(post.Def, "DEF \u0434\u043B\u044F \u00AB" + post.Name + "\u00BB", false);
+            if (!names.Add(post.Name)) throw new ArgumentException("\u041F\u043E\u0432\u0442\u043E\u0440\u044F\u0435\u0442\u0441\u044F \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u0430 \u00AB" + post.Name + "\u00BB.");
+        }
+        if (originalBytes == null && Posts.Count == 0) throw new ArgumentException("\u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440 \u043F\u0435\u0440\u0435\u0434 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u0435\u043C.");
+        List<string> lines = new List<string>();
+        foreach (Match line in Regex.Matches(originalText, @"[^\r\n]*(?:\r\n|\r|\n|$)"))
+            if (line.Length > 0) lines.Add(line.Value);
+        Dictionary<int, string> edits = new Dictionary<int, string>();
+        Dictionary<int, string> insertions = new Dictionary<int, string>();
+        for (int s = 0; s < sections.Count; s++)
+        {
+            IniSection section = sections[s];
+            if (!section.Name.StartsWith("Post ", StringComparison.OrdinalIgnoreCase)) continue;
+            PostPathEntry draft = Posts.Find(delegate(PostPathEntry p) { return p.Original == section; });
+            if (draft == null)
+            {
+                edits[section.Line - 1] = "";
+                foreach (IniEntry entry in section.Entries) edits[entry.Line - 1] = "";
+                continue;
+            }
+            if (draft.Name != section.Name.Substring(5).Trim())
+                edits[section.Line - 1] = ReplaceLine(lines[section.Line - 1], "[Post " + draft.Name + "]");
+            int end = s + 1 < sections.Count ? sections[s + 1].Line - 1 : lines.Count;
+            UpdateValue(section, "Tcl", draft.Tcl, end, lines, edits, insertions);
+            UpdateValue(section, "Def", draft.Def, end, lines, edits, insertions);
+        }
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i <= lines.Count; i++)
+        {
+            string insertion;
+            if (insertions.TryGetValue(i, out insertion)) { EnsureLineEnd(result); result.Append(insertion); }
+            if (i < lines.Count) { string edit; result.Append(edits.TryGetValue(i, out edit) ? edit : lines[i]); }
+        }
+        foreach (PostPathEntry post in Posts)
+        {
+            if (post.Original != null) continue;
+            EnsureLineEnd(result); result.Append(newline);
+            result.Append("[Post " + post.Name + "]" + newline + "Tcl=" + post.Tcl + newline + "Def=" + post.Def + newline);
+            if (post.Extension != null) result.Append("Extension=" + post.Extension + newline);
+        }
+        string text = result.ToString();
+        RouterConfig candidate = RouterConfig.Parse(text, Path, environment);
+        foreach (PostDefinition post in candidate.Posts) post.Validate();
+        return text;
+    }
+
+    private void UpdateValue(IniSection section, string key, string value, int end, List<string> lines,
+        Dictionary<int, string> edits, Dictionary<int, string> insertions)
+    {
+        IniEntry entry = section.Find(key);
+        if (entry != null)
+        {
+            if (entry.Value == value) return;
+            string line = lines[entry.Line - 1];
+            edits[entry.Line - 1] = ReplaceLine(line, line.Substring(0, line.IndexOf('=') + 1) + value);
+        }
+        else
+        {
+            string before; insertions.TryGetValue(end, out before);
+            insertions[end] = (before ?? "") + key + "=" + value + newline;
+        }
+    }
+    private static string ReplaceLine(string original, string body)
+    { return body + (original.EndsWith("\r\n") ? "\r\n" : original.EndsWith("\n") ? "\n" : original.EndsWith("\r") ? "\r" : ""); }
+    private void EnsureLineEnd(StringBuilder text)
+    { if (text.Length > 0 && text[text.Length - 1] != '\r' && text[text.Length - 1] != '\n') text.Append(newline); }
+    private static bool Same(byte[] left, byte[] right)
+    {
+        if (left == null || right == null) return left == right;
+        if (left.Length != right.Length) return false;
+        for (int i = 0; i < left.Length; i++) if (left[i] != right[i]) return false;
+        return true;
+    }
+
+    internal void Save(Func<string, string> environment)
+    {
+        string text = BuildText(environment);
+        byte[] preamble = encoding.GetPreamble(), body = encoding.GetBytes(text);
+        byte[] bytes = new byte[preamble.Length + body.Length];
+        Buffer.BlockCopy(preamble, 0, bytes, 0, preamble.Length); Buffer.BlockCopy(body, 0, bytes, preamble.Length, body.Length);
+        if (Same(bytes, originalBytes)) return;
+        if (File.Exists(Path) && (File.GetAttributes(Path) & FileAttributes.ReadOnly) != 0)
+            throw new IOException("INI \u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u0447\u0442\u0435\u043D\u0438\u044F. \u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u0435 \u0437\u0430\u043F\u0438\u0441\u044C \u0432 \u0444\u0430\u0439\u043B:\n" + Path);
+        // No sidecar, backup or temporary file: validate first, then write this INI under an exclusive writer lock.
+        bool created = false;
+        try
+        {
+            using (FileStream stream = new FileStream(Path, originalBytes == null ? FileMode.CreateNew : FileMode.Open,
+                FileAccess.ReadWrite, FileShare.Read))
+            {
+                created = originalBytes == null;
+                byte[] current = new byte[checked((int)stream.Length)]; int read = 0;
+                while (read < current.Length) { int n = stream.Read(current, read, current.Length - read); if (n == 0) throw new EndOfStreamException(); read += n; }
+                if (originalBytes != null && !Same(current, originalBytes))
+                    throw new IOException("INI \u0438\u0437\u043C\u0435\u043D\u0451\u043D \u0434\u0440\u0443\u0433\u0438\u043C \u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u043C. \u0417\u0430\u043A\u0440\u043E\u0439\u0442\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438, \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \u00AB\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C\u00BB \u0438 \u043E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0438\u0445 \u0441\u043D\u043E\u0432\u0430.");
+                try
+                {
+                    stream.Position = 0; stream.Write(bytes, 0, bytes.Length); stream.SetLength(bytes.Length); stream.Flush(true);
+                }
+                catch (Exception writeError)
+                {
+                    try { stream.Position = 0; stream.Write(current, 0, current.Length); stream.SetLength(current.Length); stream.Flush(true); }
+                    catch (Exception restoreError) { throw new IOException("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C \u0438 \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C INI:\n" + Path, new AggregateException(writeError, restoreError)); }
+                    throw;
+                }
+            }
+        }
+        catch
+        {
+            if (created) { try { File.Delete(Path); } catch { } }
+            throw;
+        }
+    }
+}
+
 public sealed class IniEntry
 {
     public string Key;
@@ -3865,10 +4342,15 @@ public sealed class RouterConfig
     }
 
     public static RouterConfig Load(string path, Func<string, string> environment)
+    { return FromSections(IniReader.Read(IOPath.GetFullPath(path)), path, environment); }
+
+    internal static RouterConfig Parse(string text, string path, Func<string, string> environment)
+    { return FromSections(IniReader.Parse(text, path), path, environment); }
+
+    private static RouterConfig FromSections(List<IniSection> sections, string path, Func<string, string> environment)
     {
         RouterConfig config = new RouterConfig();
         config.FilePath = IOPath.GetFullPath(path);
-        List<IniSection> sections = IniReader.Read(config.FilePath);
         string directory = IOPath.GetDirectoryName(config.FilePath);
         foreach (IniSection section in sections)
         {
