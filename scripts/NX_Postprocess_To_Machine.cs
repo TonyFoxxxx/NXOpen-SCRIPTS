@@ -1,6 +1,7 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.40
-// Configure postprocessor paths and machine folders in the UI; optional operation numbering.
+// SCRIPT_VERSION: V1.41
+// Optional numbering, tool descriptions and operation Zmin; centered tree labels.
+// Description behavior: NX_Tool_D_To_Description; Zmin behavior: NX_Operation_Zmin.
 // Preserve NC processing, modal validation, output paths and other INI settings.
 // Siemens NX / Designcenter, Windows. C# journal with an external INI.
 // Keep NX_Postprocess_To_Machine.ini next to this journal.
@@ -90,15 +91,17 @@ public class NX_Postprocess_To_Machine
             if (setup == null) throw new InvalidOperationException("\u0412 \u043F\u0440\u043E\u0435\u043A\u0442\u0435 \u043D\u0435\u0442 CAM-\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0438.");
             stage = "\u041F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043A\u0430 \u043E\u043A\u043E\u043D \u0441\u043A\u0440\u0438\u043F\u0442\u0430";
             OperationSelectionSnapshot selectedOperations = OperationSelectionSnapshot.Capture();
+            ZminSelectionSnapshot zminSelection = ZminSelectionSnapshot.Capture(session, work);
             owner = RuntimeForms.CreateOwner();
             stage = "\u0412\u044B\u0431\u043E\u0440 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C \u0434\u043B\u044F \u0432\u044B\u0432\u043E\u0434\u0430";
             List<ProgramJob> jobs;
-            bool numberOperations;
+            bool numberOperations, updateDescriptions, addZmin;
             using (ProgramFolderPicker dialog = new ProgramFolderPicker(setup.GetRoot(CamSetup.View.ProgramOrder), selectedOperations))
             {
                 if (dialog.ShowDialog(owner) != "OK") return;
                 jobs = dialog.Jobs;
                 numberOperations = dialog.NumberOperations;
+                updateDescriptions = dialog.UpdateDescriptions; addZmin = dialog.AddZmin;
             }
             // Project-wide: include unused tools and tools outside the selected jobs.
             // This gate runs after program selection, before configuration, posting and file writes.
@@ -150,7 +153,8 @@ public class NX_Postprocess_To_Machine
                 break;
             }
             stage = numberOperations ? "\u041D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u044F \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439, \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435 \u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u0435 \u0423\u041F/BIN" : "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435 \u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u0435 \u0423\u041F/BIN";
-            string message = OperationNumbering.Run(session, jobs, numberOperations,
+            stage = "\u041F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043A\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439, \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432 \u0438 \u0432\u044B\u0432\u043E\u0434 \u0423\u041F/BIN";
+            string message = PostPreparation.Run(session, work, jobs, numberOperations, updateDescriptions, addZmin, zminSelection,
                 delegate { return PostprocessPrograms(setup, jobs, programPosts, choice, projectFile, projectDirectory, owner, copies, ref published); },
                 delegate { return published; });
             stage = "\u041F\u043E\u043A\u0430\u0437 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u0430 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u044F";
@@ -760,7 +764,7 @@ internal sealed class OperationNumbering
         if (!groups.Add(group.Tag)) throw new InvalidOperationException("\u041F\u043E\u0432\u0442\u043E\u0440\u043D\u0430\u044F \u043F\u0430\u043F\u043A\u0430 \u043F\u0440\u0438 \u043D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u0438 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439: " + group.Name);
         foreach (CamObject member in group.GetMembers()) Collect(member, result, groups);
     }
-    private void Apply()
+    internal void Apply()
     {
         // Free old numbered names before assigning the new order, including swaps.
         string temporary = "NXRN_" + Guid.NewGuid().ToString("N").Substring(0, 16) + "_";
@@ -796,6 +800,778 @@ internal sealed class OperationNumbering
             }
         }
     }
+}
+
+// Integrated options retain the standalone Description and Zmin algorithms.
+internal static class PostPreparation
+{
+    internal static string Run(Session session, Part part, List<ProgramJob> jobs,
+        bool number, bool description, bool zmin, ZminSelectionSnapshot selection,
+        Func<string> output, Func<bool> published)
+    {
+        if (!description && !zmin) return OperationNumbering.Run(session, jobs, number, output, published);
+        if (zmin) selection.Validate(session, part);
+        bool includeNumbers = false;
+        if (description && !ToolDescriptionUpdate.ChooseDescriptionMode(out includeNumbers)) return null;
+        Session.UndoMarkId mark = session.SetUndoMark(Session.MarkVisibility.Visible,
+            ScriptInfo.WindowTitle("\u041F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043A\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u0438 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432"));
+        Exception processingError = null;
+        string report = "";
+        try
+        {
+            if (description) report = ToolDescriptionUpdate.Run(session, part, includeNumbers) ?? "";
+            if (number) OperationNumbering.Plan(jobs).Apply();
+            if (zmin)
+            {
+                OperationZmin plan = OperationZmin.Prepare(part, selection);
+                plan.Apply(session);
+                report += (report.Length == 0 ? "" : "\n\n") + plan.Result();
+            }
+            string result = output();
+            if (result != null && published() && report.Length > 0) result += "\n\n" + report;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            processingError = ex;
+            if (published() && report.Length > 0)
+                throw new InvalidOperationException(ex.Message + "\n\n" + report, ex);
+            throw;
+        }
+        finally
+        {
+            if (!published())
+            {
+                try
+                {
+                    session.UndoToMark(mark, null);
+                    session.DeleteUndoMark(mark, null);
+                    UFSession.GetUFSession().UiOnt.Refresh();
+                }
+                catch (Exception restoreError)
+                {
+                    throw new InvalidOperationException("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u043D\u043E\u0441\u0442\u044C\u044E \u043E\u0442\u043C\u0435\u043D\u0438\u0442\u044C \u043F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043A\u0443. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u0438\u043C\u0435\u043D\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u0438 Description \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432 \u0438 \u0432\u044B\u043F\u043E\u043B\u043D\u0438\u0442\u0435 \u043E\u0442\u043C\u0435\u043D\u0443 \u0432 NX.",
+                        processingError == null ? restoreError : new AggregateException(processingError, restoreError));
+                }
+            }
+        }
+    }
+}
+
+internal sealed class ZminSelectionSnapshot
+{
+    internal readonly List<NXOpen.CAM.Operation> Operations = new List<NXOpen.CAM.Operation>();
+    internal string Scope;
+    private Exception error;
+    private Tag partTag;
+
+    internal static ZminSelectionSnapshot Capture(Session session, Part part)
+    {
+        ZminSelectionSnapshot result = new ZminSelectionSnapshot();
+        try
+        {
+            result.partTag = part.Tag;
+            List<NXOpen.CAM.Operation> all = new List<NXOpen.CAM.Operation>();
+            HashSet<Tag> operationTags = new HashSet<Tag>(), known = new HashSet<Tag>();
+            foreach (NXOpen.CAM.Operation operation in part.CAMSetup.CAMOperationCollection)
+            { all.Add(operation); operationTags.Add(operation.Tag); known.Add(operation.Tag); }
+            foreach (NCGroup group in part.CAMSetup.CAMGroupCollection) known.Add(group.Tag);
+            HashSet<Tag> selected = null;
+            Exception navigatorError = null;
+            try
+            {
+                int count; Tag[] tags;
+                UFSession.GetUFSession().UiOnt.AskSelectedNodes(out count, out tags);
+                if (count < 0 || count != (tags == null ? 0 : tags.Length))
+                    throw new InvalidOperationException("NX \u0432\u0435\u0440\u043D\u0443\u043B \u043D\u0435\u043F\u043E\u043B\u043D\u044B\u0439 \u0441\u043F\u0438\u0441\u043E\u043A \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u044B\u0445 \u0443\u0437\u043B\u043E\u0432.");
+                if (count > 0)
+                {
+                    selected = new HashSet<Tag>(tags);
+                    if (!selected.IsSubsetOf(known))
+                        throw new InvalidOperationException("\u0412 \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u0438 \u0435\u0441\u0442\u044C \u0443\u0437\u043B\u044B \u0434\u0440\u0443\u0433\u043E\u0433\u043E CAM-\u043F\u0440\u043E\u0435\u043A\u0442\u0430.");
+                }
+            }
+            catch (Exception ex) { navigatorError = ex; selected = null; }
+            if (selected == null)
+            {
+                selected = new HashSet<Tag>();
+                Selection manager = UI.GetUI().SelectionManager;
+                int count = manager.GetNumSelectedObjects();
+                for (int i = 0; i < count; i++)
+                {
+                    TaggedObject obj = manager.GetSelectedTaggedObject(i);
+                    selected.Add(obj.Tag);
+                    if (obj is NXOpen.CAM.Operation && !operationTags.Contains(obj.Tag))
+                        throw new InvalidOperationException("\u0412\u044B\u0434\u0435\u043B\u0435\u043D\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u044F \u0434\u0440\u0443\u0433\u043E\u0439 \u0434\u0435\u0442\u0430\u043B\u0438. \u041E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0435\u0451 CAM-\u043F\u0440\u043E\u0435\u043A\u0442.");
+                }
+                if (navigatorError != null && !selected.Overlaps(operationTags))
+                    throw new InvalidOperationException("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043D\u0430\u0434\u0451\u0436\u043D\u043E \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u0442\u044C \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u0435 \u0432 \u043D\u0430\u0432\u0438\u0433\u0430\u0442\u043E\u0440\u0435.\n\u0412\u044B\u0434\u0435\u043B\u0438\u0442\u0435 \u043D\u0443\u0436\u043D\u044B\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435 \u0437\u0430\u043F\u0443\u0441\u043A.\n\n" + navigatorError.Message, navigatorError);
+            }
+            if (selected.Count == 0)
+            { result.Operations.AddRange(all); result.Scope = "\u0412\u0441\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u043F\u0440\u043E\u0435\u043A\u0442\u0430"; }
+            else
+            {
+                foreach (NXOpen.CAM.Operation operation in all)
+                    if (selected.Contains(operation.Tag)) result.Operations.Add(operation);
+                if (result.Operations.Count == 0)
+                    throw new InvalidOperationException("\u0412\u044B\u0434\u0435\u043B\u0435\u043D\u044B \u043F\u0430\u043F\u043A\u0438 \u0438\u043B\u0438 \u0434\u0440\u0443\u0433\u0438\u0435 \u043E\u0431\u044A\u0435\u043A\u0442\u044B, \u043D\u043E \u043D\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438.\n\n\u0412\u044B\u0434\u0435\u043B\u0438\u0442\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u043B\u0438\u0431\u043E \u043F\u043E\u043B\u043D\u043E\u0441\u0442\u044C\u044E \u0441\u043D\u0438\u043C\u0438\u0442\u0435 \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u0435, \u0447\u0442\u043E\u0431\u044B \u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0430\u0442\u044C \u0432\u0435\u0441\u044C \u043F\u0440\u043E\u0435\u043A\u0442.");
+                result.Scope = "\u0412\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438";
+            }
+        }
+        catch (Exception ex) { result.error = ex; }
+        // A disabled option must not make its selection errors block ordinary posting.
+        return result;
+    }
+
+    internal void Validate(Session session, Part part)
+    {
+        if (error != null) throw new InvalidOperationException("Zmin: " + error.Message, error);
+        if (part.Tag != partTag || session.Parts.Work == null || session.Parts.Work.Tag != partTag
+            || session.Parts.Display == null || session.Parts.Display.Tag != partTag)
+            throw new InvalidOperationException("Zmin: CAM-\u043F\u0440\u043E\u0435\u043A\u0442 \u0434\u043E\u043B\u0436\u0435\u043D \u0431\u044B\u0442\u044C \u0440\u0430\u0431\u043E\u0447\u0435\u0439 \u0438 \u043E\u0442\u043E\u0431\u0440\u0430\u0436\u0430\u0435\u043C\u043E\u0439 \u0434\u0435\u0442\u0430\u043B\u044C\u044E.\n\u041E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0435\u0433\u043E \u0432 \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u043E\u043C \u043E\u043A\u043D\u0435 NX \u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435 \u0437\u0430\u043F\u0443\u0441\u043A.");
+    }
+}
+
+internal sealed class OperationZmin
+{
+    private sealed class Rename
+    {
+        internal NXOpen.CAM.Operation Operation;
+        internal string Old, New, Temporary;
+    }
+    private readonly List<Rename> planned = new List<Rename>();
+    private readonly List<string> skipped = new List<string>();
+    private readonly List<CamObject> allObjects = new List<CamObject>();
+    private string scope, refreshError;
+    private int total, unchanged;
+    private static readonly Regex Suffix = new Regex(@"(?:_Z[+-]?(?:[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+))+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static string NameWithZmin(string name, double value)
+    {
+        string body = Suffix.Replace(name, "");
+        if (body.Length == 0) throw new InvalidOperationException("\u041F\u043E\u0441\u043B\u0435 \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u044F \u0441\u0442\u0430\u0440\u043E\u0433\u043E \u0441\u0443\u0444\u0444\u0438\u043A\u0441\u0430 Z \u0438\u043C\u044F \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u043F\u0443\u0441\u0442\u043E\u0435.");
+        string number = ZminGeometry.Finite(value).ToString("F4", CultureInfo.InvariantCulture).TrimEnd('0').TrimEnd('.');
+        if (number == "-0") number = "0";
+        return body + "_Z" + number;
+    }
+
+    internal static OperationZmin Prepare(Part part, ZminSelectionSnapshot selection)
+    {
+        OperationZmin result = new OperationZmin();
+        result.scope = selection.Scope; result.total = selection.Operations.Count;
+        foreach (NXOpen.CAM.Operation op in part.CAMSetup.CAMOperationCollection) result.allObjects.Add(op);
+        foreach (NCGroup group in part.CAMSetup.CAMGroupCollection) result.allObjects.Add(group);
+        Dictionary<Tag, double[]> origins = new Dictionary<Tag, double[]>();
+        Dictionary<Tag, string> frameErrors = new Dictionary<Tag, string>();
+        foreach (NXOpen.CAM.Operation operation in selection.Operations)
+        {
+            string oldName = operation.Name;
+            try
+            {
+                if (!operation.AskPathExists()) throw new InvalidOperationException("\u041D\u0435\u0442 \u0440\u0430\u0441\u0441\u0447\u0438\u0442\u0430\u043D\u043D\u043E\u0439 \u0442\u0440\u0430\u0435\u043A\u0442\u043E\u0440\u0438\u0438.");
+                if (operation.GetStatus().ToString() == "Regen")
+                    throw new InvalidOperationException("\u0422\u0440\u0430\u0435\u043A\u0442\u043E\u0440\u0438\u044F \u0443\u0441\u0442\u0430\u0440\u0435\u043B\u0430: \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044F \u043F\u0435\u0440\u0435\u0441\u0447\u0451\u0442 \u0432 NX.");
+                NXOpen.CAM.OrientGeometry group = NearestMcs(operation);
+                if (group == null) throw new InvalidOperationException("\u041D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u0430 \u0421\u041A\u0421 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438.");
+                if (frameErrors.ContainsKey(group.Tag)) throw new InvalidOperationException(frameErrors[group.Tag]);
+                double[] origin;
+                if (!origins.TryGetValue(group.Tag, out origin))
+                {
+                    try { origin = ReadOrigin(part, group); origins.Add(group.Tag, origin); }
+                    catch (Exception ex)
+                    {
+                        frameErrors[group.Tag] = "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u0442\u044C \u0421\u041A\u0421: " + ex.Message;
+                        throw new InvalidOperationException(frameErrors[group.Tag], ex);
+                    }
+                }
+                double? minimum = ToolpathMinimum(operation, origin);
+                if (!minimum.HasValue) throw new InvalidOperationException("\u0412 \u0442\u0440\u0430\u0435\u043A\u0442\u043E\u0440\u0438\u0438 \u043D\u0435\u0442 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B\u0445 \u043F\u0435\u0440\u0435\u043C\u0435\u0449\u0435\u043D\u0438\u0439.");
+                string newName = NameWithZmin(oldName, minimum.Value);
+                if (newName == oldName) result.unchanged++;
+                else result.planned.Add(new Rename { Operation = operation, Old = oldName, New = newName });
+            }
+            catch (Exception ex) { result.skipped.Add(oldName + " \u2014 " + ex.Message); }
+        }
+        result.RemoveConflicts();
+        return result;
+    }
+
+    private static NXOpen.CAM.OrientGeometry NearestMcs(NXOpen.CAM.Operation operation)
+    {
+        HashSet<Tag> seen = new HashSet<Tag>(); seen.Add(operation.Tag);
+        NCGroup group = operation.GetParent(CamSetup.View.Geometry);
+        while (group != null)
+        {
+            if (!seen.Add(group.Tag)) throw new InvalidOperationException("\u041E\u0431\u043D\u0430\u0440\u0443\u0436\u0435\u043D \u0446\u0438\u043A\u043B \u0432 \u0434\u0435\u0440\u0435\u0432\u0435 \u0433\u0435\u043E\u043C\u0435\u0442\u0440\u0438\u0438 CAM.");
+            NXOpen.CAM.OrientGeometry mcs = group as NXOpen.CAM.OrientGeometry;
+            if (mcs != null) return mcs;
+            group = group.GetParent();
+        }
+        return null;
+    }
+
+    private static double[] ReadOrigin(Part part, NXOpen.CAM.OrientGeometry group)
+    {
+        if (group.OwningPart == null || group.OwningPart.Tag != part.Tag)
+            throw new InvalidOperationException("MCS \u043F\u0440\u0438\u043D\u0430\u0434\u043B\u0435\u0436\u0438\u0442 \u0434\u0440\u0443\u0433\u043E\u0439 \u0434\u0435\u0442\u0430\u043B\u0438. \u0421\u0434\u0435\u043B\u0430\u0439\u0442\u0435 CAM-\u0444\u0430\u0439\u043B \u0440\u0430\u0431\u043E\u0447\u0435\u0439 \u0438 \u043E\u0442\u043E\u0431\u0440\u0430\u0436\u0430\u0435\u043C\u043E\u0439 \u0434\u0435\u0442\u0430\u043B\u044C\u044E \u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435 \u0437\u0430\u043F\u0443\u0441\u043A.");
+        NXOpen.CAM.MillOrientGeomBuilder builder = part.CAMSetup.CAMGroupCollection.CreateMillOrientGeomBuilder(group);
+        try
+        {
+            CartesianCoordinateSystem csys = builder.Mcs;
+            if (csys == null) throw new InvalidOperationException("\u0423 \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u043E\u0439 \u0433\u0440\u0443\u043F\u043F\u044B \u043D\u0435 \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0435\u043D\u0430 MCS.");
+            Vector3d x, y; csys.GetDirections(out x, out y);
+            double[] ux = ZminGeometry.Unit(Xyz(x)), uy = ZminGeometry.Unit(Xyz(y));
+            if (Math.Abs(ZminGeometry.Dot(ux, uy)) > 1e-6)
+                throw new InvalidOperationException("\u041E\u0441\u0438 \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u043E\u0439 MCS \u043D\u0435 \u043F\u0435\u0440\u043F\u0435\u043D\u0434\u0438\u043A\u0443\u043B\u044F\u0440\u043D\u044B.");
+            ZminGeometry.Unit(ZminGeometry.Cross(ux, uy));
+            return Xyz(csys.Origin);
+        }
+        finally { builder.Destroy(); } // Read only; never Commit the MCS builder.
+    }
+
+    private static double[] Xyz(Point3d p) { return CheckedPoint(p.X, p.Y, p.Z); }
+    private static double[] Xyz(Vector3d p) { return CheckedPoint(p.X, p.Y, p.Z); }
+    private static double[] CheckedPoint(double x, double y, double z)
+    { return new double[] { ZminGeometry.Finite(x), ZminGeometry.Finite(y), ZminGeometry.Finite(z) }; }
+
+    internal static double? ToolpathMinimum(NXOpen.CAM.Operation operation, double[] origin)
+    {
+        NXOpen.CAM.Path path = operation.GetPath();
+        if (path == null) return null;
+        if (path.HasSubPath()) throw new InvalidOperationException("Zmin \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D \u0434\u043B\u044F \u0441\u043E\u0441\u0442\u0430\u0432\u043D\u043E\u0439 \u0442\u0440\u0430\u0435\u043A\u0442\u043E\u0440\u0438\u0438 \u0441 \u043F\u043E\u0434\u0447\u0438\u043D\u0451\u043D\u043D\u044B\u043C\u0438 \u043F\u0443\u0442\u044F\u043C\u0438.");
+        int count = path.NumberOfToolpathEvents;
+        if (count <= 0) return null;
+        string mode = path.ToolAxisType.ToString();
+        if (mode != "Three" && mode != "Five")
+            throw new InvalidOperationException("\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u044B\u0439 \u0444\u043E\u0440\u043C\u0430\u0442 \u043E\u0441\u0438 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430: " + mode);
+        foreach (double coordinate in origin) ZminGeometry.Finite(coordinate);
+        double? minimum = null; double[] previous = null, previousAxis = null;
+        NXOpen.CAM.PathEvent current = null;
+        try
+        {
+            current = path.GetFirstEvent();
+            for (int i = 0; i < count; i++)
+            {
+                if (current == null) throw new InvalidOperationException("\u0422\u0440\u0430\u0435\u043A\u0442\u043E\u0440\u0438\u044F \u0437\u0430\u043A\u043E\u043D\u0447\u0438\u043B\u0430\u0441\u044C \u0434\u043E \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0435\u0433\u043E \u0441\u043E\u0431\u044B\u0442\u0438\u044F.");
+                NXOpen.CAM.CamPathMotionType type;
+                NXOpen.CAM.CamPathMotionShapeType shape;
+                if (path.IsToolpathEventAMotion(current, out type, out shape))
+                {
+                    NXOpen.CAM.PathLinearMotion motion = null;
+                    try
+                    {
+                        if (shape == NXOpen.CAM.CamPathMotionShapeType.Linear) motion = path.GetLinearMotion(current);
+                        else if (shape == NXOpen.CAM.CamPathMotionShapeType.Circular) motion = path.GetCircularMotion(current);
+                        else if (shape == NXOpen.CAM.CamPathMotionShapeType.Helical) motion = path.GetHelixMotion(current);
+                        else throw new InvalidOperationException("Zmin: \u043D\u0435\u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043C\u0430\u044F \u0444\u043E\u0440\u043C\u0430 \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u044F " + shape);
+                        double[] end = Xyz(motion.EndPoint);
+                        double[] axis;
+                        try { axis = ZminGeometry.Unit(Xyz(motion.ToolAxis)); }
+                        catch (Exception ex) { throw new InvalidOperationException("\u041D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u043E \u043D\u0430\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435 \u043E\u0441\u0438 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 \u0432 \u0442\u0440\u0430\u0435\u043A\u0442\u043E\u0440\u0438\u0438: " + ex.Message, ex); }
+                        double value = ZminGeometry.Dot(ZminGeometry.Subtract(end, origin), axis);
+                        if (shape != NXOpen.CAM.CamPathMotionShapeType.Linear)
+                        {
+                            if (previousAxis != null)
+                            {
+                                double[] difference = ZminGeometry.Subtract(axis, previousAxis);
+                                if (ZminGeometry.Dot(difference, difference) > 1e-16)
+                                    throw new InvalidOperationException("\u0414\u0443\u0433\u0430 \u0438\u043B\u0438 \u0432\u0438\u043D\u0442\u043E\u0432\u043E\u0435 \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u0435 \u0441 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u0435\u043C \u043E\u0441\u0438 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430: \u043D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043E\u0447\u043D\u043E \u0434\u0430\u043D\u043D\u044B\u0445 \u0434\u043B\u044F \u043F\u0435\u0440\u0435\u0441\u0447\u0451\u0442\u0430 Z \u043C\u0435\u0436\u0434\u0443 \u0442\u043E\u0447\u043A\u0430\u043C\u0438.");
+                            }
+                            NXOpen.CAM.PathCircularMotion arc = (NXOpen.CAM.PathCircularMotion)motion;
+                            if (arc.Direction != NXOpen.CAM.CamPathDir.Clockwise && arc.Direction != NXOpen.CAM.CamPathDir.Counterclockwise)
+                                throw new InvalidOperationException("\u041D\u0435 \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0435\u043D\u043E \u043D\u0430\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435 \u0434\u0443\u0433\u0438 \u0442\u0440\u0430\u0435\u043A\u0442\u043E\u0440\u0438\u0438.");
+                            double? turns = shape == NXOpen.CAM.CamPathMotionShapeType.Helical ?
+                                (double?)((NXOpen.CAM.PathHelixMotion)motion).NumberOfRevolutions : null;
+                            value = ZminGeometry.ArcMinimum(previous, end, Xyz(arc.ArcCenter), Xyz(arc.ArcAxis),
+                                arc.Direction == NXOpen.CAM.CamPathDir.Clockwise, axis, origin, turns);
+                        }
+                        minimum = minimum.HasValue ? Math.Min(minimum.Value, value) : value;
+                        previous = end; previousAxis = axis;
+                    }
+                    finally { if (motion != null) motion.Dispose(); }
+                }
+                NXOpen.CAM.PathEvent next = i + 1 < count ? current.GetNext() : null;
+                NXOpen.CAM.PathEvent finished = current; current = next;
+                finished.Dispose();
+            }
+        }
+        finally { if (current != null) current.Dispose(); }
+        return minimum.HasValue ? (double?)ZminGeometry.Finite(minimum.Value) : null;
+    }
+
+    private void RemoveConflicts()
+    {
+        Dictionary<string, int> targets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (Rename item in planned)
+        { int count; targets.TryGetValue(item.New, out count); targets[item.New] = count + 1; }
+        List<Rename> duplicates = planned.FindAll(delegate(Rename item) { return targets[item.New] > 1; });
+        foreach (Rename item in duplicates)
+        { skipped.Add(item.Old + " \u2014 \u041D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u043E \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u043F\u043E\u043B\u0443\u0447\u0430\u0442 \u0438\u043C\u044F \u00AB" + item.New + "\u00BB."); planned.Remove(item); }
+        while (planned.Count > 0)
+        {
+            HashSet<Tag> moving = new HashSet<Tag>();
+            foreach (Rename item in planned) moving.Add(item.Operation.Tag);
+            HashSet<string> occupied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (CamObject obj in allObjects) if (!moving.Contains(obj.Tag)) occupied.Add(obj.Name);
+            List<Rename> blocked = planned.FindAll(delegate(Rename item) { return occupied.Contains(item.New); });
+            if (blocked.Count == 0) break;
+            foreach (Rename item in blocked)
+            { skipped.Add(item.Old + " \u2014 \u0418\u043C\u044F \u00AB" + item.New + "\u00BB \u0443\u0436\u0435 \u0437\u0430\u043D\u044F\u0442\u043E \u0432 CAM-\u043F\u0440\u043E\u0435\u043A\u0442\u0435."); planned.Remove(item); }
+        }
+    }
+
+    private static void SetName(NXOpen.CAM.Operation operation, string name)
+    {
+        operation.SetName(name);
+        if (operation.Name != name)
+            throw new InvalidOperationException("NX \u0438\u0437\u043C\u0435\u043D\u0438\u043B \u0437\u0430\u043F\u0440\u043E\u0448\u0435\u043D\u043D\u043E\u0435 \u0438\u043C\u044F \u00AB" + name + "\u00BB \u043D\u0430 \u00AB" + operation.Name + "\u00BB.");
+    }
+
+    internal void Apply(Session session)
+    {
+        if (planned.Count == 0) return;
+        HashSet<string> reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (CamObject obj in allObjects) reserved.Add(obj.Name);
+        foreach (Rename item in planned) reserved.Add(item.New);
+        for (int i = 0; i < planned.Count; i++)
+        {
+            int number = i + 1;
+            string temporary;
+            do { temporary = "ZMIN_TMP_" + number.ToString(CultureInfo.InvariantCulture); number++; }
+            while (!reserved.Add(temporary));
+            planned[i].Temporary = temporary;
+        }
+        Session.UndoMarkId mark = session.SetUndoMark(Session.MarkVisibility.Invisible, ScriptInfo.WindowTitle("Zmin"));
+        try
+        {
+            foreach (Rename item in planned) SetName(item.Operation, item.Temporary);
+            foreach (Rename item in planned) SetName(item.Operation, item.New);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                session.UndoToMark(mark, null);
+                foreach (Rename item in planned)
+                    if (item.Operation.Name != item.Old) throw new InvalidOperationException("\u041D\u0435 \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043E \u0438\u043C\u044F: " + item.Old);
+            }
+            catch (Exception rollback)
+            { throw new InvalidOperationException("\u041F\u0435\u0440\u0435\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u0438\u0435 \u043F\u0440\u0435\u0440\u0432\u0430\u043D\u043E. \u0410\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0430\u044F \u043E\u0442\u043C\u0435\u043D\u0430 \u043D\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0430. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u0438\u043C\u0435\u043D\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u0438 \u0432\u044B\u043F\u043E\u043B\u043D\u0438\u0442\u0435 \u043E\u0442\u043C\u0435\u043D\u0443 \u0432 NX.", new AggregateException(ex, rollback)); }
+            throw new InvalidOperationException("\u041F\u0435\u0440\u0435\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u0438\u0435 \u043F\u0440\u0435\u0440\u0432\u0430\u043D\u043E. \u0418\u043C\u0435\u043D\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u044B.\n\n" + ex.Message, ex);
+        }
+        finally { try { session.DeleteUndoMark(mark, null); } catch { } }
+        try { UFSession.GetUFSession().UiOnt.Refresh(); }
+        catch (Exception ex) { refreshError = ex.Message; }
+    }
+
+    internal string Result()
+    {
+        StringBuilder text = new StringBuilder("Zmin: " + scope + ".\n\u041E\u0431\u0440\u0430\u0431\u043E\u0442\u0430\u043D\u043E: " + total
+            + ".\n\u041F\u0435\u0440\u0435\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u043E: " + planned.Count + ".\n\u0423\u0436\u0435 \u0430\u043A\u0442\u0443\u0430\u043B\u044C\u043D\u044B: " + unchanged + ".\n\u041F\u0440\u043E\u043F\u0443\u0449\u0435\u043D\u043E: " + skipped.Count + ".");
+        if (planned.Count > 0) text.Append("\n\n\u041E\u0442\u043C\u0435\u043D\u0430 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u0439 \u0432 NX: Ctrl+Z.");
+        if (refreshError != null) text.Append("\n\n\u0418\u043C\u0435\u043D\u0430 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u044B, \u043D\u043E \u043E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u043D\u0430\u0432\u0438\u0433\u0430\u0442\u043E\u0440 \u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C: " + refreshError);
+        if (skipped.Count > 0)
+        {
+            text.Append("\n\n\u041F\u0440\u043E\u043F\u0443\u0449\u0435\u043D\u043D\u044B\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438:");
+            for (int i = 0; i < Math.Min(8, skipped.Count); i++) text.Append("\n\u2022 " + skipped[i]);
+            if (skipped.Count > 8) text.Append("\n\u0418 \u0435\u0449\u0451 " + (skipped.Count - 8) + " \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439.");
+        }
+        return text.ToString();
+    }
+}
+
+internal static class ZminGeometry
+{
+    internal static double Finite(double value)
+    {
+        if (Double.IsNaN(value) || Double.IsInfinity(value)) throw new InvalidOperationException("NX \u0432\u0435\u0440\u043D\u0443\u043B \u043D\u0435\u0447\u0438\u0441\u043B\u043E\u0432\u043E\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435.");
+        return value;
+    }
+    internal static double Dot(double[] a, double[] b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+    internal static double[] Subtract(double[] a, double[] b) { return new double[] { a[0]-b[0], a[1]-b[1], a[2]-b[2] }; }
+    internal static double[] Scale(double[] a, double f) { return new double[] { a[0]*f, a[1]*f, a[2]*f }; }
+    internal static double[] Cross(double[] a, double[] b)
+    { return new double[] { a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0] }; }
+    internal static double[] Unit(double[] v)
+    {
+        foreach (double coordinate in v) Finite(coordinate);
+        double length = Math.Sqrt(Dot(v, v));
+        if (length < 1e-10) throw new InvalidOperationException("\u041D\u0443\u043B\u0435\u0432\u043E\u0439 \u0432\u0435\u043A\u0442\u043E\u0440 \u0441\u0438\u0441\u0442\u0435\u043C\u044B \u043A\u043E\u043E\u0440\u0434\u0438\u043D\u0430\u0442.");
+        return Scale(v, 1.0/length);
+    }
+    internal static double ArcMinimum(double[] start, double[] end, double[] center, double[] axis,
+        bool clockwise, double[] zAxis, double[] origin, double? revolutions)
+    {
+        if (start == null) throw new InvalidOperationException("\u0423 \u0434\u0443\u0433\u043E\u0432\u043E\u0433\u043E \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u044F \u043D\u0435\u0442 \u043D\u0430\u0447\u0430\u043B\u044C\u043D\u043E\u0439 \u0442\u043E\u0447\u043A\u0438.");
+        axis = Unit(axis);
+        double[] delta0 = Subtract(start, center), delta1 = Subtract(end, center);
+        double h0 = Dot(delta0, axis), h1 = Dot(delta1, axis);
+        double[] radial = Subtract(delta0, Scale(axis, h0)), lastRadial = Subtract(delta1, Scale(axis, h1));
+        double radius = Math.Sqrt(Dot(radial, radial)), tolerance = Math.Max(1e-7, radius*1e-6);
+        if (radius <= 1e-10 || Math.Abs(Math.Sqrt(Dot(lastRadial, lastRadial))-radius) > tolerance)
+            throw new InvalidOperationException("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C \u0440\u0430\u0434\u0438\u0443\u0441 \u0434\u0443\u0433\u0438 \u0442\u0440\u0430\u0435\u043A\u0442\u043E\u0440\u0438\u0438.");
+        double[] tangent = Scale(Cross(axis, radial), clockwise ? -1.0 : 1.0);
+        double period = 2*Math.PI, phase = Math.Atan2(Dot(lastRadial, tangent), Dot(lastRadial, radial));
+        if (phase < 0) phase += period;
+        double rise = h1-h0, sweep;
+        if (!revolutions.HasValue)
+        {
+            if (Math.Abs(rise) > tolerance) throw new InvalidOperationException("\u041A\u043E\u043D\u0446\u044B \u043A\u0440\u0443\u0433\u043E\u0432\u043E\u0439 \u0434\u0443\u0433\u0438 \u043B\u0435\u0436\u0430\u0442 \u0432 \u0440\u0430\u0437\u043D\u044B\u0445 \u043F\u043B\u043E\u0441\u043A\u043E\u0441\u0442\u044F\u0445.");
+            sweep = phase > 1e-10 ? phase : period; rise = 0;
+        }
+        else
+        {
+            sweep = Math.Abs(Finite(revolutions.Value))*period;
+            if (sweep <= 1e-10) throw new InvalidOperationException("\u041D\u0435 \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0435\u043D\u043E \u0447\u0438\u0441\u043B\u043E \u0432\u0438\u0442\u043A\u043E\u0432 \u0432\u0438\u043D\u0442\u043E\u0432\u043E\u0433\u043E \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u044F.");
+            if (Math.Abs(Math.IEEERemainder(sweep-phase, period))*radius > tolerance)
+                throw new InvalidOperationException("\u0427\u0438\u0441\u043B\u043E \u0432\u0438\u0442\u043A\u043E\u0432 \u043D\u0435 \u0441\u043E\u043E\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u0435\u0442 \u043A\u043E\u043D\u0446\u0430\u043C \u0432\u0438\u043D\u0442\u043E\u0432\u043E\u0433\u043E \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u044F.");
+        }
+        double z0 = Dot(Subtract(start, origin), zAxis), z1 = Dot(Subtract(end, origin), zAxis);
+        double a = Dot(radial, zAxis), b = Dot(tangent, zAxis), drift = Dot(axis, zAxis)*rise/sweep;
+        double baseline = z0-a, minimum = Math.Min(z0, z1), amplitude = Math.Sqrt(a*a+b*b);
+        if (amplitude > 1e-12 && Math.Abs(drift) <= amplitude)
+        {
+            double angle = Math.Acos(Math.Max(-1, Math.Min(1, -drift/amplitude))), offset = Math.Atan2(a, b);
+            foreach (double stationary in new double[] { angle-offset, -angle-offset })
+            {
+                double first = Math.Ceiling(-stationary/period), last = Math.Floor((sweep-stationary)/period);
+                if (first > last) continue;
+                foreach (double cycle in new double[] { first, last })
+                {
+                    double theta = stationary+cycle*period;
+                    double value = baseline+a*Math.Cos(stationary)+b*Math.Sin(stationary)+drift*theta;
+                    minimum = Math.Min(minimum, value);
+                }
+            }
+        }
+        return Finite(minimum);
+    }
+}
+
+internal static class ToolDescriptionUpdate
+{
+    private const string PREFIX = "\u2300";
+    private const string NUMBER_FORMAT = "0.######";
+    private static string WINDOW_TITLE { get { return ScriptInfo.WindowTitle("Description \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432"); } }
+    private const int TOOL_DIAMETER = 1000;      // UF_PARAM_TL_DIAMETER
+    private const int TOOL_NUMBER = 1038;        // UF_PARAM_TL_NUMBER (T)
+    private const int ADJUST_REGISTER = 1040;    // UF_PARAM_TL_ADJ_REG (H)
+    private const int CUTCOM_REGISTER = 1041;    // UF_PARAM_TL_CUTCOM_REG (D)
+    private const int CUTTER_DESCRIPTION = 1068; // UF_PARAM_TL_DESCRIPTION
+    private const int INVALID_PARAM_INDEX = 1345036; // UF_CAM_ERROR_INVALID_INDEX
+
+    private static Session session;
+    private static UFSession uf;
+    private static CamSetup setup;
+
+    internal static string Run(Session currentSession, Part part, bool includeToolNumbers)
+    {
+        session = currentSession; uf = UFSession.GetUFSession(); setup = part.CAMSetup;
+        bool fatal = false;
+        int changed = 0;
+        int failed = 0;
+        string firstError = null;
+        string errorMessage = null;
+        Session.UndoMarkId? batchMark = null;
+
+        try
+        {
+            // Snapshot the collection before changing descriptions.
+            List<NXOpen.CAM.Tool> tools = new List<NXOpen.CAM.Tool>();
+            foreach (NCGroup group in setup.CAMGroupCollection)
+            {
+                NXOpen.CAM.Tool tool = group as NXOpen.CAM.Tool;
+                if (tool != null && tool.OwningPart != null && tool.OwningPart.Tag == part.Tag)
+                    tools.Add(tool);
+            }
+
+            batchMark = session.SetUndoMark(Session.MarkVisibility.Invisible,
+                WINDOW_TITLE + ": \u043E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u044F \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432");
+
+            foreach (NXOpen.CAM.Tool tool in tools)
+            {
+                string name = tool.Name;
+                Session.UndoMarkId itemMark = session.SetUndoMark(Session.MarkVisibility.Invisible,
+                    WINDOW_TITLE);
+                try
+                {
+                    if (Apply(tool, includeToolNumbers)) changed++;
+                }
+                catch (Exception ex)
+                {
+                    // Undo any partially changed description on this tool.
+                    try { session.UndoToMark(itemMark, null); }
+                    catch (Exception undoEx)
+                    {
+                        throw new InvalidOperationException("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u0442\u043C\u0435\u043D\u0438\u0442\u044C \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u0435 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 "
+                            + name + ": " + undoEx.Message + ". \u0418\u0441\u0445\u043E\u0434\u043D\u0430\u044F \u043E\u0448\u0438\u0431\u043A\u0430: " + ex.Message, undoEx);
+                    }
+                    failed++;
+                    if (firstError == null) firstError = name + ": " + ex.Message;
+                }
+                finally
+                {
+                    try { session.DeleteUndoMark(itemMark, null); }
+                    catch { /* A rollback may already have removed this mark. */ }
+                }
+            }
+
+            if (changed > 0)
+            {
+                int errors = session.UpdateManager.DoUpdate(batchMark.Value);
+                if (errors != 0)
+                    throw new InvalidOperationException("NX \u0441\u043E\u043E\u0431\u0449\u0438\u043B \u043E\u0431 \u043E\u0448\u0438\u0431\u043A\u0430\u0445 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u044F: " + errors);
+            }
+            else
+            {
+                session.DeleteUndoMark(batchMark.Value, null);
+                batchMark = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            fatal = true;
+            errorMessage = "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044C \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0435 \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u0439.\n\n" + ex.Message;
+            if (batchMark.HasValue)
+            {
+                try
+                {
+                    session.UndoToMark(batchMark.Value, null);
+                    session.DeleteUndoMark(batchMark.Value, null);
+                    errorMessage += "\n\n\u0418\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F \u044D\u0442\u043E\u0433\u043E \u0437\u0430\u043F\u0443\u0441\u043A\u0430 \u043E\u0442\u043C\u0435\u043D\u0435\u043D\u044B.";
+                }
+                catch (Exception undoEx)
+                {
+                    errorMessage += "\n\n\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u043D\u043E\u0441\u0442\u044C\u044E \u043E\u0442\u043C\u0435\u043D\u0438\u0442\u044C \u0437\u0430\u043F\u0443\u0441\u043A: " + undoEx.Message;
+                }
+            }
+        }
+
+        if (errorMessage == null && failed > 0)
+        {
+            errorMessage = "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0438\u0437\u043C\u0435\u043D\u0438\u0442\u044C \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432: " + failed
+                + ". \u0418\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F \u044D\u0442\u0438\u0445 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432 \u043E\u0442\u043C\u0435\u043D\u0435\u043D\u044B.\n\n\u041F\u0435\u0440\u0432\u0430\u044F \u043E\u0448\u0438\u0431\u043A\u0430:\n" + firstError;
+        }
+
+        try { uf.UiOnt.Refresh(); }
+        catch (Exception ex)
+        {
+            if (errorMessage != null) errorMessage += "\n\n";
+            errorMessage += "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u0431\u043D\u043E\u0432\u0438\u0442\u044C Operation Navigator: " + ex.Message;
+        }
+
+        if (fatal) throw new InvalidOperationException(errorMessage);
+        return errorMessage;
+    }
+
+    internal static bool ChooseDescriptionMode(out bool includeToolNumbers)
+    {
+        uf = UFSession.GetUFSession();
+        // Custom responses avoid treating standard NX cancellation codes as a choice.
+        const int fullDescriptionResponse = 11;
+        const int diameterOnlyResponse = 12;
+        const int cancelResponse = 13;
+
+        includeToolNumbers = false;
+        string[] messages = { "\u041A\u0430\u043A\u043E\u0439 \u0432\u0430\u0440\u0438\u0430\u043D\u0442 \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u044F \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u044C?" };
+        UFUi.MessageButtons buttons = new UFUi.MessageButtons();
+        buttons.button1 = true;
+        buttons.label1 = "1) " + PREFIX + "*_T*_H*_D*";
+        buttons.response1 = fullDescriptionResponse;
+        buttons.button2 = true;
+        buttons.label2 = "2) " + PREFIX + "*";
+        buttons.response2 = diameterOnlyResponse;
+        buttons.button3 = true;
+        buttons.label3 = "\u041E\u0442\u043C\u0435\u043D\u0430";
+        buttons.response3 = cancelResponse;
+
+        int response;
+        uf.Ui.MessageDialog(WINDOW_TITLE, UiMessageDialogType.UiMessageQuestion,
+            messages, messages.Length, false, ref buttons, out response);
+
+        if (response == fullDescriptionResponse)
+        {
+            includeToolNumbers = true;
+            return true;
+        }
+        // Cancellation or any other response exits before undo marks or edits.
+        return response == diameterOnlyResponse;
+    }
+
+    private static bool Apply(NXOpen.CAM.Tool tool, bool includeToolNumbers)
+    {
+        NXOpen.CAM.Tool.Types type;
+        NXOpen.CAM.Tool.Subtypes subtype;
+        tool.GetTypeAndSubtype(out type, out subtype);
+        // These families expose a nominal cutting diameter through this parameter.
+        if (type != NXOpen.CAM.Tool.Types.Mill && type != NXOpen.CAM.Tool.Types.Drill && type != NXOpen.CAM.Tool.Types.Barrel
+            && type != NXOpen.CAM.Tool.Types.Tcutter && type != NXOpen.CAM.Tool.Types.MillForm)
+            return false;
+
+        double diameter;
+        uf.Param.AskDoubleValue(tool.Tag, TOOL_DIAMETER, out diameter);
+        if (Double.IsNaN(diameter) || Double.IsInfinity(diameter) || diameter <= 0.0
+            || Math.Round(diameter, 6, MidpointRounding.AwayFromZero) <= 0.0)
+            return false;
+
+        int toolNumber = 0;
+        int adjustRegister = 0;
+        int? cutcomRegister = null;
+        string value = PREFIX + diameter.ToString(NUMBER_FORMAT, CultureInfo.InvariantCulture);
+        if (includeToolNumbers)
+        {
+            // T and H are required; D is optional only when NX reports it as absent.
+            // A readable zero remains D0. Other read errors must not be hidden.
+            toolNumber = ReadToolInteger(tool, TOOL_NUMBER, "Tool Number");
+            adjustRegister = ReadToolInteger(tool, ADJUST_REGISTER, "Adjust Register");
+            cutcomRegister = ReadOptionalCutcomRegister(tool);
+            value += "_T" + toolNumber.ToString(CultureInfo.InvariantCulture)
+                + "_H" + adjustRegister.ToString(CultureInfo.InvariantCulture);
+            if (cutcomRegister.HasValue)
+                value += "_D" + cutcomRegister.Value.ToString(CultureInfo.InvariantCulture);
+        }
+        if (ReadGeneralDescription(tool) == value && ReadCutterDescription(tool) == value)
+            return false;
+
+        WriteDescriptions(tool, value);
+        if (ReadGeneralDescription(tool) != value || ReadCutterDescription(tool) != value)
+            throw new InvalidOperationException("NX \u043D\u0435 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043B \u0437\u0430\u043F\u0438\u0441\u0430\u043D\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442 \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u044F.");
+
+        double afterDiameter;
+        uf.Param.AskDoubleValue(tool.Tag, TOOL_DIAMETER, out afterDiameter);
+        if (Double.IsNaN(afterDiameter) || Double.IsInfinity(afterDiameter)
+            || Math.Abs(afterDiameter - diameter) > Math.Max(1e-9, Math.Abs(diameter) * 1e-12))
+            throw new InvalidOperationException("\u041A\u043E\u043D\u0442\u0440\u043E\u043B\u044C \u0434\u0438\u0430\u043C\u0435\u0442\u0440\u0430 \u043F\u043E\u0441\u043B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u043D\u0435 \u043F\u0440\u043E\u0439\u0434\u0435\u043D.");
+
+        if (includeToolNumbers && (ReadToolInteger(tool, TOOL_NUMBER, "Tool Number") != toolNumber
+            || ReadToolInteger(tool, ADJUST_REGISTER, "Adjust Register") != adjustRegister
+            || ReadOptionalCutcomRegister(tool) != cutcomRegister))
+            throw new InvalidOperationException("\u041A\u043E\u043D\u0442\u0440\u043E\u043B\u044C \u043D\u043E\u043C\u0435\u0440\u043E\u0432 T/H/D \u043F\u043E\u0441\u043B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u043D\u0435 \u043F\u0440\u043E\u0439\u0434\u0435\u043D.");
+
+        return true;
+    }
+
+    private static int ReadToolInteger(NXOpen.CAM.Tool tool, int parameterIndex, string fieldName)
+    {
+        try
+        {
+            int value;
+            uf.Param.AskIntValue(tool.Tag, parameterIndex, out value);
+            return value;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u0442\u044C " + fieldName
+                + " \u0432 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430\u0445 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430: " + ex.Message, ex);
+        }
+    }
+
+    private static int? ReadOptionalCutcomRegister(NXOpen.CAM.Tool tool)
+    {
+        try
+        {
+            UFParam.Status status;
+            uf.Param.AskParamStatus(tool.Tag, CUTCOM_REGISTER, out status);
+            if (status == UFParam.Status.InvalidIndex)
+                return null;
+
+            int value;
+            uf.Param.AskIntValue(tool.Tag, CUTCOM_REGISTER, out value);
+            return value;
+        }
+        catch (NXException ex)
+        {
+            // An explicit invalid-index error also identifies an absent parameter.
+            if (ex.ErrorCode == INVALID_PARAM_INDEX)
+                return null;
+
+            throw new InvalidOperationException("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u0442\u044C Cutcom Register"
+                + " \u0432 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430\u0445 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430: " + ex.Message, ex);
+        }
+    }
+
+    private static string ReadGeneralDescription(NXOpen.CAM.Tool tool)
+    {
+        NXOpen.CAM.NCGroupBuilder builder = setup.CAMGroupCollection.CreateNcgroupBuilder(tool);
+        try { return builder.Description ?? ""; }
+        finally { builder.Destroy(); }
+    }
+
+    private static string ReadCutterDescription(NXOpen.CAM.Tool tool)
+    {
+        string value;
+        uf.Param.AskStrValue(tool.Tag, CUTTER_DESCRIPTION, out value);
+        return value ?? "";
+    }
+
+    private static void WriteDescriptions(NXOpen.CAM.Tool tool, string value)
+    {
+        // General Description and Cutter Description can be distinct fields.
+        if (ReadGeneralDescription(tool) != value)
+        {
+            NXOpen.CAM.NCGroupBuilder builder = setup.CAMGroupCollection.CreateNcgroupBuilder(tool);
+            try
+            {
+                builder.Description = value;
+                builder.Commit();
+            }
+            finally { builder.Destroy(); }
+        }
+        if (ReadCutterDescription(tool) != value)
+            uf.Param.SetStrValue(tool.Tag, CUTTER_DESCRIPTION, value);
+    }
+
+}
+
+// Keep native checkboxes/expanders; center only the text in each native row.
+internal static class TreeTextLayout
+{
+    internal static void Attach(object tree)
+    {
+        RuntimeForms.SetEnum(tree, "DrawMode", "OwnerDrawText");
+        EventInfo draw = tree.GetType().GetEvent("DrawNode");
+        draw.AddEventHandler(tree, Delegate.CreateDelegate(draw.EventHandlerType,
+            typeof(TreeTextLayout).GetMethod("Draw", BindingFlags.Static | BindingFlags.NonPublic)));
+    }
+
+    private static object SystemColor(Type colorType, int index)
+    {
+        uint rgb = GetSysColor(index);
+        return colorType.GetMethod("FromArgb", new Type[] { typeof(int), typeof(int), typeof(int) })
+            .Invoke(null, new object[] { (int)(rgb & 255), (int)((rgb >> 8) & 255), (int)((rgb >> 16) & 255) });
+    }
+
+    private static void Draw(object sender, EventArgs args)
+    {
+        object node = RuntimeForms.Get(args, "Node"), bounds = RuntimeForms.Get(args, "Bounds");
+        int width = (int)RuntimeForms.Get(bounds, "Width"), height = (int)RuntimeForms.Get(sender, "ItemHeight");
+        if (width <= 0 || height <= 0) return;
+        // X/Y come from the native node rectangle, including scroll and DPI scaling.
+        bounds = Activator.CreateInstance(bounds.GetType(), new object[] {
+            RuntimeForms.Get(bounds, "X"), RuntimeForms.Get(bounds, "Y"), width, height });
+        object font = RuntimeForms.Get(node, "NodeFont") ?? RuntimeForms.Get(sender, "Font");
+        object foreground = RuntimeForms.Get(node, "ForeColor"), background = RuntimeForms.Get(node, "BackColor");
+        if ((bool)RuntimeForms.Get(foreground, "IsEmpty")) foreground = RuntimeForms.Get(sender, "ForeColor");
+        if ((bool)RuntimeForms.Get(background, "IsEmpty")) background = RuntimeForms.Get(sender, "BackColor");
+        bool focused = (bool)RuntimeForms.Get(sender, "Focused"), selected = (bool)RuntimeForms.Get(node, "IsSelected");
+        if (selected && (focused || !(bool)RuntimeForms.Get(sender, "HideSelection")))
+        {
+            foreground = SystemColor(foreground.GetType(), focused ? 14 : 18); // HighlightText / ControlText
+            background = SystemColor(background.GetType(), focused ? 13 : 15); // Highlight / Control
+        }
+        object graphics = RuntimeForms.Get(args, "Graphics");
+        object flags = Enum.Parse(RuntimeForms.FormType("TextFormatFlags"),
+            "VerticalCenter, SingleLine, NoPrefix, NoPadding, PreserveGraphicsClipping");
+        RuntimeForms.FormType("TextRenderer").InvokeMember("DrawText", BindingFlags.Public | BindingFlags.Static | BindingFlags.InvokeMethod,
+            null, null, new object[] { graphics, RuntimeForms.Get(node, "Text"), font, bounds, foreground, background, flags });
+        if (selected && focused)
+            RuntimeForms.FormType("ControlPaint").InvokeMember("DrawFocusRectangle", BindingFlags.Public | BindingFlags.Static | BindingFlags.InvokeMethod,
+                null, null, new object[] { graphics, bounds, foreground, background });
+        RuntimeForms.Set(args, "DrawDefault", false);
+    }
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern uint GetSysColor(int index);
 }
 
 internal static class ProgramSelection
@@ -1166,7 +1942,7 @@ internal sealed class SelectedOperationsPicker : RouterDialog
         RuntimeForms.Set(tree, "ShowLines", true); RuntimeForms.Set(tree, "ShowPlusMinus", true);
         RuntimeForms.Set(tree, "ShowRootLines", true); RuntimeForms.Set(tree, "ShowNodeToolTips", true);
         RuntimeForms.Set(tree, "HideSelection", false); RuntimeForms.Set(tree, "Indent", 24);
-        RuntimeForms.Set(tree, "ItemHeight", 26); RuntimeForms.Set(tree, "TabIndex", 1);
+        RuntimeForms.Set(tree, "ItemHeight", 26); TreeTextLayout.Attach(tree); RuntimeForms.Set(tree, "TabIndex", 1);
         RuntimeForms.Add(Window, tree); RuntimeForms.Call(controls, "SetChildIndex", tree, 0);
         RuntimeForms.Call(tree, "BeginUpdate");
         try
@@ -1345,13 +2121,19 @@ internal sealed class ProgramFolderPicker : RouterDialog
     private readonly object tree = RuntimeForms.New("TreeView");
     private readonly object countLabel, next;
     private readonly object numberOperations = RuntimeForms.New("CheckBox");
+    private readonly object updateDescriptions = RuntimeForms.New("CheckBox");
+    private readonly object addZmin = RuntimeForms.New("CheckBox");
     private bool updating;
     internal List<ProgramJob> Jobs;
     internal bool NumberOperations { get { return (bool)RuntimeForms.Get(numberOperations, "Checked"); } }
+    internal bool UpdateDescriptions { get { return (bool)RuntimeForms.Get(updateDescriptions, "Checked"); } }
+    internal bool AddZmin { get { return (bool)RuntimeForms.Get(addZmin, "Checked"); } }
 
-    internal ProgramFolderPicker(NCGroup programRoot, OperationSelectionSnapshot selectedOperations) : base("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u044B \u0434\u043B\u044F \u0432\u044B\u0432\u043E\u0434\u0430", 194)
+    internal ProgramFolderPicker(NCGroup programRoot, OperationSelectionSnapshot selectedOperations) : base("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u044B \u0434\u043B\u044F \u0432\u044B\u0432\u043E\u0434\u0430", 258)
     {
         this.programRoot = programRoot; this.selectedOperations = selectedOperations;
+        RuntimeForms.SetValue(Window, "ClientSize", 820, 654);
+        RuntimeForms.SetValue(Window, "MinimumSize", 800, 544);
         entries = ProgramFolderCatalog.Read(programRoot);
         RuntimeForms.Add(Header, Label("\u041F\u0430\u043F\u043A\u0438 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u044B \u0441 \u0432\u043B\u043E\u0436\u0435\u043D\u043D\u043E\u0441\u0442\u044C\u044E \u0438 \u0432 \u043F\u043E\u0440\u044F\u0434\u043A\u0435 \u0434\u0435\u0440\u0435\u0432\u0430 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C NX.\n\u0413\u0430\u043B\u043E\u0447\u043A\u0430 \u043D\u0430 \u0440\u043E\u0434\u0438\u0442\u0435\u043B\u044C\u0441\u043A\u043E\u0439 \u043F\u0430\u043F\u043A\u0435 \u043E\u0442\u043C\u0435\u0447\u0430\u0435\u0442 \u0432\u0441\u044E \u0432\u0435\u0442\u043A\u0443.\n\u0412\u044B\u0432\u043E\u0434\u044F\u0442\u0441\u044F \u0442\u043E\u043B\u044C\u043A\u043E \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u044B \u0441 \u043B\u0430\u0442\u0438\u043D\u0441\u043A\u043E\u0439 O \u0432 \u043D\u0430\u0447\u0430\u043B\u0435 \u0438\u043C\u0435\u043D\u0438.", 0, 0, 760, 62));
         countLabel = Label("", 0, 72, 760, 26); RuntimeForms.Add(Header, countLabel);
@@ -1363,8 +2145,14 @@ internal sealed class ProgramFolderPicker : RouterDialog
         RuntimeForms.Set(numberOperations, "Text", "\u041D\u0443\u043C\u0435\u0440\u043E\u0432\u0430\u0442\u044C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438");
         RuntimeForms.Set(numberOperations, "Checked", false);
         RuntimeForms.SetEnum(numberOperations, "Anchor", "Top, Left, Right");
-        RuntimeForms.Call(Tips, "SetToolTip", numberOperations, "\u041F\u0435\u0440\u0435\u0434 \u0432\u044B\u0432\u043E\u0434\u043E\u043C \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C 01_, 02_, ... (\u0434\u043E 99 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439) \u0438\u043B\u0438 001_, 002_, ... (\u043E\u0442 100). \u0412 \u043A\u0430\u0436\u0434\u043E\u0439 \u0423\u041F \u2014 \u043D\u043E\u0432\u0430\u044F \u043D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u044F. \u0411\u0435\u0437 \u0433\u0430\u043B\u043E\u0447\u043A\u0438 \u0438\u043C\u0435\u043D\u0430 \u043D\u0435 \u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F.");
+        RuntimeForms.Call(Tips, "SetToolTip", numberOperations, "\u041F\u0435\u0440\u0435\u0434 \u0432\u044B\u0432\u043E\u0434\u043E\u043C \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C 01_, 02_, ... (\u0434\u043E 99 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439) \u0438\u043B\u0438 001_, 002_, ... (\u043E\u0442 100). \u0412 \u043A\u0430\u0436\u0434\u043E\u0439 \u0423\u041F \u2014 \u043D\u043E\u0432\u0430\u044F \u043D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u044F. \u0411\u0435\u0437 \u044D\u0442\u043E\u0439 \u0433\u0430\u043B\u043E\u0447\u043A\u0438 \u043D\u0430\u0447\u0430\u043B\u044C\u043D\u044B\u0435 \u043D\u043E\u043C\u0435\u0440\u0430 \u043D\u0435 \u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F.");
+        RuntimeForms.SetEnum(numberOperations, "CheckAlign", "MiddleLeft");
+        RuntimeForms.SetEnum(numberOperations, "TextAlign", "MiddleLeft");
         RuntimeForms.Add(Header, numberOperations);
+        AddPreparationOption(updateDescriptions, "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C Description \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432", 188,
+            "\u0412\u0441\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043C\u044B\u0435 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u044B \u0442\u0435\u043A\u0443\u0449\u0435\u0439 \u0434\u0435\u0442\u0430\u043B\u0438. \u041F\u0435\u0440\u0435\u0434 \u0432\u044B\u0432\u043E\u0434\u043E\u043C \u0432\u044B\u0431\u0440\u0430\u0442\u044C \u043F\u043E\u043B\u043D\u044B\u0439 \u0444\u043E\u0440\u043C\u0430\u0442 \u2300*_T*_H*_D* \u043B\u0438\u0431\u043E \u0442\u043E\u043B\u044C\u043A\u043E \u2300*.");
+        AddPreparationOption(addZmin, "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C Zmin \u043A \u0438\u043C\u0435\u043D\u0430\u043C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439", 220,
+            "\u041A\u0430\u043A \u0432 \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u043E\u043C \u0441\u043A\u0440\u0438\u043F\u0442\u0435 Zmin: \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0435 \u0432 NX \u043F\u0435\u0440\u0435\u0434 \u0437\u0430\u043F\u0443\u0441\u043A\u043E\u043C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438; \u0435\u0441\u043B\u0438 \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u044F \u043D\u0435\u0442 \u2014 \u0432\u0441\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u043F\u0440\u043E\u0435\u043A\u0442\u0430. \u0421\u0442\u0430\u0440\u044B\u0439 \u043A\u043E\u043D\u0435\u0447\u043D\u044B\u0439 _Z\u0447\u0438\u0441\u043B\u043E \u0437\u0430\u043C\u0435\u043D\u044F\u0435\u0442\u0441\u044F.");
         // Replace the flat FlowLayoutPanel in the same docking position.
         object controls = RuntimeForms.Get(Window, "Controls");
         RuntimeForms.Call(controls, "Remove", Grid); RuntimeForms.Dispose(Grid);
@@ -1373,7 +2161,7 @@ internal sealed class ProgramFolderPicker : RouterDialog
         RuntimeForms.Set(tree, "ShowLines", true); RuntimeForms.Set(tree, "ShowPlusMinus", true);
         RuntimeForms.Set(tree, "ShowRootLines", true); RuntimeForms.Set(tree, "ShowNodeToolTips", true);
         RuntimeForms.Set(tree, "HideSelection", false); RuntimeForms.Set(tree, "Indent", 24);
-        RuntimeForms.Set(tree, "ItemHeight", 26);
+        RuntimeForms.Set(tree, "ItemHeight", 26); TreeTextLayout.Attach(tree);
         RuntimeForms.Add(Window, tree); RuntimeForms.Call(controls, "SetChildIndex", tree, 0);
         RuntimeForms.Call(tree, "BeginUpdate");
         try
@@ -1425,6 +2213,14 @@ internal sealed class ProgramFolderPicker : RouterDialog
         RuntimeForms.Add(Footer, all); RuntimeForms.Add(Footer, clear);
         RuntimeForms.Add(Footer, expand); RuntimeForms.Add(Footer, collapse); RuntimeForms.Add(Footer, next);
         RefreshCount();
+    }
+    private void AddPreparationOption(object option, string text, int top, string hint)
+    {
+        Position(option, 0, top, 760, 28);
+        RuntimeForms.Set(option, "Text", text); RuntimeForms.Set(option, "Checked", false);
+        RuntimeForms.SetEnum(option, "CheckAlign", "MiddleLeft"); RuntimeForms.SetEnum(option, "TextAlign", "MiddleLeft");
+        RuntimeForms.SetEnum(option, "Anchor", "Top, Left, Right");
+        RuntimeForms.Call(Tips, "SetToolTip", option, hint); RuntimeForms.Add(Header, option);
     }
     private void EditSelectedOperations()
     {
@@ -3793,7 +4589,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.40";
+    internal const string SCRIPT_VERSION = "V1.41";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
 
     internal static string WindowTitle(string detail)
