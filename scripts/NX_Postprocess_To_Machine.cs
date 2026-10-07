@@ -1,7 +1,7 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.44
+// SCRIPT_VERSION: V1.45
 // Optional numbering, tool descriptions and operation Zmin.
-// Unified tree row drawing; inline, exclusive Description format options.
+// Modal-aware work-offset repeats; per-post retract profiles and copyable errors.
 // Description behavior: NX_Tool_D_To_Description; Zmin behavior: NX_Operation_Zmin.
 // Preserve NC processing, modal validation, output paths and other INI settings.
 // Siemens NX / Designcenter, Windows. C# journal with an external INI.
@@ -229,7 +229,7 @@ public class NX_Postprocess_To_Machine
                     choice.Units, CamSetup.PostprocessSettingsOutputWarning.No, CamSetup.PostprocessSettingsReviewTool.Off);
                 PostFiles.ValidateOutput(directory, generated);
                 if (choice.AssignNames || job.OutputName != null) ProgramNames.AssignNumber(generated, name);
-                WorkOffsetPrograms.Apply(generated, name, choice.WorkOffsets);
+                WorkOffsetPrograms.Apply(generated, name, choice.WorkOffsets, posts[i]);
                 if (callTargets != null) ProgramCallChain.Apply(generated, name, callTargets[i]);
                 if (choice.ExternalDrive != null) choice.ExternalDrive.EnsurePresent();
                 PreparedOutput item = new PreparedOutput(generated, PostFiles.CreateCopies(projectFile, machineDirectory, fileName, choice.SaveToProject));
@@ -1836,6 +1836,12 @@ internal static class RuntimeForms
         // Do not call NXMessageBox here: NX can throw "User abort" while showing
         // the error, replacing the actual exception with a second one.
         // No NX abort flags are cleared and no operation is retried.
+        for (Exception current = original; current != null; current = current.InnerException)
+            if (current is WorkOffsetException)
+            {
+                try { using (PostprocessErrorDialog dialog = new PostprocessErrorDialog(text, caption)) dialog.ShowDialog(owner); return; }
+                catch { break; } // Reporting must never hide the original failure.
+            }
         IntPtr handle = IntPtr.Zero;
         try { if (owner != null) handle = (IntPtr)Get(owner, "Handle"); } catch { }
         try
@@ -1890,6 +1896,61 @@ internal static class RuntimeForms
         catch (TargetInvocationException ex)
         { throw new InvalidOperationException(ActualMessage(ex), ex.InnerException ?? ex); }
     }
+}
+
+internal sealed class PostprocessErrorDialog : IDisposable
+{
+    private readonly object window = RuntimeForms.New("Form");
+    internal PostprocessErrorDialog(string text, string caption)
+    {
+        RuntimeForms.Set(window, "Text", caption);
+        RuntimeForms.SetValue(window, "ClientSize", 880, 540);
+        RuntimeForms.SetValue(window, "MinimumSize", 640, 360);
+        RuntimeForms.SetValue(window, "Padding", 14);
+        RuntimeForms.SetValue(window, "AutoScaleDimensions", 96F, 96F);
+        RuntimeForms.SetEnum(window, "AutoScaleMode", "Dpi");
+        RuntimeForms.SetEnum(window, "StartPosition", "CenterParent");
+        RuntimeForms.Set(window, "ShowInTaskbar", false);
+        object details = RuntimeForms.New("TextBox");
+        RuntimeForms.Set(details, "Multiline", true);
+        RuntimeForms.Set(details, "ReadOnly", true);
+        RuntimeForms.Set(details, "WordWrap", false);
+        RuntimeForms.Set(details, "Text", text.Replace("\r\n", "\n").Replace("\n", "\r\n"));
+        RuntimeForms.SetEnum(details, "ScrollBars", "Both");
+        RuntimeForms.SetEnum(details, "Dock", "Fill");
+        object footer = RuntimeForms.New("Panel");
+        RuntimeForms.Set(footer, "Height", 52);
+        RuntimeForms.SetValue(footer, "Padding", 0, 10, 0, 0);
+        RuntimeForms.SetEnum(footer, "Dock", "Bottom");
+        RuntimeForms.Add(window, details); RuntimeForms.Add(window, footer);
+        object close = RuntimeForms.New("Button");
+        RuntimeForms.Set(close, "Text", "\u0417\u0430\u043A\u0440\u044B\u0442\u044C");
+        RuntimeForms.Set(close, "Width", 110);
+        RuntimeForms.SetEnum(close, "Dock", "Right");
+        RuntimeForms.SetEnum(close, "DialogResult", "Cancel");
+        RuntimeForms.Add(footer, close); RuntimeForms.Set(window, "CancelButton", close);
+        object copy = RuntimeForms.New("Button");
+        RuntimeForms.Set(copy, "Text", "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u0434\u0430\u043D\u043D\u044B\u0435 \u043E\u0448\u0438\u0431\u043A\u0438");
+        RuntimeForms.Set(copy, "Width", 260);
+        RuntimeForms.SetEnum(copy, "Dock", "Left");
+        RuntimeForms.Add(footer, copy);
+        RuntimeForms.On(copy, "Click", delegate
+        {
+            try
+            {
+                RuntimeForms.FormType("Clipboard").InvokeMember("SetText", BindingFlags.Public | BindingFlags.Static | BindingFlags.InvokeMethod,
+                    null, null, new object[] { caption + "\r\n\r\n" + text });
+                RuntimeForms.Set(copy, "Text", "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D\u043E");
+            }
+            catch
+            {
+                RuntimeForms.Message(window, "\u0411\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D. \u0412\u044B\u0434\u0435\u043B\u0438\u0442\u0435 \u0442\u0435\u043A\u0441\u0442 \u043E\u0448\u0438\u0431\u043A\u0438 \u0438 \u0441\u043A\u043E\u043F\u0438\u0440\u0443\u0439\u0442\u0435 Ctrl+C.",
+                    ScriptInfo.WindowTitle("\u041A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435"), "OK", "Warning", "Button1");
+            }
+        });
+    }
+    internal string ShowDialog(object owner) { return RuntimeForms.Show(window, owner); }
+    public void Dispose() { RuntimeForms.Dispose(window); }
 }
 
 internal sealed class MachineChoice
@@ -3125,7 +3186,7 @@ internal sealed class WorkOffsetPicker : RouterDialog
             catch (Exception ex) { ShowProblem(ex); }
         });
         RuntimeForms.Add(Header, add);
-        RuntimeForms.Add(Header, Label("\u041F\u043E\u0440\u044F\u0434\u043E\u043A \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432 \u0438 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u2014 \u043A\u0430\u043A \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0423\u041F. \u041C\u0435\u043D\u044F\u0435\u0442\u0441\u044F \u043F\u043E\u0440\u044F\u0434\u043E\u043A \u043F\u0440\u0438\u0432\u044F\u0437\u043E\u043A.\n\u0420\u0435\u0436\u0438\u043C \u0434\u043B\u044F 3-\u043E\u0441\u0435\u0432\u043E\u0433\u043E ISO-\u043A\u043E\u0434\u0430 \u0441 M06, G54\u2013G59 \u0438 \u043E\u0442\u0432\u043E\u0434\u043E\u043C G91 G28 Z0.", 0, 134, 770, 44));
+        RuntimeForms.Add(Header, Label("\u041F\u043E\u0440\u044F\u0434\u043E\u043A \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432 \u0438 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u2014 \u043A\u0430\u043A \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0423\u041F. \u041C\u0435\u043D\u044F\u0435\u0442\u0441\u044F \u043F\u043E\u0440\u044F\u0434\u043E\u043A \u043F\u0440\u0438\u0432\u044F\u0437\u043E\u043A.\n3-\u043E\u0441\u0435\u0432\u043E\u0439 ISO: M06, G54\u2013G59; \u043E\u0442\u0432\u043E\u0434 G28 \u0438\u043B\u0438 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D\u043D\u044B\u0439 G53.", 0, 134, 770, 44));
         RuntimeForms.On(number, "ValueChanged", delegate { RefreshCode(); }); RefreshCode();
 
         RuntimeForms.Call(RuntimeForms.Get(Window, "Controls"), "Remove", Grid); RuntimeForms.Dispose(Grid);
@@ -4185,6 +4246,86 @@ internal static class ProgramCallChain
 }
 
 
+internal sealed class WorkOffsetRules
+{
+    internal string Profile = "Auto";
+    internal decimal? G53Z;
+    internal string Post = "";
+
+    internal static WorkOffsetRules FromPost(PostDefinition post)
+    {
+        WorkOffsetRules rules = new WorkOffsetRules();
+        if (post == null) return rules;
+        rules.Profile = Normalize(post.WorkOffsetProfile);
+        rules.G53Z = post.WorkOffsetG53Z;
+        rules.Post = post.Name + "\r\nTCL: " + post.EventFile + "\r\nDEF: " + post.DefinitionFile;
+        if (rules.Profile == "ISO_G53" && !rules.G53Z.HasValue)
+            throw new ArgumentException("\u0414\u043B\u044F WorkOffsetProfile=ISO_G53 \u0437\u0430\u0434\u0430\u0439\u0442\u0435 WorkOffsetG53Z \u2014 \u043F\u0440\u043E\u0432\u0435\u0440\u0435\u043D\u043D\u0443\u044E \u0432\u044B\u0441\u043E\u0442\u0443 \u043E\u0442\u0432\u043E\u0434\u0430 \u0432 \u043C\u0430\u0448\u0438\u043D\u043D\u044B\u0445 \u043A\u043E\u043E\u0440\u0434\u0438\u043D\u0430\u0442\u0430\u0445 \u0438 \u0435\u0434\u0438\u043D\u0438\u0446\u0430\u0445 \u0423\u041F.");
+        if (rules.Profile == "ISO_G28" && rules.G53Z.HasValue)
+            throw new ArgumentException("WorkOffsetG53Z \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0435\u0442\u0441\u044F \u0441 Auto \u0438\u043B\u0438 ISO_G53.");
+        return rules;
+    }
+    internal static string Normalize(string value)
+    {
+        foreach (string known in new string[] { "Auto", "ISO_G28", "ISO_G53" })
+            if (String.Equals(value, known, StringComparison.OrdinalIgnoreCase)) return known;
+        throw new ArgumentException("WorkOffsetProfile: Auto, ISO_G28 \u0438\u043B\u0438 ISO_G53.");
+    }
+    internal string Describe()
+    {
+        return "\u041F\u0440\u043E\u0444\u0438\u043B\u044C \u043F\u0440\u0438\u0432\u044F\u0437\u043E\u043A: " + Profile + (G53Z.HasValue ? "; G53 Z=" + G53Z.Value.ToString(CultureInfo.InvariantCulture) : "") +
+            (Post.Length > 0 ? "\r\n\u041F\u043E\u0441\u0442: " + Post : "");
+    }
+}
+
+// Context is held in memory only. No NC file, report or log is created for errors.
+internal sealed class WorkOffsetException : IOException
+{
+    internal readonly int SourceLine;
+    private string context = "";
+    internal WorkOffsetException(string name, int line, string reason)
+        : base("\u041E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0430 \u043F\u043E \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0430\u043C, " + name + (line > 0 ? ", \u0441\u0442\u0440\u043E\u043A\u0430 " + line : "") + ": " + reason)
+    { SourceLine = line; }
+    public override string Message { get { return base.Message + context; } }
+    internal void AddContext(byte[] raw, int[] offsets, WorkOffsetRules rules)
+    {
+        if (context.Length > 0) return;
+        StringBuilder result = new StringBuilder("\r\n\r\n" + rules.Describe() + "\r\n");
+        result.Append(WorkOffsetPrograms.Describe(offsets));
+        if (raw != null && raw.Length > 0 && SourceLine > 0)
+        {
+            // Decode only a few nearby lines, never a second full-size NC string.
+            int start = raw.Length >= 3 && raw[0] == 239 && raw[1] == 187 && raw[2] == 191 ? 3 : 0;
+            int number = 1;
+            result.Append("\r\n\r\n\u0418\u0441\u0445\u043E\u0434\u043D\u0430\u044F \u0423\u041F (\u0434\u043E \u043F\u0440\u0435\u043E\u0431\u0440\u0430\u0437\u043E\u0432\u0430\u043D\u0438\u044F):");
+            while (start < raw.Length && number <= SourceLine + 2)
+            {
+                int end = start;
+                while (end < raw.Length && raw[end] != 13 && raw[end] != 10) end++;
+                if (number >= Math.Max(1, SourceLine - 2))
+                {
+                    int length = Math.Min(400, end - start);
+                    string line;
+                    try { line = new UTF8Encoding(false, true).GetString(raw, start, length); }
+                    catch (DecoderFallbackException)
+                    {
+                        try { line = Encoding.GetEncoding(1251).GetString(raw, start, length); }
+                        catch { line = Encoding.GetEncoding(28591).GetString(raw, start, length); }
+                    }
+                    result.Append("\r\n").Append(number == SourceLine ? "> " : "  ").Append(number).Append(": ");
+                    foreach (char c in line) result.Append(Char.IsControl(c) && c != '\t' ? '?' : c);
+                    if (end - start > length) result.Append(" \u2026");
+                }
+                start = end;
+                if (start < raw.Length && raw[start++] == 13 && start < raw.Length && raw[start] == 10) start++;
+                number++;
+            }
+        }
+        result.Append("\r\n\r\n\u041F\u0430\u043A\u0435\u0442 \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D \u0434\u043E \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u044F \u0423\u041F. \u0414\u043B\u044F \u0440\u0430\u0437\u0431\u043E\u0440\u0430 \u0441\u043B\u0443\u0447\u0430\u044F \u0441\u043A\u043E\u043F\u0438\u0440\u0443\u0439\u0442\u0435 \u0434\u0430\u043D\u043D\u044B\u0435 \u043E\u0448\u0438\u0431\u043A\u0438 \u0438 \u043F\u0440\u0438\u043B\u043E\u0436\u0438\u0442\u0435 \u0438\u0441\u0445\u043E\u0434\u043D\u0443\u044E \u0423\u041F, \u0432\u044B\u0432\u0435\u0434\u0435\u043D\u043D\u0443\u044E \u0431\u0435\u0437 \u043E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0438 \u043F\u043E \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0430\u043C \u0438 \u0432\u044B\u0437\u043E\u0432\u043E\u0432 \u043F\u043E\u0434\u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C, \u0430 \u0442\u0430\u043A\u0436\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u0441\u0442\u043E\u0439\u043A\u0438.");
+        context = result.ToString();
+    }
+}
+
 // Repeats complete, consecutive tool sections in memory; no new files or NX edits.
 // Deliberately accepts only explicit three-axis ISO milling, not arbitrary macros.
 internal static class WorkOffsetPrograms
@@ -4210,13 +4351,17 @@ internal static class WorkOffsetPrograms
     }
 
     internal static void Apply(string path, string name, int[] offsets)
+    { Apply(path, name, offsets, null); }
+
+    internal static void Apply(string path, string name, int[] offsets, PostDefinition post)
     {
         if (offsets == null) return;
         Validate(offsets);
+        WorkOffsetRules rules = WorkOffsetRules.FromPost(post);
         if (new FileInfo(path).Length > 512L * 1024 * 1024)
             throw Error(name, 0, "\u0440\u0430\u0437\u043C\u0435\u0440 \u0423\u041F \u043F\u0440\u0435\u0432\u044B\u0448\u0430\u0435\u0442 512 \u041C\u0411.");
         byte[] raw = File.ReadAllBytes(path);
-        byte[] result = Rewrite(raw, name, offsets);
+        byte[] result = Rewrite(raw, name, offsets, rules);
         if (!Object.ReferenceEquals(raw, result)) File.WriteAllBytes(path, result);
     }
 
@@ -4242,21 +4387,27 @@ internal static class WorkOffsetPrograms
     private sealed class State
     {
         internal readonly Dictionary<string, decimal> Values = new Dictionary<string, decimal>();
+        internal readonly HashSet<string> Written = new HashSet<string>();
+        internal readonly Dictionary<string, decimal> Required = new Dictionary<string, decimal>();
         internal State Copy() { State s = new State(); foreach (KeyValuePair<string, decimal> v in Values) s.Values.Add(v.Key, v.Value); return s; }
         internal decimal Get(string key) { decimal v; return Values.TryGetValue(key, out v) ? v : -1000000000M; }
-        internal void Set(string key, decimal value) { Values[key] = value; }
+        internal void Set(string key, decimal value) { Values[key] = value; Written.Add(key); }
+        internal decimal Read(string key)
+        {
+            decimal value = Get(key);
+            if (!Written.Contains(key)) Required[key] = value;
+            return value;
+        }
         internal string Signature(params string[] keys)
         {
             StringBuilder b = new StringBuilder();
-            foreach (string key in keys) b.Append(key).Append('=').Append(Get(key).ToString(CultureInfo.InvariantCulture)).Append(';');
+            foreach (string key in keys) b.Append(key).Append('=').Append(Read(key).ToString(CultureInfo.InvariantCulture)).Append(';');
             return b.ToString();
         }
     }
-    private static IOException Error(string name, int line, string reason)
-    {
-        return new IOException("\u041E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0430 \u043F\u043E \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0430\u043C, " + name + (line > 0 ? ", \u0441\u0442\u0440\u043E\u043A\u0430 " + line : "") + ": " + reason +
-            "\n\u0412\u044B\u0432\u043E\u0434 \u043F\u0430\u043A\u0435\u0442\u0430 \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D \u0434\u043E \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u044F \u0423\u041F. \u0418\u0441\u043F\u0440\u0430\u0432\u044C\u0442\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u0430 \u0438\u043B\u0438 \u0432\u044B\u043A\u043B\u044E\u0447\u0438\u0442\u0435 \u043E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0443 \u043F\u043E \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0430\u043C.");
-    }
+    private static WorkOffsetException Error(string name, int line, string reason)
+    { return new WorkOffsetException(name, line, reason); }
+
     private static string GGroup(decimal g)
     {
         if (g == 0 || g == 1 || g == 2 || g == 3 || g == 73 || g == 74 || g == 76 || (g >= 80 && g <= 89)) return "motion";
@@ -4276,7 +4427,8 @@ internal static class WorkOffsetPrograms
     {
         foreach (Word w in line.Words)
         {
-            if (w.Letter == 'G') { string key = GGroup(w.Value); if (key.Length > 0) s.Set(key, w.Value); }
+            if (w.Letter == 'G') { string key = GGroup(w.Value); if (key.Length > 0 && !(w.Value == 80 &&
+                (line.Has('G', 0) || line.Has('G', 1) || line.Has('G', 2) || line.Has('G', 3)))) s.Set(key, w.Value); }
             else if (w.Letter == 'M' && (w.Value == 3 || w.Value == 4 || w.Value == 5 || w.Value == 19)) s.Set("spindle", w.Value);
             else if (w.Letter == 'M' && (w.Value == 7 || w.Value == 8)) s.Set(w.Value == 7 ? "mist" : "flood", 1);
             else if (w.Letter == 'M' && w.Value == 9)
@@ -4331,9 +4483,9 @@ internal static class WorkOffsetPrograms
                     if (letter == 'G')
                     {
                         string group = GGroup(value);
-                        if (value != Decimal.Truncate(value) || (group.Length == 0 && value != 4 && value != 28))
+                        if (value != Decimal.Truncate(value) || (group.Length == 0 && value != 4 && value != 28 && value != 53))
                             throw Error(name, number, "G" + value + " \u043D\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044F \u0434\u043B\u044F \u043F\u043E\u0432\u0442\u043E\u0440\u0435\u043D\u0438\u044F. \u0414\u043E\u043F\u0443\u0441\u0442\u0438\u043C\u044B \u043E\u0431\u044B\u0447\u043D\u044B\u0435 3-\u043E\u0441\u0435\u0432\u044B\u0435 \u0423\u041F \u0441 G54\u2013G59.");
-                        if (group.Length > 0 && !groups.Add(group)) throw Error(name, number, "\u043D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u043E G-\u043A\u043E\u043C\u0430\u043D\u0434 \u043E\u0434\u043D\u043E\u0439 \u0433\u0440\u0443\u043F\u043F\u044B \u0432 \u043A\u0430\u0434\u0440\u0435.");
+                        if (group.Length > 0 && !groups.Add(group) && !CancelWithMotion(line, value)) throw Error(name, number, "\u043D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u043E G-\u043A\u043E\u043C\u0430\u043D\u0434 \u043E\u0434\u043D\u043E\u0439 \u0433\u0440\u0443\u043F\u043F\u044B \u0432 \u043A\u0430\u0434\u0440\u0435.");
                     }
                     if (letter == 'M' && (value != Decimal.Truncate(value) ||
                         !(value == 0 || value == 1 || value == 2 || value == 3 || value == 4 || value == 5 || value == 6 || value == 7 || value == 8 || value == 9 || value == 19 || value == 29 || value == 30)))
@@ -4347,6 +4499,17 @@ internal static class WorkOffsetPrograms
             lines.Add(line); start = next;
         }
         return lines;
+    }
+
+    private static bool CancelWithMotion(Line line, decimal value)
+    {
+        // G80 + G00/G01/G02/G03 is cancellation plus explicit positioning.
+        // Accept either word order, but never two movements or two cycles.
+        int count = 0; decimal previous = -1;
+        foreach (Word word in line.Words)
+            if (word.Letter == 'G' && GGroup(word.Value) == "motion") { count++; previous = word.Value; }
+        return count == 1 && ((value == 80 && previous >= 0 && previous <= 3) ||
+            (previous == 80 && value >= 0 && value <= 3));
     }
 
     private static bool NeedsInitialFeedPerMinute(List<Line> lines)
@@ -4369,7 +4532,7 @@ internal static class WorkOffsetPrograms
             {
                 if (skip && line.Optional) continue;
                 Update(state, line);
-                if (line.Has('G', 4) || line.Has('G', 28)) continue;
+                if (line.Has('G', 4) || line.Has('G', 28) || line.Has('G', 53)) continue;
                 decimal motion = state.Get("motion");
                 bool explicitCycle = false;
                 foreach (Word w in line.Words)
@@ -4382,39 +4545,70 @@ internal static class WorkOffsetPrograms
         return false;
     }
 
-    // Compare effective modal state at every movement on the first and repeated
-    // pass. Run both with optional blocks executed and with them deleted.
-    private static List<string> Trace(List<Line> lines, int from, int to, State state, bool skip, string name)
+    private sealed class TracePass
     {
-        List<string> trace = new List<string>();
-        bool offset = false, absolute = false, rapid = false, cancel = false, length = false, h = false, xy = false, z = false, home = false;
+        internal readonly List<string> Movements = new List<string>();
+        internal readonly List<int> Lines = new List<int>();
+        internal Dictionary<string, decimal> Required;
+        internal void Add(Line line, string signature) { Lines.Add(line.Number); Movements.Add(signature); }
+    }
+
+    private static bool Return(Line line, State state, WorkOffsetRules rules, string name, ref bool home)
+    {
+        if (!line.Has('G', 28) && !line.Has('G', 53)) return false;
+        if (line.Has('G', 28) && line.Has('G', 53)) throw Error(name, line.Number, "G28 \u0438 G53 \u043D\u0435\u043B\u044C\u0437\u044F \u0441\u043E\u0432\u043C\u0435\u0449\u0430\u0442\u044C \u0432 \u043E\u0434\u043D\u043E\u043C \u043A\u0430\u0434\u0440\u0435.");
+        if (!line.Axes) throw Error(name, line.Number, "\u0432\u043E\u0437\u0432\u0440\u0430\u0442 \u0434\u043E\u043B\u0436\u0435\u043D \u044F\u0432\u043D\u043E \u0437\u0430\u0434\u0430\u0432\u0430\u0442\u044C \u043E\u0441\u044C.");
+        if (line.Has('Z') && (line.Has('X') || line.Has('Y')))
+            throw Error(name, line.Number, "\u043E\u0442\u0432\u043E\u0434 Z \u0441\u043E\u0432\u043C\u0435\u0449\u0451\u043D \u0441 X/Y. \u041D\u0443\u0436\u0435\u043D \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u044B\u0439 \u043E\u0442\u0432\u043E\u0434 Z \u0434\u043E \u043F\u0435\u0440\u0435\u043C\u0435\u0449\u0435\u043D\u0438\u044F \u043C\u0435\u0436\u0434\u0443 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0430\u043C\u0438.");
+        if (line.Has('G', 28))
+        {
+            if (rules.Profile == "ISO_G53") throw Error(name, line.Number, "G28 \u043D\u0435 \u0441\u043E\u043E\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u0435\u0442 \u043F\u0440\u043E\u0444\u0438\u043B\u044E ISO_G53 \u044D\u0442\u043E\u0433\u043E \u043F\u043E\u0441\u0442\u0430.");
+            if (state.Read("distance") != 91 ||
+                (line.Has('X') && line.Value('X') != 0) || (line.Has('Y') && line.Value('Y') != 0) || (line.Has('Z') && line.Value('Z') != 0))
+                throw Error(name, line.Number, "G28: \u043D\u0443\u0436\u043D\u044B G91 \u0438 \u043D\u0443\u043B\u0435\u0432\u044B\u0435 \u043F\u0440\u0438\u0440\u0430\u0449\u0435\u043D\u0438\u044F \u043E\u0441\u0435\u0439. \u0410\u0431\u0441\u043E\u043B\u044E\u0442\u043D\u0443\u044E \u043F\u0440\u043E\u043C\u0435\u0436\u0443\u0442\u043E\u0447\u043D\u0443\u044E \u0442\u043E\u0447\u043A\u0443 \u0441\u043A\u0440\u0438\u043F\u0442 \u043D\u0435 \u0438\u0437\u043C\u0435\u043D\u044F\u0435\u0442.");
+        }
+        else
+        {
+            if (rules.Profile == "ISO_G28") throw Error(name, line.Number, "G53 \u043D\u0435 \u0441\u043E\u043E\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u0435\u0442 \u043F\u0440\u043E\u0444\u0438\u043B\u044E ISO_G28 \u044D\u0442\u043E\u0433\u043E \u043F\u043E\u0441\u0442\u0430.");
+            if (!rules.G53Z.HasValue)
+                throw Error(name, line.Number, "\u043D\u0430\u0439\u0434\u0435\u043D G53. \u0417\u0430\u0434\u0430\u0439\u0442\u0435 WorkOffsetG53Z \u0432 \u0441\u0435\u043A\u0446\u0438\u0438 \u044D\u0442\u043E\u0433\u043E \u043F\u043E\u0441\u0442\u0430 \u0432 INI \u043F\u043E\u0441\u043B\u0435 \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0438 \u0432\u044B\u0441\u043E\u0442\u044B \u043E\u0442\u0432\u043E\u0434\u0430 \u043D\u0430 \u0441\u0442\u0430\u043D\u043A\u0435. Z0 \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0438 \u0431\u0435\u0437\u043E\u043F\u0430\u0441\u043D\u044B\u043C \u043D\u0435 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F.");
+            if (state.Read("units") != 20 && state.Get("units") != 21)
+                throw Error(name, line.Number, "G53: \u043F\u0435\u0440\u0435\u0434 \u043E\u0442\u0432\u043E\u0434\u043E\u043C \u0434\u043E\u043B\u0436\u043D\u044B \u0431\u044B\u0442\u044C \u044F\u0432\u043D\u043E \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0435\u043D\u044B \u0435\u0434\u0438\u043D\u0438\u0446\u044B G20/G21, \u0441\u043E\u043E\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0435 WorkOffsetG53Z.");
+            if (state.Read("distance") != 90 || state.Read("motion") != 0 || state.Read("length") != 49 || state.Read("cutter") != 40)
+                throw Error(name, line.Number, "G53: \u0442\u0440\u0435\u0431\u0443\u044E\u0442\u0441\u044F \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0435 G90, G00, G40 \u0438 \u043E\u0442\u043C\u0435\u043D\u0451\u043D\u043D\u0430\u044F \u043A\u043E\u0440\u0440\u0435\u043A\u0446\u0438\u044F \u0434\u043B\u0438\u043D\u044B G49; \u043E\u043D\u0438 \u0434\u043E\u043B\u0436\u043D\u044B \u0431\u044B\u0442\u044C \u0437\u0430\u0434\u0430\u043D\u044B \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0423\u041F.");
+            if (line.Has('Z') && line.Value('Z') != rules.G53Z.Value)
+                throw Error(name, line.Number, "G53 Z" + line.Value('Z').ToString(CultureInfo.InvariantCulture) + " \u043D\u0435 \u0441\u043E\u0432\u043F\u0430\u0434\u0430\u0435\u0442 \u0441 \u043F\u0440\u043E\u0432\u0435\u0440\u0435\u043D\u043D\u044B\u043C WorkOffsetG53Z=" + rules.G53Z.Value.ToString(CultureInfo.InvariantCulture) + ".");
+        }
+        if (!line.Has('Z') && !home)
+            throw Error(name, line.Number, "\u0432\u043E\u0437\u0432\u0440\u0430\u0442 X/Y \u0432\u0441\u0442\u0440\u0435\u0442\u0438\u043B\u0441\u044F \u0434\u043E \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0451\u043D\u043D\u043E\u0433\u043E \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u043E\u0433\u043E \u043E\u0442\u0432\u043E\u0434\u0430 Z.");
+        // This line is executed in the current trace. The separate block-delete
+        // trace proves clearance when all optional lines are skipped as well.
+        if (line.Has('Z')) home = true;
+        return true;
+    }
+
+    // Read effective modes, including header modes. Capture only modes consumed
+    // before this section writes them; those may need restoration on a repeat.
+    private static TracePass Trace(List<Line> lines, int from, int to, State state, bool skip, string name, WorkOffsetRules rules)
+    {
+        TracePass trace = new TracePass();
+        state.Written.Clear(); state.Required.Clear();
+        bool length = false, h = false, x = false, y = false, z = false, home = false;
         for (int i = from; i < to; i++)
         {
             Line line = lines[i]; if (line.Optional && skip) continue;
             decimal previousMotion = state.Get("motion");
-            foreach (Word w in line.Words)
-                if (w.Letter == 'G')
-                {
-                    if (w.Value >= 54 && w.Value <= 59) offset = true;
-                    if (w.Value == 90) absolute = true;
-                    if (w.Value == 0) rapid = true;
-                    if (w.Value == 40) cancel = true;
-                    if (w.Value == 43 && !line.Optional) length = true;
-                }
+            if (line.Has('G', 43) && !line.Optional) length = true;
             if (line.Has('H') && !line.Optional) h = true;
             Update(state, line);
             if (line.Has('G', 4))
             {
-                if (line.Axes) throw Error(name, line.Number, "\u043E\u0436\u0438\u0434\u0430\u0435\u0442\u0441\u044F \u0432\u044B\u0434\u0435\u0440\u0436\u043A\u0430 G04 P \u0431\u0435\u0437 \u043A\u043E\u043E\u0440\u0434\u0438\u043D\u0430\u0442 \u043E\u0441\u0435\u0439.");
+                if (line.Axes || line.Has('G', 28) || line.Has('G', 53)) throw Error(name, line.Number, "\u043E\u0436\u0438\u0434\u0430\u0435\u0442\u0441\u044F \u0432\u044B\u0434\u0435\u0440\u0436\u043A\u0430 G04 P \u0431\u0435\u0437 \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u044F \u043E\u0441\u0435\u0439.");
                 continue;
             }
-            if (line.Has('G', 28))
+            if (Return(line, state, rules, name, ref home))
             {
-                if (state.Get("distance") != 91 || !line.Axes ||
-                    (line.Has('X') && line.Value('X') != 0) || (line.Has('Y') && line.Value('Y') != 0) || (line.Has('Z') && line.Value('Z') != 0))
-                    throw Error(name, line.Number, "\u0434\u043B\u044F \u0432\u043E\u0437\u0432\u0440\u0430\u0442\u0430 \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044F G91 G28 \u0441 \u043D\u0443\u043B\u0435\u0432\u044B\u043C\u0438 \u043F\u0440\u0438\u0440\u0430\u0449\u0435\u043D\u0438\u044F\u043C\u0438.");
-                if (line.Has('Z')) home = !line.Optional && !line.Has('X') && !line.Has('Y');
-                trace.Add("HOME;" + state.Signature("units", "cutter", "length", "H"));
+                trace.Add(line, (line.Has('G', 28) ? "G28;" : "G53;") + state.Signature("units", "cutter", "length", "H"));
                 continue;
             }
             decimal motion = state.Get("motion"); bool cycle = Cycle(motion);
@@ -4423,46 +4617,107 @@ internal static class WorkOffsetPrograms
             bool arc = (motion == 2 || motion == 3) && (line.Has('I') || line.Has('J') || line.Has('K'));
             if (!line.Axes && !explicitCycle && !arc) continue;
             if (motion != 0 && motion != 1 && motion != 2 && motion != 3 && !cycle)
-                throw Error(name, line.Number, "\u0434\u0432\u0438\u0436\u0435\u043D\u0438\u0435 \u0431\u0435\u0437 \u044F\u0432\u043D\u043E\u0433\u043E \u0440\u0435\u0436\u0438\u043C\u0430 G00/G01/G02/G03/\u0446\u0438\u043A\u043B\u0430.");
-            if (!xy)
+                throw Error(name, line.Number, "\u0434\u043B\u044F \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u044F \u043D\u0435 \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0451\u043D G00/G01/G02/G03 \u0438\u043B\u0438 \u0446\u0438\u043A\u043B.");
+            if (!z)
             {
-                if (!offset || !absolute || !rapid || !cancel || line.Optional || state.Get("distance") != 90 || motion != 0 ||
-                    state.Get("cutter") != 40 || !line.Has('X') || !line.Has('Y') || line.Has('Z'))
-                    throw Error(name, line.Number, "\u043D\u0430\u0447\u0430\u043B\u043E \u0443\u0447\u0430\u0441\u0442\u043A\u0430 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 \u0434\u043E\u043B\u0436\u043D\u043E \u0437\u0430\u0434\u0430\u0442\u044C G40, G90, G00, G54\u2013G59 \u0438 \u043F\u043E\u043B\u043D\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434 X/Y, \u0437\u0430\u0442\u0435\u043C \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434 Z \u0441 G43 H.");
-                xy = true;
-            }
-            if (line.Has('Z') && !z)
-            {
-                if (!length || !h || line.Optional || motion != 0 || state.Get("distance") != 90 || state.Get("length") != 43 || state.Get("H") <= 0 || line.Has('X') || line.Has('Y'))
-                    throw Error(name, line.Number, "\u043F\u0435\u0440\u0432\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434 \u043F\u043E Z \u0434\u043E\u043B\u0436\u0435\u043D \u0431\u044B\u0442\u044C \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u044B\u043C \u0430\u0431\u0441\u043E\u043B\u044E\u0442\u043D\u044B\u043C G00 \u0441 \u0432\u043A\u043B\u044E\u0447\u0451\u043D\u043D\u043E\u0439 G43 H.");
-                z = true;
+                if (line.Optional) throw Error(name, line.Number, "\u043D\u0430\u0447\u0430\u043B\u044C\u043D\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434 \u043F\u043E\u043C\u0435\u0447\u0435\u043D /. \u041E\u043D \u0434\u043E\u043B\u0436\u0435\u043D \u0432\u044B\u043F\u043E\u043B\u043D\u044F\u0442\u044C\u0441\u044F \u0438 \u043F\u0440\u0438 \u0432\u043A\u043B\u044E\u0447\u0451\u043D\u043D\u043E\u043C \u043F\u0440\u043E\u043F\u0443\u0441\u043A\u0435 \u043A\u0430\u0434\u0440\u043E\u0432.");
+                if (state.Get("distance") != 90) throw Error(name, line.Number, "\u043D\u0430\u0447\u0430\u043B\u044C\u043D\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434: \u043D\u0435 \u0437\u0430\u0434\u0430\u043D \u0430\u0431\u0441\u043E\u043B\u044E\u0442\u043D\u044B\u0439 \u0440\u0435\u0436\u0438\u043C G90 \u0432 \u0448\u0430\u043F\u043A\u0435 \u0438\u043B\u0438 \u0443\u0447\u0430\u0441\u0442\u043A\u0435 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430.");
+                if (motion != 0) throw Error(name, line.Number, "\u043D\u0430\u0447\u0430\u043B\u044C\u043D\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434: \u043D\u0443\u0436\u0435\u043D \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0439 G00 \u0434\u043E \u043E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0438.");
+                if (state.Get("cutter") != 40) throw Error(name, line.Number, "\u043D\u0430\u0447\u0430\u043B\u044C\u043D\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434: \u043D\u0435 \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0435\u043D\u0430 \u043E\u0442\u043C\u0435\u043D\u0430 \u043A\u043E\u0440\u0440\u0435\u043A\u0446\u0438\u0438 G40 \u0432 \u0448\u0430\u043F\u043A\u0435 \u0438\u043B\u0438 \u0443\u0447\u0430\u0441\u0442\u043A\u0435 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430.");
+                if (state.Read("offset") < 54 || state.Get("offset") > 59) throw Error(name, line.Number, "\u0434\u043E \u043F\u043E\u0434\u0445\u043E\u0434\u0430 \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D\u0430 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0430 G54\u2013G59.");
+                if (line.Has('Z'))
+                {
+                    if (!x || !y) throw Error(name, line.Number, "\u0434\u043E \u043F\u0435\u0440\u0432\u043E\u0433\u043E \u043F\u043E\u0434\u0445\u043E\u0434\u0430 Z \u0434\u043E\u043B\u0436\u043D\u044B \u0431\u044B\u0442\u044C \u044F\u0432\u043D\u043E \u0437\u0430\u0434\u0430\u043D\u044B \u043E\u0431\u0435 \u043A\u043E\u043E\u0440\u0434\u0438\u043D\u0430\u0442\u044B X \u0438 Y; \u0434\u043E\u043F\u0443\u0441\u043A\u0430\u044E\u0442\u0441\u044F \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u044B\u0435 \u043A\u0430\u0434\u0440\u044B X \u0438 Y.");
+                    if (line.Has('X') || line.Has('Y')) throw Error(name, line.Number, "\u043F\u0435\u0440\u0432\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434 Z \u0441\u043E\u0432\u043C\u0435\u0449\u0451\u043D \u0441 X/Y. \u0414\u043B\u044F \u043F\u0435\u0440\u0435\u043D\u043E\u0441\u0430 \u043C\u0435\u0436\u0434\u0443 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0430\u043C\u0438 \u043D\u0443\u0436\u0435\u043D \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434 Z.");
+                    if (!length || !h || state.Get("length") != 43 || state.Get("H") <= 0)
+                        throw Error(name, line.Number, "\u043F\u0435\u0440\u0432\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434 Z: \u0443\u0447\u0430\u0441\u0442\u043E\u043A \u0434\u043E\u043B\u0436\u0435\u043D \u044F\u0432\u043D\u043E \u0432\u043A\u043B\u044E\u0447\u0430\u0442\u044C G43 \u0438 \u043F\u043E\u043B\u043E\u0436\u0438\u0442\u0435\u043B\u044C\u043D\u044B\u0439 H, \u0432\u043C\u0435\u0441\u0442\u0435 \u0438\u043B\u0438 \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u044B\u043C\u0438 \u043A\u0430\u0434\u0440\u0430\u043C\u0438.");
+                    z = true;
+                }
+                else { if (line.Has('X')) x = true; if (line.Has('Y')) y = true; }
             }
             if (cycle && previousMotion != motion && (!line.Has('Z') || !line.Has('R') || !line.Has('F')))
                 throw Error(name, line.Number, "\u043F\u0435\u0440\u0432\u044B\u0439 \u043A\u0430\u0434\u0440 \u0446\u0438\u043A\u043B\u0430 \u0434\u043E\u043B\u0436\u0435\u043D \u044F\u0432\u043D\u043E \u0437\u0430\u0434\u0430\u0432\u0430\u0442\u044C Z, R \u0438 F.");
             if (motion != 0 && (!z || state.Get("F") <= 0 || state.Get("S") <= 0 || (state.Get("spindle") != 3 && state.Get("spindle") != 4)))
-                throw Error(name, line.Number, "\u043F\u0435\u0440\u0435\u0434 \u043E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u043E\u0439 \u043D\u0443\u0436\u043D\u044B \u043F\u043E\u0434\u0445\u043E\u0434 \u043F\u043E Z, \u043F\u043E\u0434\u0430\u0447\u0430 F \u0438 \u0437\u0430\u043F\u0443\u0441\u043A \u0448\u043F\u0438\u043D\u0434\u0435\u043B\u044F M03/M04 \u0441 S.");
+                throw Error(name, line.Number, "\u043F\u0435\u0440\u0435\u0434 \u043E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u043E\u0439 \u043D\u0443\u0436\u043D\u044B \u043F\u043E\u0434\u0445\u043E\u0434 Z, \u043F\u043E\u043B\u043E\u0436\u0438\u0442\u0435\u043B\u044C\u043D\u044B\u0435 F \u0438 S, \u0440\u0430\u0431\u043E\u0442\u0430\u044E\u0449\u0438\u0439 \u0448\u043F\u0438\u043D\u0434\u0435\u043B\u044C M03/M04.");
             string signature = state.Signature("motion", "distance", "plane", "units", "cutter", "path");
             if (line.Has('Z') || motion != 0) signature += state.Signature("length", "H");
             if (motion != 0) signature += state.Signature("feedmode", "F", "spindle", "S", "mist", "flood");
             if (state.Get("cutter") == 41 || state.Get("cutter") == 42) signature += state.Signature("D");
             if (cycle) signature += state.Signature("return", "R", "P", "Q");
-            trace.Add(signature);
+            trace.Add(line, signature);
             if (line.Has('Z') || cycle) home = false;
         }
-        if (!xy || !z || !home || (state.Get("cutter") != 40) || Cycle(state.Get("motion")))
-            throw Error(name, from < lines.Count ? lines[from].Number : 0,
-                "\u0443\u0447\u0430\u0441\u0442\u043E\u043A \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 \u0434\u043E\u043B\u0436\u0435\u043D \u0437\u0430\u0432\u0435\u0440\u0448\u0430\u0442\u044C\u0441\u044F \u043E\u0442\u043C\u0435\u043D\u043E\u0439 \u043A\u043E\u0440\u0440\u0435\u043A\u0446\u0438\u0438/\u0446\u0438\u043A\u043B\u0430 \u0438 \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u044B\u043C \u0431\u0435\u0437\u0443\u0441\u043B\u043E\u0432\u043D\u044B\u043C \u043E\u0442\u0432\u043E\u0434\u043E\u043C G91 G28 Z0; \u043E\u0434\u043D\u043E\u0433\u043E \u043E\u0442\u0432\u043E\u0434\u0430 \u0441 / \u043D\u0435\u0434\u043E\u0441\u0442\u0430\u0442\u043E\u0447\u043D\u043E.");
+        int last = to > from ? lines[to - 1].Number : lines[from - 1].Number;
+        if (!x || !y || !z) throw Error(name, last, "\u0432 \u0443\u0447\u0430\u0441\u0442\u043A\u0435 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D \u043F\u043E\u043B\u043D\u044B\u0439 \u043F\u043E\u0434\u0445\u043E\u0434 X, Y, \u0437\u0430\u0442\u0435\u043C Z.");
+        if (!home) throw Error(name, last, "\u0432 \u043A\u043E\u043D\u0446\u0435 \u0443\u0447\u0430\u0441\u0442\u043A\u0430 \u043D\u0435 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0451\u043D \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u044B\u0439 \u0431\u0435\u0437\u0443\u0441\u043B\u043E\u0432\u043D\u044B\u0439 \u043E\u0442\u0432\u043E\u0434 Z: G91 G28 Z0 \u043B\u0438\u0431\u043E \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D\u043D\u044B\u0439 G53. \u0420\u0430\u0431\u043E\u0447\u0430\u044F \u0432\u044B\u0441\u043E\u0442\u0430 Z \u0438 \u043E\u0442\u0432\u043E\u0434 \u0441 / \u043D\u0435 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0430\u044E\u0442 \u043F\u0435\u0440\u0435\u0445\u043E\u0434 \u043C\u0435\u0436\u0434\u0443 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0430\u043C\u0438.");
+        if (state.Get("cutter") != 40) throw Error(name, last, "\u0432 \u043A\u043E\u043D\u0446\u0435 \u0443\u0447\u0430\u0441\u0442\u043A\u0430 \u043D\u0435 \u043E\u0442\u043C\u0435\u043D\u0435\u043D\u0430 \u043A\u043E\u0440\u0440\u0435\u043A\u0446\u0438\u044F \u0440\u0430\u0434\u0438\u0443\u0441\u0430: \u043D\u0443\u0436\u0435\u043D G40.");
+        if (Cycle(state.Get("motion"))) throw Error(name, last, "\u0432 \u043A\u043E\u043D\u0446\u0435 \u0443\u0447\u0430\u0441\u0442\u043A\u0430 \u043E\u0441\u0442\u0430\u043B\u0441\u044F \u0430\u043A\u0442\u0438\u0432\u043D\u044B\u0439 \u0446\u0438\u043A\u043B: \u043D\u0443\u0436\u043D\u0430 \u043E\u0442\u043C\u0435\u043D\u0430 G80.");
+        trace.Required = new Dictionary<string, decimal>(state.Required);
         return trace;
     }
 
+    private static void NeedRestore(Dictionary<string, decimal> restore, TracePass original, State end, string name, int line)
+    {
+        foreach (KeyValuePair<string, decimal> pair in original.Required)
+        {
+            if (pair.Key == "offset" || pair.Value == end.Get(pair.Key)) continue;
+            decimal previous;
+            if (restore.TryGetValue(pair.Key, out previous) && previous != pair.Value)
+                throw Error(name, line, "\u0440\u0435\u0436\u0438\u043C " + pair.Key + " \u0437\u0430\u0432\u0438\u0441\u0438\u0442 \u043E\u0442 \u043F\u0440\u043E\u043F\u0443\u0441\u043A\u0430 \u043A\u0430\u0434\u0440\u043E\u0432 /. \u0415\u0434\u0438\u043D\u044B\u0439 \u043F\u043E\u0432\u0442\u043E\u0440 \u0431\u0435\u0437 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F \u043B\u043E\u0433\u0438\u043A\u0438 \u043D\u0435 \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0451\u043D.");
+            // Never synthesize a tool/corrector selection, spindle/coolant action,
+            // cycle, coordinate or controller-specific M-code.
+            bool mode = pair.Key == "distance" || pair.Key == "plane" || pair.Key == "units" ||
+                pair.Key == "path" || pair.Key == "feedmode" || pair.Key == "return" ||
+                (pair.Key == "cutter" && pair.Value == 40) ||
+                (pair.Key == "motion" && (pair.Value == 0 || pair.Value == 80));
+            if (!mode || pair.Value < 0)
+                throw Error(name, line, "\u043F\u043E\u0432\u0442\u043E\u0440 \u043C\u0435\u043D\u044F\u0435\u0442 \u0443\u043D\u0430\u0441\u043B\u0435\u0434\u043E\u0432\u0430\u043D\u043D\u044B\u0439 \u0440\u0435\u0436\u0438\u043C " + pair.Key + ". \u0417\u0430\u0434\u0430\u0439\u0442\u0435 \u0435\u0433\u043E \u044F\u0432\u043D\u043E \u0432 \u043D\u0430\u0447\u0430\u043B\u0435 \u0443\u0447\u0430\u0441\u0442\u043A\u0430; \u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u044B\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u044F \u0438 \u043A\u043E\u043C\u0430\u043D\u0434\u044B \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430/\u0448\u043F\u0438\u043D\u0434\u0435\u043B\u044F \u0441\u043A\u0440\u0438\u043F\u0442 \u043D\u0435 \u043F\u0440\u0438\u0434\u0443\u043C\u044B\u0432\u0430\u0435\u0442.");
+            restore[pair.Key] = pair.Value;
+        }
+    }
+    private static string Prefix(Dictionary<string, decimal> restore, bool offsetNeeded, int offset, string newline)
+    {
+        StringBuilder result = new StringBuilder();
+        foreach (string key in new string[] { "units", "plane", "distance", "cutter", "path", "feedmode", "return", "motion" })
+        {
+            decimal value;
+            if (restore != null && restore.TryGetValue(key, out value)) result.Append('G').Append(value.ToString(CultureInfo.InvariantCulture)).Append(newline);
+        }
+        if (offsetNeeded) result.Append('G').Append(53 + offset).Append(newline);
+        return result.ToString();
+    }
+    private static void Compare(TracePass original, TracePass repeated, string name, int line)
+    {
+        if (original.Movements.Count != repeated.Movements.Count) throw Error(name, line, "\u0438\u0437\u043C\u0435\u043D\u0438\u043B\u043E\u0441\u044C \u0447\u0438\u0441\u043B\u043E \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u0439 \u043F\u0440\u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u0435 \u0443\u0447\u0430\u0441\u0442\u043A\u0430.");
+        for (int i = 0; i < original.Movements.Count; i++)
+            if (original.Movements[i] != repeated.Movements[i])
+                throw Error(name, original.Lines[i], "\u043F\u0440\u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u0435 \u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0435 \u0440\u0435\u0436\u0438\u043C\u044B \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u044F, \u043A\u043E\u0440\u0440\u0435\u043A\u0446\u0438\u0438, \u0448\u043F\u0438\u043D\u0434\u0435\u043B\u044F \u0438\u043B\u0438 \u043F\u043E\u0434\u0430\u0447\u0438.\r\n\u041F\u0435\u0440\u0432\u044B\u0439 \u043F\u0440\u043E\u0445\u043E\u0434: " + original.Movements[i] + "\r\n\u041F\u043E\u0432\u0442\u043E\u0440: " + repeated.Movements[i]);
+    }
+    private static string Newline(string text, Line line)
+    {
+        int end = line.End;
+        return end > 0 && text[end - 1] == '\n' ? (end > 1 && text[end - 2] == '\r' ? "\r\n" : "\n") : "\r";
+    }
+
     internal static byte[] Rewrite(byte[] raw, string name, int[] offsets)
+    { return Rewrite(raw, name, offsets, new WorkOffsetRules()); }
+
+    internal static byte[] Rewrite(byte[] raw, string name, int[] offsets, WorkOffsetRules rules)
     {
         if (offsets == null) return raw;
+        try { return RewriteCore(raw, name, offsets, rules); }
+        catch (WorkOffsetException ex) { ex.AddContext(raw, offsets, rules); throw; }
+    }
+
+    private static byte[] RewriteCore(byte[] raw, string name, int[] offsets, WorkOffsetRules rules)
+    {
         Validate(offsets);
         if (raw == null || raw.Length == 0) throw Error(name, 0, "\u043F\u0443\u0441\u0442\u0430\u044F \u0423\u041F.");
         // Latin-1 maps bytes one-to-one, including original UTF-8/ANSI comments.
         string text = Encoding.GetEncoding(28591).GetString(raw);
         List<Line> lines = Parse(text, name);
+        bool machineCoordinates = lines.Exists(delegate(Line line) { return line.Has('G', 53); });
+        int machineUnits = -1;
         List<int> changes = new List<int>();
         int header = -1, ending = -1, baseOffset = -1; bool closed = false, opening = false;
         for (int i = 0; i < lines.Count; i++)
@@ -4478,11 +4733,18 @@ internal static class WorkOffsetPrograms
             if (closed || ending >= 0) throw Error(name, line.Number, "\u043A\u043E\u043C\u0430\u043D\u0434\u044B \u043F\u043E\u0441\u043B\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0438\u044F \u0423\u041F \u0438\u043B\u0438 \u043D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u043E \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C \u0432 \u0444\u0430\u0439\u043B\u0435.");
             if (header < 0)
             {
-                if (line.Optional || line.Words.Count != 1 || !line.Has('O') || line.Value('O') < 1)
+                if (line.Optional || line.Words.Count != (line.Has('N') ? 2 : 1) || !line.Has('O') || line.Value('O') < 1)
                     throw Error(name, line.Number, "\u043E\u0436\u0438\u0434\u0430\u0435\u0442\u0441\u044F \u043E\u0434\u0438\u043D \u0447\u0438\u0441\u043B\u043E\u0432\u043E\u0439 O-\u0437\u0430\u0433\u043E\u043B\u043E\u0432\u043E\u043A.");
                 header = i; continue;
             }
             if (line.Has('O')) throw Error(name, line.Number, "\u043D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u043E O-\u0437\u0430\u0433\u043E\u043B\u043E\u0432\u043A\u043E\u0432.");
+            foreach (Word w in line.Words)
+                if (machineCoordinates && w.Letter == 'G' && (w.Value == 20 || w.Value == 21))
+                {
+                    if (machineUnits >= 0 && machineUnits != (int)w.Value)
+                        throw Error(name, line.Number, "\u0441\u043C\u0435\u043D\u0430 G20/G21 \u0432\u043D\u0443\u0442\u0440\u0438 \u0423\u041F \u0441 G53 \u043D\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044F: WorkOffsetG53Z \u0437\u0430\u0434\u0430\u043D \u0432 \u043E\u0434\u043D\u043E\u0439 \u0441\u0438\u0441\u0442\u0435\u043C\u0435 \u0435\u0434\u0438\u043D\u0438\u0446.");
+                    machineUnits = (int)w.Value;
+                }
             foreach (Word w in line.Words)
                 if (w.Letter == 'G' && w.Value >= 54 && w.Value <= 59)
                 {
@@ -4528,37 +4790,57 @@ internal static class WorkOffsetPrograms
             string newline = text[end - 1] == '\n' ? (end > 1 && text[end - 2] == '\r' ? "\r\n" : "\n") : "\r";
             initialFeed = "G94" + newline;
         }
-        foreach (bool skip in new bool[] { false, true })
-        {
-            State state = new State(); int at = header + 1;
-            for (int section = 0; section < changes.Count; section++)
+        List<Dictionary<string, decimal>> restorations = new List<Dictionary<string, decimal>>();
+        bool[] insertOffset = new bool[changes.Count];
+        for (int i = 0; i < changes.Count; i++) restorations.Add(new Dictionary<string, decimal>());
+        // First collect requirements for both states of the block-delete switch.
+        // Then validate exactly the common prefixes that will be emitted.
+        for (int validation = 0; validation < 2; validation++)
+            foreach (bool skip in new bool[] { false, true })
             {
-                int change = changes[section], to = section + 1 < changes.Count ? changes[section + 1] : ending;
-                for (; at <= change; at++)
+                State state = new State(); int at = header + 1; bool headerHome = false;
+                for (int section = 0; section < changes.Count; section++)
                 {
-                    Line line = lines[at]; if (skip && line.Optional) continue;
-                    Update(state, line);
-                    if (section == 0 && line.Axes && !line.Has('G', 28))
-                        throw Error(name, line.Number, "\u0434\u0432\u0438\u0436\u0435\u043D\u0438\u0435 \u0434\u043E \u043F\u0435\u0440\u0432\u043E\u0439 \u0441\u043C\u0435\u043D\u044B \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 \u043D\u0435 \u043C\u043E\u0436\u0435\u0442 \u0431\u044B\u0442\u044C \u043F\u043E\u0432\u0442\u043E\u0440\u0435\u043D\u043E.");
+                    int change = changes[section], to = section + 1 < changes.Count ? changes[section + 1] : ending;
+                    for (; at <= change; at++)
+                    {
+                        Line line = lines[at]; if (skip && line.Optional) continue;
+                        Update(state, line);
+                        if (section == 0 && line.Axes && !Return(line, state, rules, name, ref headerHome))
+                            throw Error(name, line.Number, "\u0434\u0432\u0438\u0436\u0435\u043D\u0438\u0435 \u0434\u043E \u043F\u0435\u0440\u0432\u043E\u0439 \u0441\u043C\u0435\u043D\u044B \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 \u043D\u0435 \u043C\u043E\u0436\u0435\u0442 \u0431\u044B\u0442\u044C \u043F\u043E\u0432\u0442\u043E\u0440\u0435\u043D\u043E.");
+                    }
+                    if (state.Get("T") < 1) throw Error(name, lines[change].Number, "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C T \u0434\u043B\u044F M06.");
+                    if (section == 0 && initializeFeed) state.Set("feedmode", 94);
+                    TracePass original = Trace(lines, change + 1, to, state, skip, name, rules);
+                    if (validation == 0)
+                    {
+                        if (offsets.Length > 1) NeedRestore(restorations[section], original, state, name, lines[change].Number);
+                        if (original.Required.ContainsKey("offset")) insertOffset[section] = true;
+                    }
+                    else if (offsets.Length > 1)
+                    {
+                        State repeated = state.Copy();
+                        foreach (KeyValuePair<string, decimal> pair in restorations[section]) repeated.Set(pair.Key, pair.Value);
+                        if (insertOffset[section]) repeated.Set("offset", baseOffset);
+                        TracePass again = Trace(lines, change + 1, to, repeated, skip, name, rules);
+                        Compare(original, again, name, lines[change].Number);
+                        // The last repeated pass must leave exactly the original modes
+                        // for the next tool. Preselection T is deliberately not restored.
+                        foreach (KeyValuePair<string, decimal> pair in state.Values)
+                            if (pair.Key != "offset" && repeated.Get(pair.Key) != pair.Value)
+                                throw Error(name, lines[change].Number, "\u043F\u043E\u0432\u0442\u043E\u0440 \u043C\u0435\u043D\u044F\u0435\u0442 \u043A\u043E\u043D\u0435\u0447\u043D\u044B\u0439 \u0440\u0435\u0436\u0438\u043C " + pair.Key + " \u043F\u0435\u0440\u0435\u0434 \u0441\u043B\u0435\u0434\u0443\u044E\u0449\u0438\u043C \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u043C.");
+                    }
+                    at = to;
                 }
-                if (state.Get("T") < 1) throw Error(name, lines[change].Number, "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C T \u0434\u043B\u044F M06.");
-                // Validate the exact G94 initialization emitted below after the first M06.
-                if (section == 0 && initializeFeed) state.Set("feedmode", 94);
-                List<string> original = Trace(lines, change + 1, to, state, skip, name);
-                State repeated = state.Copy();
-                List<string> again = Trace(lines, change + 1, to, repeated, skip, name);
-                if (original.Count != again.Count) throw Error(name, lines[change].Number, "\u043D\u0435\u043E\u0434\u043D\u043E\u0437\u043D\u0430\u0447\u043D\u044B\u0439 \u043F\u043E\u0432\u0442\u043E\u0440 \u0443\u0447\u0430\u0441\u0442\u043A\u0430 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430.");
-                for (int j = 0; j < original.Count; j++)
-                    if (original[j] != again[j])
-                        throw Error(name, lines[change].Number, "\u043F\u0440\u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u0435 \u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F \u0443\u043D\u0430\u0441\u043B\u0435\u0434\u043E\u0432\u0430\u043D\u043D\u044B\u0435 \u0440\u0435\u0436\u0438\u043C\u044B \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u044F, \u043A\u043E\u0440\u0440\u0435\u043A\u0446\u0438\u0438 \u0438\u043B\u0438 \u043F\u043E\u0434\u0430\u0447\u0438. \u041D\u0430\u0447\u0430\u043B\u043E \u0443\u0447\u0430\u0441\u0442\u043A\u0430 \u0434\u043E\u043B\u0436\u043D\u043E \u044F\u0432\u043D\u043E \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u0430\u0432\u043B\u0438\u0432\u0430\u0442\u044C \u043D\u0435\u043E\u0431\u0445\u043E\u0434\u0438\u043C\u044B\u0435 \u0440\u0435\u0436\u0438\u043C\u044B.");
-                at = to;
             }
-        }
         long length = (long)raw.Length + initialFeed.Length;
         for (int i = 0; i < changes.Count; i++)
         {
             int from = lines[changes[i]].End, to = lines[i + 1 < changes.Count ? changes[i + 1] : ending].Start;
             length += (long)(to - from) * (offsets.Length - 1);
+            string newline = Newline(text, lines[changes[i]]);
+            length += (long)Prefix(restorations[i], false, 1, newline).Length * (offsets.Length - 1);
+            if (insertOffset[i]) length += (long)(3 + newline.Length) * offsets.Length;
         }
         if (length > 512L * 1024 * 1024) throw Error(name, 0, "\u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442 \u043F\u043E\u0432\u0442\u043E\u0440\u0435\u043D\u0438\u044F \u043F\u0440\u0435\u0432\u044B\u0448\u0430\u0435\u0442 512 \u041C\u0411.");
         StringBuilder result = new StringBuilder((int)length);
@@ -4568,7 +4850,12 @@ internal static class WorkOffsetPrograms
             int from = lines[changes[i]].End, to = lines[i + 1 < changes.Count ? changes[i + 1] : ending].Start;
             Append(result, text, lines, position, from, offsets[0]);
             if (i == 0) result.Append(initialFeed);
-            foreach (int offset in offsets) Append(result, text, lines, from, to, offset);
+            string newline = Newline(text, lines[changes[i]]);
+            for (int pass = 0; pass < offsets.Length; pass++)
+            {
+                result.Append(Prefix(pass == 0 ? null : restorations[i], insertOffset[i], offsets[pass], newline));
+                Append(result, text, lines, from, to, offsets[pass]);
+            }
             position = to;
         }
         result.Append(text, position, text.Length - position);
@@ -4733,7 +5020,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.44";
+    internal const string SCRIPT_VERSION = "V1.45";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
 
     internal static string WindowTitle(string detail)
@@ -4828,6 +5115,8 @@ public sealed class PostDefinition
     public string EventFile;
     public string DefinitionFile;
     public string DefaultExtension;
+    public string WorkOffsetProfile = "Auto";
+    public decimal? WorkOffsetG53Z;
     public PostDefinition(string name, string eventFile, string definitionFile)
     { Name = name; EventFile = eventFile; DefinitionFile = definitionFile; }
     public string Key { get { return (EventFile + "|" + DefinitionFile).ToUpperInvariant(); } }
@@ -5602,7 +5891,7 @@ public sealed class RouterConfig
             {
                 string name = section.Name.Substring(5).Trim();
                 if (name.Length == 0) throw IniReader.Error(path, section.Line, "\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u0438\u043C\u044F: [Post FANUC_3_AXIS].");
-                Allowed(section, path, new string[] { "Tcl", "Def", "Extension" });
+                Allowed(section, path, new string[] { "Tcl", "Def", "Extension", "WorkOffsetProfile", "WorkOffsetG53Z" });
                 IniEntry tcl = section.Find("Tcl"), def = section.Find("Def");
                 if (tcl == null || def == null)
                     throw IniReader.Error(path, section.Line, "\u0414\u043B\u044F \u043F\u043E\u0441\u0442\u0430 \u00AB" + name + "\u00BB \u043D\u0443\u0436\u043D\u044B Tcl= \u0438 Def=.");
@@ -5612,6 +5901,20 @@ public sealed class RouterConfig
                     throw IniReader.Error(path, section.Line, "Tcl \u0434\u043E\u043B\u0436\u0435\u043D \u0443\u043A\u0430\u0437\u044B\u0432\u0430\u0442\u044C \u043D\u0430 .tcl, Def \u2014 \u043D\u0430 .def.");
                 IniEntry extension = section.Find("Extension");
                 if (extension != null) post.DefaultExtension = ReadExtension(extension, path);
+                IniEntry profile = section.Find("WorkOffsetProfile"), retractZ = section.Find("WorkOffsetG53Z");
+                try
+                {
+                    if (profile != null) post.WorkOffsetProfile = WorkOffsetRules.Normalize(profile.Value);
+                    if (retractZ != null)
+                    {
+                        decimal value;
+                        if (!Decimal.TryParse(retractZ.Value, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out value))
+                            throw new ArgumentException("WorkOffsetG53Z: \u043C\u0430\u0448\u0438\u043D\u043D\u0430\u044F \u043A\u043E\u043E\u0440\u0434\u0438\u043D\u0430\u0442\u0430 Z, \u0434\u0435\u0441\u044F\u0442\u0438\u0447\u043D\u044B\u0439 \u0440\u0430\u0437\u0434\u0435\u043B\u0438\u0442\u0435\u043B\u044C \u2014 \u0442\u043E\u0447\u043A\u0430.");
+                        post.WorkOffsetG53Z = value;
+                    }
+                    WorkOffsetRules.FromPost(post);
+                }
+                catch (ArgumentException ex) { throw IniReader.Error(path, retractZ != null ? retractZ.Line : profile != null ? profile.Line : section.Line, ex.Message); }
                 foreach (PostDefinition existing in config.Posts)
                     if (existing.Key == post.Key) throw IniReader.Error(path, section.Line, "\u042D\u0442\u0430 \u043F\u0430\u0440\u0430 TCL/DEF \u0443\u0436\u0435 \u0437\u0430\u0434\u0430\u043D\u0430 \u0432 INI.");
                 config.Posts.Add(post);

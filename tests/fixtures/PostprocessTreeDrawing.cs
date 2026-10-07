@@ -32,6 +32,9 @@ internal static class RuntimeForms
     internal static object Call(object target, string name, params object[] arguments)
     { return target.GetType().InvokeMember(name, BindingFlags.InvokeMethod | BindingFlags.Public | BindingFlags.Instance, null, target, arguments); }
     internal static void Dispose(object target) { IDisposable disposable = target as IDisposable; if (disposable != null) disposable.Dispose(); }
+    internal static string Show(object dialog, object owner) { return ((Form)dialog).ShowDialog((IWin32Window)owner).ToString(); }
+    internal static string Message(object owner, string text, string caption, string buttons, string icon, string defaultButton)
+    { throw new Exception("Unexpected diagnostic fallback: " + caption + " / " + text); }
 }
 
 internal static class TreeDrawingChecks
@@ -54,6 +57,7 @@ internal static class TreeDrawingChecks
             Run(8.25F, 26, false, false, themed);
             Console.WriteLine("PASS real Windows tree: " + checks + " pixel/interaction checks; " + args[0]);
             DescriptionInlineChecks.Run(themed);
+            PostprocessErrorChecks.Run(themed);
             return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
