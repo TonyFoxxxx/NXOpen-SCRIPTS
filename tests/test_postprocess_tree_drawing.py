@@ -29,6 +29,11 @@ class NativeTreeDrawingTests(unittest.TestCase):
         inline = (ROOT / "tests/fixtures/DescriptionInline.cs").read_text(encoding="ascii")
         inline = inline.replace('/* PRODUCTION_FIELDS */', fields + properties + methods)
         inline = inline.replace('/* PRODUCTION_SETUP */', setup)
+        error_dialog = 'internal sealed class PostprocessErrorDialog' + source.split(
+            'internal sealed class PostprocessErrorDialog', 1)[1].split('internal sealed class MachineChoice', 1)[0]
+        script_info = 'internal static class ScriptInfo' + source.split(
+            'internal static class ScriptInfo', 1)[1].split('// The following code has no NX/UI dependency', 1)[0]
+        error_checks = (ROOT / 'tests/fixtures/PostprocessError.cs').read_text(encoding='ascii')
         framework = Path(os.environ["WINDIR"]) / "Microsoft.NET" / "Framework64" / "v4.0.30319"
         compiler = framework / "csc.exe"
         self.assertTrue(compiler.is_file(), "Windows .NET Framework compiler is required")
@@ -36,7 +41,7 @@ class NativeTreeDrawingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="nx-tree-test-") as directory:
             path = Path(directory)
             code = path / "TreeDrawing.cs"
-            code.write_text(fixture + "\n" + renderer + "\n" + inline, encoding="ascii")
+            code.write_text(fixture + "\n" + renderer + "\n" + inline + "\n" + error_dialog + script_info + error_checks, encoding="ascii")
             exe = path / "TreeDrawing.exe"
             result = subprocess.run(
                 [str(compiler), "/nologo", "/target:exe", "/out:" + str(exe),
