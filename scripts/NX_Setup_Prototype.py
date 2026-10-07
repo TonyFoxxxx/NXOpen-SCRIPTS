@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.44
+# SCRIPT_VERSION: V2.45
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -86,7 +86,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.44"
+SCRIPT_VERSION = "V2.45"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -5049,7 +5049,7 @@ table[data-fit-family="cover-tools"] .cell-text{height:calc(var(--cover-row,3.8m
 .project-model canvas{width:100%;height:100%;display:block;cursor:grab;touch-action:none;outline-offset:-2px}
 .project-model canvas.model-dragging{cursor:grabbing}.project-model canvas:focus-visible{outline:1px solid #078778}
 .project-model.model-ready>.project-model-print{display:none}.project-model-actions{display:flex;gap:6px}
-.project-model-actions button{font-size:11px;padding:3px 7px;border:1px solid #bacbd1;border-radius:4px;background:#fff;color:#23505a}
+.project-model-actions button,.page-controls>[data-page-reset]{font-size:11px;padding:3px 7px;border:1px solid #bacbd1;border-radius:4px;background:#fff;color:#23505a}
 @media print{.project-model canvas{display:none!important}.project-model.model-ready>.project-model-print{display:block!important}}
 .catalog-heading{display:flex;align-items:center;justify-content:space-between;gap:3mm}
 .catalog-heading .catalog-title{min-width:0}
@@ -5615,7 +5615,7 @@ const ProjectModel=(()=>{
   let image=node.querySelector('.project-model-print');if(!image){image=document.createElement('img');image.className='project-model-print';image.alt='3D-модель детали — выбранный вид';node.prepend(image);}image.src=lastURL;
  }
  function fit(){finish();const b=bounds();ProjectImage.set(100*Math.min(110/(base*b.width),160/(base*b.height)));view.pan=[0,0];invalidate();commit();queue(true);}
- function reset(){finish();view=identity();ProjectImage.set(100);invalidate();commit();queue(true);}
+ function reset(dirty=true){finish();view=identity();ProjectImage.set(100);invalidate();sync();lastKey='';if(dirty)markChanged();queue(true);}
  function hit(event){
   const page=event.target.closest?.('.project-model-page');if(!page||event.target.closest('table,.catalog-heading,.page-footer,.page-controls,button,input,select,label,a'))return null;
   const r=page.querySelector('.page-content').getBoundingClientRect(),x=(event.clientX-r.left)*sheetWidth/r.width,y=(event.clientY-r.top)*sheetWidth/r.width,g=geometry();
@@ -5647,7 +5647,7 @@ const ProjectModel=(()=>{
  });
  document.addEventListener('click',event=>{const button=event.target.closest('[data-project-model-action]');if(button){if(button.dataset.projectModelAction==='fit')fit();else reset();}});
  window.addEventListener('blur',()=>finish(true));window.addEventListener('resize',()=>queue());
- return{active,state,restore,prepare,mount,queue,layout,geometry,adoptScale,cancel:()=>finish(true),aspect:()=>data?.aspect||44/32};
+ return{active,state,restore,prepare,mount,queue,layout,geometry,adoptScale,reset,cancel:()=>finish(true),aspect:()=>data?.aspect||44/32};
 })();
 // The first-sheet view belongs to the project, even if its owning setup changes.
 const ProjectImage=(()=>{
@@ -5998,7 +5998,7 @@ const NoteLayout=(()=>{
   heights[page.dataset.pageKey]=Math.max(size.minimum,Math.min(size.maximum,size.height+(event.key==='ArrowDown'?1:-1)*(event.shiftKey?5:1)));reflow();markChanged();
  });
  window.addEventListener('blur',()=>finish(true));
- return{apply,refresh,reflow,queue,finish,value,restore,state:()=>({...drag?.before||heights}),
+ return{apply,refresh,reflow,queue,finish,value,restore,reset:key=>{delete heights[key];},state:()=>({...drag?.before||heights}),
   save:copy=>{copy.dataset.noteHeights=JSON.stringify(heights);copy.classList.remove('note-sizing');copy.querySelectorAll('.note-height-grip').forEach(n=>n.classList.remove('dragging'));}};
 })();
 // Editable datums: suggestions never overwrite unfinished or custom text.
@@ -6313,6 +6313,8 @@ const PageScale=(()=>{
   let bar=page.querySelector(':scope>.page-controls');
   if(bar?.tagName==='LABEL'){bar.remove();bar=null;}
   if(!bar){bar=document.createElement('div');bar.className='page-controls';page.append(bar);}
+  // Migrate the old model-only command to one reset button per physical sheet.
+  bar.querySelectorAll('[data-project-model-action="reset"]').forEach(button=>button.remove());
   if(key==='cover'){bar.classList.add('setup-panel');const toolbar=scope.querySelector('.toolbar');if(toolbar&&toolbar.parentElement!==bar)bar.prepend(toolbar);}
   control(bar,'page',key==='cover'?'Операции: строки и текст':'Строки и текст этого листа',value(key));
   if(key==='cover'&&page.querySelector('table[data-fit-family="cover-tools"]'))control(bar,'tools','Инструменты: текст',toolScale);
@@ -6320,7 +6322,7 @@ const PageScale=(()=>{
    control(bar,'project-image',ProjectModel.active?'Масштаб модели детали':'Масштаб изображения детали',ProjectImage.value());
    if(ProjectModel.active&&!bar.querySelector('.project-model-actions')){
     const actions=document.createElement('span');actions.className='project-model-actions';
-    for(const [action,text] of [['fit','Вписать'],['reset','Исходный вид']]){const b=document.createElement('button');b.type='button';b.dataset.projectModelAction=action;b.textContent=text;actions.append(b);}bar.append(actions);
+    const b=document.createElement('button');b.type='button';b.dataset.projectModelAction='fit';b.textContent='Вписать';actions.append(b);bar.append(actions);
    }
    if(ProjectModel.active)ProjectModel.layout(page);
   }
@@ -6330,6 +6332,9 @@ const PageScale=(()=>{
    if(!input){const group=document.createElement('label');group.className='page-wrap-control';input=document.createElement('input');input.type='checkbox';input.dataset.pageWrap='true';group.append(input,document.createTextNode('Переносить названия операций'));bar.append(group);}
    input.checked=wrapValue(key);
   }
+  let reset=bar.querySelector('[data-page-reset]');
+  if(!reset){reset=document.createElement('button');reset.type='button';reset.dataset.pageReset='true';reset.textContent='Исходный вид';bar.append(reset);}
+  reset.title='Вернуть масштаб и оформление этого листа к исходным значениям';
  }
  function refresh(){
   let index=0;scope.querySelectorAll('.setup-pages>.page').forEach(page=>apply(page,page.classList.contains('project-tools-page')?'catalog':page.classList.contains('cover-page')?'cover':'operations-'+(++index),true));
@@ -6355,8 +6360,9 @@ const PageScale=(()=>{
  });
  function state(){const result={...scales};scope.querySelectorAll('.setup-pages>.page').forEach(p=>result[p.dataset.pageKey]=value(p.dataset.pageKey));return result;}
  function wrapState(){const result={...wraps};scope.querySelectorAll('.setup-pages>.page:not(.project-tools-page)').forEach(p=>result[p.dataset.pageKey]=wrapValue(p.dataset.pageKey));return result;}
+ function reset(key){scales[key]=100;if(key==='cover')toolScale=100;if(key!=='catalog')wraps[key]=false;}
  function save(copy){copy.dataset.pageScales=JSON.stringify(state());copy.dataset.pageWraps=JSON.stringify(wrapState());copy.dataset.coverToolScale=String(toolScale);copy.querySelectorAll('.page-controls input[type=range]').forEach(input=>input.setAttribute('value',input.value));copy.querySelectorAll('.page-controls [data-page-wrap]').forEach(input=>input.toggleAttribute('checked',input.checked));}
- return{apply,refresh,factor,value,restore,state,save,applyWrap,wrapValue,wrapState,toolsValue:()=>toolScale};
+ return{apply,refresh,factor,value,restore,state,save,reset,applyWrap,wrapValue,wrapState,toolsValue:()=>toolScale};
 })();
 
 // Uniform scaling includes row spacing, text, padding and borders.
@@ -7522,6 +7528,21 @@ local('mcs-outline-width').addEventListener('input',event=>setMcsOutline(local('
 setMcsOutline(local('mcs-outline-color').value,local('mcs-outline-width').value);
 local('mcs-size').addEventListener('input',event=>setMcsSize(event.target.value,true));
 setMcsSize(local('mcs-size').value);
+scope.addEventListener('click',event=>{
+ const button=event.target.closest('[data-page-reset]');if(!button)return;
+ const page=button.closest('.page'),key=page.dataset.pageKey,rect=page.getBoundingClientRect();
+ cancel();PageScale.reset(key);NoteLayout.reset(key);
+ if(key==='catalog'){ProjectModel.cancel();ProjectModel.reset(false);}
+ else if(key==='cover'){
+  setMcsSize(100);setMcsOutline('white',100);
+  page.querySelectorAll('.photo[data-image]').forEach(photo=>{setPhotoZoom(photo,100);setPhotoPan(photo,0,0);});
+ }
+ // Keep content, cells, shared columns and other sheets' settings. Reflow may
+ // move operation rows when the reset font size changes the sheet capacity.
+ CardFlow.reflow();markChanged();
+ const next=scope.querySelector('.setup-pages>[data-page-key="'+key+'"]');
+ if(next){const after=next.getBoundingClientRect();window.scrollBy(after.left-rect.left,after.top-rect.top);next.querySelector('[data-page-reset]')?.focus({preventScroll:true});}
+});
 window.addEventListener('resize',()=>{fitDataTables();positionMcsAnchors();NoteLayout.queue();});
 window.addEventListener('afterprint',()=>{positionMcsAnchors();NoteLayout.queue();});
 if(window.ResizeObserver){const observer=new ResizeObserver(()=>positionMcsAnchors());scope.querySelectorAll('.photo-stage').forEach(stage=>observer.observe(stage));}
