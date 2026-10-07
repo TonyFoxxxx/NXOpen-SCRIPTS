@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.45
+# SCRIPT_VERSION: V2.46
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -86,7 +86,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.45"
+SCRIPT_VERSION = "V2.46"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -5149,7 +5149,13 @@ table[data-fit-family] tbody>tr.operation-selected>td{background:#dcf2ff}
 .setup-panel .layout-toolbar{border:0;padding:0;margin:0}
 .setup-panel>label{white-space:nowrap}
 .slider-label{-webkit-user-select:none;user-select:none}
+.slider-percent{position:relative;cursor:text;border-radius:3px;font-variant-numeric:tabular-nums}
+.slider-percent:hover{background:#e8f6f3}.slider-percent:focus-visible{outline:2px solid #087d72;outline-offset:2px}
+.slider-percent.percent-editing{color:transparent}
+.slider-percent input.slider-percent-input{position:absolute;z-index:1;left:-3px;top:-3px;width:calc(100% + 6px);height:calc(100% + 6px);min-width:0;padding:1px 1.1em 1px 2px;border:1px solid #087d72;border-radius:3px;outline:none;background:#fff;color:#294d54;text-align:right;font:inherit;-webkit-user-select:text;user-select:text}
+.slider-percent.percent-editing:after{content:'%';position:absolute;z-index:2;right:0;top:0;color:#294d54;pointer-events:none}
 .page-controls input[type=range]{width:115px;accent-color:#087d72}.page-controls input[type=checkbox]{accent-color:#087d72}.page.has-operation-controls,.project-tools-page{margin-top:80px}.page-controls output{min-width:34px;text-align:right}
+.page-controls output.slider-percent{min-width:52px}
 #operation-options{position:relative;font:13px Arial}#operation-options summary{cursor:pointer;padding:7px;border:1px solid #a9c2c8;border-radius:4px}
 .operation-options-panel{position:absolute;top:100%;left:0;z-index:90;width:320px;background:white;border:1px solid #a9c2c8;border-radius:6px;box-shadow:0 5px 18px #173c4930;padding:14px}
 .operation-options-panel strong{display:block;margin-bottom:10px;line-height:1.4}.operation-options-panel label{display:flex;align-items:center;gap:8px;padding:5px 0}.operation-options-panel .wrap-option{border-top:1px solid #d4dfe2;margin-top:7px;padding-top:12px;line-height:1.4}
@@ -5216,6 +5222,54 @@ table[data-fit-family] tbody>tr.operation-selected>td{background:#dcf2ff}
 'use strict';
 const DOC = __DOCUMENT_CONTEXT__;
 const SLIDER_RESET_HINT = "Нажмите дважды для возврата к исходному масштабу";
+// Edit the displayed percentage, including the model's logarithmic range.
+// An unfinished entry is UI only; saved HTML contains the committed value.
+const PercentInput=(()=>{
+ let editing=null;const pending=new WeakMap();
+ function rangeFor(output){const range=output?.previousElementSibling;return range?.matches('input[type="range"]')?range:null;}
+ function update(range,value){
+  const output=range.nextElementSibling;if(output?.tagName!=='OUTPUT')return;
+  const text=value+'%';range.setAttribute('aria-valuetext',text);output.dataset.percentValue=String(value);
+  output.classList.add('slider-percent');output.tabIndex=0;output.setAttribute('role','button');
+  output.title='Нажмите, чтобы ввести процент с клавиатуры';
+  output.setAttribute('aria-label',(range.getAttribute('aria-label')||range.closest('label')?.firstChild?.textContent?.trim()||'Масштаб')+': '+text+'. Изменить процент');
+  if(editing?.output!==output)output.textContent=text;
+ }
+ function finish(apply=true,focus=false){
+  const item=editing;if(!item)return;editing=null;
+  const raw=item.input.value.trim().replace(/%$/,'').trim().replace(',','.');
+  item.output.classList.remove('percent-editing');item.output.textContent=item.output.dataset.percentValue+'%';
+  if(apply&&item.range.isConnected&&/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(raw)){
+   const n=Number(raw),log=item.range.dataset.logScale==='true',min=log?1:Number(item.range.min),max=log?10000:Number(item.range.max);
+   if(Number.isFinite(n)){
+    const value=Math.max(min,Math.min(max,Math.round(n)));
+    if(value!==Number(item.output.dataset.percentValue)){
+     item.range.value=log?100*Math.log10(value):value;pending.set(item.range,value);
+     try{item.range.dispatchEvent(new Event('input',{bubbles:true}));item.range.dispatchEvent(new Event('change',{bubbles:true}));}finally{pending.delete(item.range);}
+    }
+   }
+  }
+  if(focus&&item.output.isConnected)item.output.focus({preventScroll:true});
+ }
+ function begin(output){
+  const range=rangeFor(output);if(!range||range.disabled||editing?.output===output)return;
+  finish();const input=document.createElement('input');input.type='text';input.inputMode='decimal';input.className='slider-percent-input';
+  input.value=output.dataset.percentValue;input.setAttribute('aria-label',output.getAttribute('aria-label'));input.autocomplete='off';input.spellcheck=false;
+  editing={range,output,input};output.classList.add('percent-editing');output.append(input);input.focus({preventScroll:true});input.select();
+ }
+ document.addEventListener('click',event=>{const output=event.target.closest?.('output.slider-percent');if(!output||event.target.closest('input'))return;event.preventDefault();begin(output);});
+ document.addEventListener('keydown',event=>{
+  if(event.target===editing?.input){
+   if(event.isComposing)return;
+   if(event.key==='Enter'||event.key==='Escape'){event.preventDefault();event.stopPropagation();finish(event.key==='Enter',true);}
+   else if((event.ctrlKey||event.metaKey)&&['s','p'].includes(event.key.toLowerCase()))finish();
+  }else if(event.target.matches?.('output.slider-percent')&&['Enter',' '].includes(event.key)){event.preventDefault();begin(event.target);}
+ });
+ document.addEventListener('focusout',event=>{if(event.target===editing?.input)finish();});
+ return{update,cancel:()=>finish(false),manual:range=>pending.has(range),
+  value:range=>pending.has(range)?pending.get(range):range.dataset.logScale==='true'?Math.pow(10,Number(range.value)/100):Number(range.value),
+  cleanClone:copy=>copy.querySelectorAll('output.slider-percent').forEach(output=>{output.classList.remove('percent-editing');output.textContent=output.dataset.percentValue+'%';})};
+})();
 // Only the NX loopback server injects this session. It is never stored in the
 // saved/shared HTML, and neither the browser nor the request chooses a path.
 const LOCAL_SESSION=(()=>{
@@ -5615,7 +5669,8 @@ const ProjectModel=(()=>{
   let image=node.querySelector('.project-model-print');if(!image){image=document.createElement('img');image.className='project-model-print';image.alt='3D-модель детали — выбранный вид';node.prepend(image);}image.src=lastURL;
  }
  function fit(){finish();const b=bounds();ProjectImage.set(100*Math.min(110/(base*b.width),160/(base*b.height)));view.pan=[0,0];invalidate();commit();queue(true);}
- function reset(dirty=true){finish();view=identity();ProjectImage.set(100);invalidate();sync();lastKey='';if(dirty)markChanged();queue(true);}
+ function captureInitial(){if(data&&!data.initialView){data.initialView=normalize(view);data.initialScale=ProjectImage.value();sync();}}
+ function reset(dirty=true){finish();view=normalize(data?.initialView);ProjectImage.set(data?.initialScale??ProjectImage.initial());invalidate();sync();lastKey='';if(dirty)markChanged();queue(true);}
  function hit(event){
   const page=event.target.closest?.('.project-model-page');if(!page||event.target.closest('table,.catalog-heading,.page-footer,.page-controls,button,input,select,label,a'))return null;
   const r=page.querySelector('.page-content').getBoundingClientRect(),x=(event.clientX-r.left)*sheetWidth/r.width,y=(event.clientY-r.top)*sheetWidth/r.width,g=geometry();
@@ -5647,13 +5702,13 @@ const ProjectModel=(()=>{
  });
  document.addEventListener('click',event=>{const button=event.target.closest('[data-project-model-action]');if(button){if(button.dataset.projectModelAction==='fit')fit();else reset();}});
  window.addEventListener('blur',()=>finish(true));window.addEventListener('resize',()=>queue());
- return{active,state,restore,prepare,mount,queue,layout,geometry,adoptScale,reset,cancel:()=>finish(true),aspect:()=>data?.aspect||44/32};
+ return{active,state,restore,prepare,mount,queue,layout,geometry,adoptScale,captureInitial,reset,cancel:()=>finish(true),aspect:()=>data?.aspect||44/32};
 })();
 // The first-sheet view belongs to the project, even if its owning setup changes.
 const ProjectImage=(()=>{
  const meta=document.querySelector('meta[name="nx-project-image-scale"]');
  let scale=100;
- function set(value){const n=Number(value);scale=Number.isFinite(n)?(ProjectModel.active?Math.max(1,Math.min(10000,Math.round(n))):Math.max(60,Math.min(300,Math.round(n/5)*5))):100;if(meta)meta.content=String(scale);}
+ function set(value){const n=Number(value);scale=Number.isFinite(n)?(ProjectModel.active?Math.max(1,Math.min(10000,Math.round(n))):Math.max(60,Math.min(300,Math.round(n)))):100;if(meta)meta.content=String(scale);}
  function apply(page){
   if(ProjectModel.layout(page))return;
   const header=page.querySelector('.continuation-header.no-note');if(!header)return;
@@ -5671,10 +5726,12 @@ const ProjectImage=(()=>{
    'meta-height':14+extra*.4,'legend-height':20.85+extra*.6,'label-width':Math.min(30,Math.max(28,(194-width-4)*.4))};
   for(const [name,value] of Object.entries(sizes))header.style.setProperty('--project-'+name,value+'mm');
  }
- set(meta?.content||100);return{set,apply,value:()=>scale};
+ set(meta?.content||100);const initial=Number(meta?.dataset.initialScale)||scale;if(meta)meta.dataset.initialScale=String(initial);
+ return{set,apply,value:()=>scale,initial:()=>initial};
 })();
 
 ProjectModel.adoptScale();
+ProjectModel.captureInitial();
 let editors=[];
 let paperScreenScale=1;
 document.documentElement.style.setProperty('--paper-screen-scale','1');
@@ -5741,7 +5798,7 @@ function createCardHistory(){
   if(busy||!steps.length||composing)return;
   const entry=steps.pop(),scroll=[window.scrollX,window.scrollY];busy=true;endGroup();
   try{
-   ProjectModel.cancel();editors.forEach(e=>e.cancel());
+   PercentInput.cancel();ProjectModel.cancel();editors.forEach(e=>e.cancel());
    ColumnOptions.set(entry.before.options);ProjectImage.set(entry.before.projectImageScale);ProjectModel.restore(entry.before.projectModel);
    editors.forEach(e=>e.restore(clone(entry.before.setups[e.id]),true));paginate();ProjectModel.queue(true);
    current=capture();
@@ -5902,9 +5959,18 @@ async function saveCard(){
 
 function createSetupEditor(scope){
  const prefix=scope.dataset.setupId+'-',local=id=>scope.querySelector('[data-editor-id="'+id+'"]');
+ let initialView=null,initialNode=local('initial-view');
+ try{const saved=JSON.parse(initialNode?.textContent||'null');if(saved?.schema===1&&saved.state)initialView=saved;}catch(e){}
+ function writeInitial(node,deletedCells={}){node.textContent=JSON.stringify({...initialView,deletedCells}).replace(/</g,'\\u003c');}
+ function captureInitial(){
+  if(initialView)return;
+  initialView={schema:1,state:state()};
+  if(!initialNode){initialNode=document.createElement('script');initialNode.type='application/json';initialNode.dataset.editorId='initial-view';scope.append(initialNode);}
+  writeInitial(initialNode);
+ }
  local('cell-undo').textContent='Отменить действие';
  local('operations-to-cover').textContent='На первый лист ←';local('operations-to-next').textContent='На следующие листы →';
- scope.querySelectorAll('input[type=range]').forEach(input=>{const label=input.closest('label');if(label){label.title=SLIDER_RESET_HINT;label.classList.add('slider-label');}});
+ scope.querySelectorAll('input[type=range]').forEach(input=>{if(input.dataset.logScale!=='true')input.step='1';const label=input.closest('label');if(label){label.title=SLIDER_RESET_HINT;label.classList.add('slider-label');}});
 // Delegate to the setup so newly created/reopened sheet controls also reset.
 // Use the normal input handlers: update the view, pagination and saved state.
 scope.addEventListener('dblclick',event=>{
@@ -5998,7 +6064,7 @@ const NoteLayout=(()=>{
   heights[page.dataset.pageKey]=Math.max(size.minimum,Math.min(size.maximum,size.height+(event.key==='ArrowDown'?1:-1)*(event.shiftKey?5:1)));reflow();markChanged();
  });
  window.addEventListener('blur',()=>finish(true));
- return{apply,refresh,reflow,queue,finish,value,restore,reset:key=>{delete heights[key];},state:()=>({...drag?.before||heights}),
+ return{apply,refresh,reflow,queue,finish,value,restore,reset:(key,saved)=>{delete heights[key];if(Number.isFinite(saved?.noteHeights?.[key]))heights[key]=saved.noteHeights[key];},state:()=>({...drag?.before||heights}),
   save:copy=>{copy.dataset.noteHeights=JSON.stringify(heights);copy.classList.remove('note-sizing');copy.querySelectorAll('.note-height-grip').forEach(n=>n.classList.remove('dragging'));}};
 })();
 // Editable datums: suggestions never overwrite unfinished or custom text.
@@ -6279,7 +6345,7 @@ function fitAutoColumns(family,metrics,flex,hiddenWidths){
 
 const PageScale=(()=>{
  const old=local('row-scale');let fallback=old?Number(old.value)||100:100,scales=Object.create(null),wraps=Object.create(null),toolScale=100;
- function normalized(value){const n=Number(value);return Number.isFinite(n)?Math.max(60,Math.min(300,Math.round(n/5)*5)):100;}
+ function normalized(value){const n=Number(value);return Number.isFinite(n)?Math.max(60,Math.min(300,Math.round(n))):100;}
  function restore(data,legacy,tools,wrapData){
   if(legacy!=null)fallback=normalized(legacy);
   if(data&&typeof data==='object'&&!Array.isArray(data)){scales=Object.create(null);for(const [key,value] of Object.entries(data))if(/^(cover|catalog|operations-[1-9][0-9]*)$/.test(key))scales[key]=normalized(value);}
@@ -6299,10 +6365,10 @@ const PageScale=(()=>{
  }
  function control(bar,target,label,value){
   let input=bar.querySelector('input[data-scale-target="'+target+'"]');
-  if(!input){const group=document.createElement('label');group.append(document.createTextNode(label));input=document.createElement('input');input.type='range';input.min='60';input.max='300';input.step='5';input.dataset.scaleTarget=target;input.setAttribute('aria-label',label);group.append(input,document.createElement('output'));bar.append(group);}
+  if(!input){const group=document.createElement('label');group.append(document.createTextNode(label));input=document.createElement('input');input.type='range';input.min='60';input.max='300';input.step='1';input.dataset.scaleTarget=target;input.setAttribute('aria-label',label);group.append(input,document.createElement('output'));bar.append(group);}
   const logarithmic=target==='project-image'&&ProjectModel.active;input.dataset.logScale=String(logarithmic);
   if(logarithmic){input.min='0';input.max='400';input.step='1';}
-  input.closest('label').title=SLIDER_RESET_HINT;input.closest('label').classList.add('slider-label');input.value=logarithmic?100*Math.log10(value):value;input.nextElementSibling.textContent=value+'%';input.setAttribute('aria-valuetext',value+'%');
+  input.closest('label').title=SLIDER_RESET_HINT;input.closest('label').classList.add('slider-label');input.value=logarithmic?100*Math.log10(value):value;PercentInput.update(input,value);
  }
  function apply(page,key,controls=false){
   page.dataset.pageKey=key;page.style.setProperty('--data-scale',value(key)/100);
@@ -6334,7 +6400,7 @@ const PageScale=(()=>{
   }
   let reset=bar.querySelector('[data-page-reset]');
   if(!reset){reset=document.createElement('button');reset.type='button';reset.dataset.pageReset='true';reset.textContent='Исходный вид';bar.append(reset);}
-  reset.title='Вернуть масштаб и оформление этого листа к исходным значениям';
+  reset.title='Восстановить исходные элементы, компоновку и оформление этого листа';
  }
  function refresh(){
   let index=0;scope.querySelectorAll('.setup-pages>.page').forEach(page=>apply(page,page.classList.contains('project-tools-page')?'catalog':page.classList.contains('cover-page')?'cover':'operations-'+(++index),true));
@@ -6346,11 +6412,12 @@ const PageScale=(()=>{
   // The shared panel also contains MCS controls; only handle our scale targets.
   if(!['page','tools','project-image'].includes(target))return;
   const page=event.target.closest('.page'),key=page.dataset.pageKey;
-  if(target==='project-image')ProjectImage.set(event.target.dataset.logScale==='true'?Math.pow(10,Number(event.target.value)/100):event.target.value);else if(target==='tools')toolScale=normalized(event.target.value);else scales[key]=normalized(event.target.value);
+  const percent=PercentInput.value(event.target);
+  if(target==='project-image')ProjectImage.set(percent);else if(target==='tools')toolScale=normalized(percent);else scales[key]=normalized(percent);
   // Operation pages are rebuilt; keep the active slider in the same screen position.
   const rect=page.getBoundingClientRect();
   CardFlow.reflow();markChanged();const next=scope.querySelector('.setup-pages>[data-page-key="'+key+'"]');
-  if(next){const after=next.getBoundingClientRect();window.scrollBy(after.left-rect.left,after.top-rect.top);next.querySelector('.page-controls input[data-scale-target="'+target+'"]')?.focus({preventScroll:true});}
+  if(next){const after=next.getBoundingClientRect();window.scrollBy(after.left-rect.left,after.top-rect.top);if(!PercentInput.manual(event.target))next.querySelector('.page-controls input[data-scale-target="'+target+'"]')?.focus({preventScroll:true});}
  });
  scope.addEventListener('change',event=>{
   if(!event.target.matches('.page-controls [data-page-wrap]'))return;
@@ -6360,7 +6427,7 @@ const PageScale=(()=>{
  });
  function state(){const result={...scales};scope.querySelectorAll('.setup-pages>.page').forEach(p=>result[p.dataset.pageKey]=value(p.dataset.pageKey));return result;}
  function wrapState(){const result={...wraps};scope.querySelectorAll('.setup-pages>.page:not(.project-tools-page)').forEach(p=>result[p.dataset.pageKey]=wrapValue(p.dataset.pageKey));return result;}
- function reset(key){scales[key]=100;if(key==='cover')toolScale=100;if(key!=='catalog')wraps[key]=false;}
+ function reset(key,saved){scales[key]=normalized(saved?.pageScales?.[key]??100);if(key==='cover')toolScale=normalized(saved?.coverToolScale??100);if(key!=='catalog')wraps[key]=saved?.pageWraps?.[key]??false;}
  function save(copy){copy.dataset.pageScales=JSON.stringify(state());copy.dataset.pageWraps=JSON.stringify(wrapState());copy.dataset.coverToolScale=String(toolScale);copy.querySelectorAll('.page-controls input[type=range]').forEach(input=>input.setAttribute('value',input.value));copy.querySelectorAll('.page-controls [data-page-wrap]').forEach(input=>input.toggleAttribute('checked',input.checked));}
  return{apply,refresh,factor,value,restore,state,save,reset,applyWrap,wrapValue,wrapState,toolsValue:()=>toolScale};
 })();
@@ -6660,19 +6727,19 @@ function positionMcsAnchors(root=scope){
 }
 function setMcsSize(value,dirty=false){
  const input=local('mcs-size'),n=Number(value);
- const size=Number.isFinite(n)?Math.max(50,Math.min(180,Math.round(n/5)*5)):100;
+ const size=Number.isFinite(n)?Math.max(50,Math.min(180,Math.round(n))):100;
  input.value=String(size);input.setAttribute('value',String(size));input.setAttribute('aria-valuetext',size+'%');
- local('mcs-size-value').textContent=size+'%';
+ PercentInput.update(input,size);
  scope.querySelectorAll('.mcs-onpart').forEach(svg=>{svg.style.width=(36*size/100)+'mm';svg.style.height=(36*size/100)+'mm';});
  if(dirty)markChanged();
 }
 function setMcsOutline(mode,width,dirty=false){
  const chosen=['white','black'].includes(mode)?mode:'white',n=Number(width);
- const value=Number.isFinite(n)?Math.max(50,Math.min(250,Math.round(n/10)*10)):100;
+ const value=Number.isFinite(n)?Math.max(50,Math.min(250,Math.round(n))):100;
  const select=local('mcs-outline-color'),input=local('mcs-outline-width');
  select.value=chosen;[...select.options].forEach(option=>option.toggleAttribute('selected',option.value===chosen));
  input.value=String(value);input.setAttribute('value',String(value));input.setAttribute('aria-valuetext',value+'%');
- local('mcs-outline-width-value').textContent=value+'%';
+ PercentInput.update(input,value);
  scope.querySelectorAll('.mcs-onpart').forEach(svg=>svg.querySelectorAll('[data-outline-axis]').forEach(node=>{
   const color=chosen==='white'?'#ffffff':'#111111';
   node.setAttribute('stroke',color);
@@ -6695,6 +6762,13 @@ const GalleryLayout=(()=>{
   node.dataset.cellId=id;cells.set(id,node);
  });
  const originalCells=new Map([...cells].filter(([,node])=>!node.matches('.user-photo')));
+ // Only deleted original cells need an archive in saved HTML. Existing images
+ // remain in their normal cells, without a second copy of every image payload.
+ for(const [id,markup] of Object.entries(initialView?.deletedCells||{})){
+  if(originalCells.has(id)||typeof markup!=='string')continue;
+  const template=document.createElement('template');template.innerHTML=markup;const node=template.content.firstElementChild;
+  if(node?.matches('.photo:not(.user-photo),.tool-panel')&&node.dataset.cellId===id)originalCells.set(id,node);
+ }
  const original={iso:[...cells].find(([,n])=>n.matches('.iso-photo'))?.[0],
   top:[...cells].find(([,n])=>n.matches('.top-photo'))?.[0],
   side:[...cells].find(([,n])=>n.matches('.side-photo'))?.[0]};
@@ -7176,7 +7250,7 @@ const GalleryLayout=(()=>{
  let stored={};try{stored=JSON.parse(root.dataset.galleryLayout||'{}');}catch(e){}
  restore(stored);
  return{values,restore,finish,closePicker,add,addGrid,moveGroup,remove,undoRemove,putImage,imageSource,
-  minimumHeight,setHeight,swap,restoreGeometry,
+  minimumHeight,setHeight,swap,restoreGeometry,deletedOriginalCells:()=>Object.fromEntries([...originalCells].filter(([id])=>!cells.has(id)).map(([id,node])=>[id,node.outerHTML])),
   cleanClone:clone=>{clone.classList.remove('gallery-sizing','gallery-sizing-column','gallery-sizing-row','cells-swapping');clone.querySelectorAll('.gallery-grip,.gallery-height-grip,.cell-selected,.cell-swap-source,.cell-swap-target').forEach(n=>n.classList.remove('dragging','cell-selected','cell-swap-source','cell-swap-target'));clone.querySelectorAll('.cell-move').forEach(n=>n.setAttribute('aria-pressed','false'));clone.querySelectorAll('[data-editor-id="cell-grid-picker"],.cell-drop-preview').forEach(n=>n.remove());clone.querySelector('[data-editor-id="cell-add"]').setAttribute('aria-expanded','false');clone.querySelector('[data-editor-id="cell-selection-status"]').textContent='';clone.querySelector('[data-editor-id="cell-clear-selection"]').hidden=true;clone.querySelector('[data-editor-id="cell-undo"]').disabled=true;clone.querySelector('[data-editor-id="gallery-size-status"]').textContent='';},
   geometry:()=>({height,preferredHeight,availableHeight,tree:copy(tree),rects:[...rects].map(([id,b])=>({id,...b}))})};
 })();
@@ -7531,14 +7605,17 @@ setMcsSize(local('mcs-size').value);
 scope.addEventListener('click',event=>{
  const button=event.target.closest('[data-page-reset]');if(!button)return;
  const page=button.closest('.page'),key=page.dataset.pageKey,rect=page.getBoundingClientRect();
- cancel();PageScale.reset(key);NoteLayout.reset(key);
+ cancel();captureInitial();const saved=initialView.state;PageScale.reset(key,saved);NoteLayout.reset(key,saved);
  if(key==='catalog'){ProjectModel.cancel();ProjectModel.reset(false);}
  else if(key==='cover'){
-  setMcsSize(100);setMcsOutline('white',100);
-  page.querySelectorAll('.photo[data-image]').forEach(photo=>{setPhotoZoom(photo,100);setPhotoPan(photo,0,0);});
+  GalleryLayout.restore(saved.galleryLayout,true);
+  setMcsSize(saved.axesSize);setMcsOutline(saved.outlineColor,saved.outlineWidth);
+  applyPhotoZoomValues(saved.photoZooms);applyPhotoPanValues(saved.photoPans);
+  page.querySelectorAll('.photo[data-paired]').forEach(photo=>setVariant(photo,saved.variants?.[photo.dataset.image]==='no-ipw'));
+  CardFlow.restore(saved.coverOperations,saved.coverPlacement,saved.operationLimit);
  }
- // Keep content, cells, shared columns and other sheets' settings. Reflow may
- // move operation rows when the reset font size changes the sheet capacity.
+ // Shared project data and other sheets' settings survive. Reflow accounts
+ // for the restored cells and the original placement of cover operations.
  CardFlow.reflow();markChanged();
  const next=scope.querySelector('.setup-pages>[data-page-key="'+key+'"]');
  if(next){const after=next.getBoundingClientRect();window.scrollBy(after.left-rect.left,after.top-rect.top);next.querySelector('[data-page-reset]')?.focus({preventScroll:true});}
@@ -7566,7 +7643,8 @@ function cancel(){NoteLayout.finish(true);PhotoPan.finish(true);GalleryLayout.cl
 function serialize(){
  const copy=scope.cloneNode(true),fields=values();
  copy.querySelectorAll('input[data-field],select[data-field]').forEach(el=>setFieldValue(el,fields[el.dataset.field]));
- GalleryLayout.cleanClone(copy);PhotoPan.cleanClone(copy);CardFlow.cleanClone(copy);DatumEditor.cleanClone(copy);
+ GalleryLayout.cleanClone(copy);PhotoPan.cleanClone(copy);CardFlow.cleanClone(copy);DatumEditor.cleanClone(copy);PercentInput.cleanClone(copy);
+ if(initialView)writeInitial(copy.querySelector('[data-editor-id="initial-view"]'),GalleryLayout.deletedOriginalCells());
  const get=id=>copy.querySelector('[data-editor-id="'+id+'"]');
  PageScale.save(copy);NoteLayout.save(copy);get('column-widths').textContent=JSON.stringify(columnWidths);get('column-size-status').textContent='';copy.classList.remove('columns-dragging');
  copy.querySelectorAll('.column-grip').forEach(g=>g.classList.remove('dragging'));
@@ -7577,11 +7655,12 @@ function serialize(){
 scope.querySelectorAll('.datum-input').forEach(field=>setFieldValue(field,field.value));
 scope.querySelectorAll('.photo[data-image]').forEach(photo=>{setPhotoZoom(photo,photo.dataset.zoom??100);setVariant(photo,photo.dataset.variant==='no-ipw');});
 window.addEventListener('scroll',event=>{if(!event.target.closest?.('.datum-suggestions'))DatumEditor.close();},true);
-return{id:scope.dataset.setupId,state,restore:restoreState,serialize,prepare,cancel,fitFields,paginate,waitImages:()=>Promise.all([...scope.querySelectorAll('.photo-stage img[src],.project-isometry img[src]')].map(img=>img.decode?img.decode():Promise.resolve())),beforePrint:()=>{paginate();fitFields();positionMcsAnchors();},flow:CardFlow,gallery:GalleryLayout};
+return{id:scope.dataset.setupId,state,restore:restoreState,serialize,prepare,cancel,fitFields,paginate,captureInitial,waitImages:()=>Promise.all([...scope.querySelectorAll('.photo-stage img[src],.project-isometry img[src]')].map(img=>img.decode?img.decode():Promise.resolve())),beforePrint:()=>{paginate();fitFields();positionMcsAnchors();},flow:CardFlow,gallery:GalleryLayout};
 
 }
 
 document.querySelectorAll('.setup-document').forEach(scope=>editors.push(createSetupEditor(scope)));
+placeProjectTools();paginate();editors.forEach(e=>e.captureInitial());
 try{const draft=JSON.parse(localStorage.getItem(draftKey)||'null');if(draft?.setups){if(draft.options)ColumnOptions.set(draft.options);if(draft.projectImageScale!=null)ProjectImage.set(draft.projectImageScale);if(draft.projectModel)ProjectModel.restore(draft.projectModel);editors.forEach(e=>e.restore(draft.setups[e.id]));changed=true;editRevision++;}}catch(e){}
 placeProjectTools();ProjectModel.queue();CardHistory=createCardHistory();
 document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&(event.key.toLowerCase()==='s'||event.code==='KeyS')){event.preventDefault();saveCard();}else if((event.ctrlKey||event.metaKey)&&(event.key.toLowerCase()==='p'||event.code==='KeyP')){event.preventDefault();printCard();}});
