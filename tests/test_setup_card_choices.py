@@ -33,6 +33,8 @@ class NativeChoiceTests(unittest.TestCase):
                 (self.u, 'DispatchMessageW', c.c_ssize_t, [c.POINTER(w.MSG)]),
                 (self.u, 'GetDlgItem', w.HWND, [w.HWND, c.c_int]),
                 (self.u, 'GetClientRect', w.BOOL, [w.HWND, c.POINTER(w.RECT)]),
+                (self.u, 'GetWindowRect', w.BOOL, [w.HWND, c.POINTER(w.RECT)]),
+                (self.u, 'IsWindowVisible', w.BOOL, [w.HWND]),
                 (self.u, 'GetDC', w.HDC, [w.HWND]),
                 (self.u, 'ReleaseDC', c.c_int, [w.HWND, w.HDC]),
                 (self.u, 'EndDialog', w.BOOL, [w.HWND, c.c_ssize_t]),
@@ -55,7 +57,7 @@ class NativeChoiceTests(unittest.TestCase):
         for font in self.fonts:
             self.g.DeleteObject(font)
 
-    def dialog(self, launch, check):
+    def dialog(self, launch, check, result_code=1):
         real_dialog = self.u.DialogBoxIndirectParamW
 
         def modal(instance, template, owner, callback, parameter):
@@ -68,7 +70,7 @@ class NativeChoiceTests(unittest.TestCase):
                     except BaseException as exc:
                         self.errors.append(exc)
                     finally:
-                        self.u.EndDialog(window, 1)
+                        self.u.EndDialog(window, result_code)
                     return 1
                 result = callback(window, message, wp, lp)
                 if message == 0x110:
@@ -98,7 +100,7 @@ class NativeChoiceTests(unittest.TestCase):
             raise self.errors[0]
         return result
 
-    def capture(self, window):
+    def capture(self, window, children=False):
         rect = w.RECT()
         self.assertTrue(self.u.GetClientRect(window, c.byref(rect)))
         width, height = rect.right, rect.bottom
@@ -111,7 +113,7 @@ class NativeChoiceTests(unittest.TestCase):
         old = self.g.SelectObject(dc, bitmap)
         try:
             self.u.UpdateWindow(window)
-            self.u.SendMessageW(window, 0x318, dc, 4 | 8)  # WM_PRINTCLIENT
+            self.u.SendMessageW(window, 0x318, dc, 4 | 8 | (16 if children else 0))  # WM_PRINTCLIENT
             self.g.GdiFlush()
             return width, height, c.string_at(bits, width * height * 4)
         finally:
@@ -320,6 +322,69 @@ class NativeChoiceTests(unittest.TestCase):
 
         self.assertEqual(self.dialog(lambda: CARD.show_all_setup_components(rows, reports, previews.append), check),
                          [{'0'}, {'39'}])
+
+    def test_preparation_options_defaults_inline_formats_double_click_and_accept(self):
+        rows = [dict(key='root', name='NC_PROGRAM', parent=None, ancestors=(), operation_count=2)]
+        options = {}
+
+        def check(parent):
+            self.parent = parent
+            control = lambda ident: self.u.GetDlgItem(parent, ident)
+            checked = lambda ident: self.u.SendMessageW(control(ident), 0xF0, 0, 0)
+            def click_label(ident, double=False):
+                box = w.RECT()
+                self.u.GetClientRect(control(ident), c.byref(box))
+                self.click(control(ident), (40, box.bottom // 2), double)
+            def bounds(ident):
+                box = w.RECT()
+                self.assertTrue(self.u.GetWindowRect(control(ident), c.byref(box)))
+                return box.left, box.top, box.right, box.bottom
+            self.assertEqual([checked(ident) for ident in (230, 231, 234)], [0, 0, 0])
+            self.assertEqual((checked(232), checked(233)), (1, 0))
+            self.assertFalse(self.u.IsWindowVisible(control(232)))
+            self.assertFalse(self.u.IsWindowVisible(control(233)))
+            original = bounds(234), bounds(101)
+            click_label(230, True)
+            self.assertEqual(checked(230), 1, 'Double click toggles once')
+            click_label(231, True)
+            self.assertEqual(checked(231), 1)
+            self.assertTrue(self.u.IsWindowVisible(control(232)))
+            self.assertTrue(self.u.IsWindowVisible(control(233)))
+            expanded = bounds(234), bounds(101)
+            self.assertGreater(expanded[0][1], original[0][1])
+            self.assertGreater(expanded[1][1], expanded[0][3])
+            self.assertEqual(expanded[1][3], original[1][3], 'Tree bottom remains fixed')
+            click_label(233)
+            self.assertEqual((checked(232), checked(233)), (0, 1), 'Formats are mutually exclusive')
+            for _ in range(3):
+                click_label(231)
+                self.assertEqual((bounds(234), bounds(101)), original)
+                self.assertFalse(self.u.IsWindowVisible(control(233)))
+                click_label(231)
+                self.assertEqual((bounds(234), bounds(101)), expanded)
+                self.assertEqual((checked(232), checked(233)), (0, 1), 'Format retained on reopening')
+            self.u.SetFocus(control(234))
+            self.u.SendMessageW(control(234), 0x100, 0x20, 0)
+            self.u.SendMessageW(control(234), 0x101, 0x20, 0)
+            self.assertEqual(checked(234), 1, 'Space toggles Zmin')
+            tree = control(101)
+            root = self.u.SendMessageW(tree, 0x110A, 0, 0)
+            self.click(tree, self.point(tree, root, True, 0x40))
+            self.emit(self.capture(parent, children=True), 'preparation')
+            self.u.SendMessageW(parent, 0x111, 1, 0)  # Real OK handler must read all option states.
+
+        self.assertEqual(self.dialog(lambda: CARD.show_setup_folders(rows, options), check), ['root'])
+        self.assertEqual(options, dict(number_operations=True, update_descriptions=True,
+                                       include_tool_numbers=True, add_zmin=True))
+
+    def test_preparation_cancel_does_not_publish_option_changes(self):
+        rows = [dict(key='root', name='NC_PROGRAM', parent=None, ancestors=(), operation_count=2)]
+        options = {'unchanged': True}
+        def check(parent):
+            self.u.SendMessageW(self.u.GetDlgItem(parent, 230), 0xF5, 0, 0)  # BM_CLICK
+            self.u.SendMessageW(parent, 0x111, 2, 0)
+        self.assertIsNone(self.dialog(lambda: CARD.show_setup_folders(rows, options), check, result_code=2))
+        self.assertEqual(options, {'unchanged': True})
 
 
 if __name__ == '__main__':
