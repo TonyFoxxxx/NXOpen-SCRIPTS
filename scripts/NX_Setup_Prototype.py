@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.47
+# SCRIPT_VERSION: V2.48
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
 Запускать внутри NX: Журнал / Воспроизвести (Journal / Play).
 После запуска отметьте папки установов в дереве Program Order.
-Выделение в навигаторе NX не используется. Родитель и потомок взаимоисключаются.
+Для выбора установов выделение в NX не используется. Родитель и потомок взаимоисключаются.
+В стартовом меню можно включить нумерацию операций, Description инструментов и Zmin в именах.
+Все три опции по умолчанию выключены. Zmin использует выделение до открытия меню
+или все операции проекта, если выделение пустое, как отдельный журнал Zmin.
 Каждый ракурс вписывается по геометрии IPW и видимой оснастки и сразу снимается.
 Одна выбранная папка — один установ со всеми её операциями и вложенными папками.
 Имя, ракурсы и IPW — от MCS первой операции внутри выбранной папки.
@@ -29,7 +32,9 @@ Zmin — минимум рассчитанной траектории по фа�
 
 Требования: интерактивная сессия NX CAM с NXOpen Python.
 Отдельный Python и пакеты устанавливать не надо.
-Исходная модель и CAM-параметры не сохраняются и не редактируются.
+Геометрия и параметры обработки не редактируются; .prt автоматически не сохраняется.
+Только явно включённые опции меняют имена операций и Description инструментов в NX.
+При отмене или ошибке до записи HTML эти изменения отменяются; после записи доступны через Ctrl+Z в NX.
 HTML лежит в Карты Наладки / имя текущего .prt без расширения.
 Название установа — полное имя СКС первой операции. Все установы в одном HTML.
 Повторный экспорт заменяет только выбранные установы в сохранённом HTML.
@@ -63,6 +68,7 @@ import configparser
 from contextlib import contextmanager
 import copy
 import datetime
+from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import html
 import http.client
@@ -86,7 +92,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.47"
+SCRIPT_VERSION = "V2.48"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -1836,19 +1842,29 @@ class NativeChoiceRows:
             gdi.RestoreDC(dc, saved)
 
 
+def preparation_options():
+    return dict(number_operations=False, update_descriptions=False,
+                include_tool_numbers=False, add_zmin=False)
+
+
 def setup_folders_dialog_template():
     def text(value):
         return (value + '\0').encode('utf-16-le')
     controls = [
         (0x82, 100, 'Отметьте папки установов. Каждая галочка — отдельный установ. '
          'Родительскую папку и её подпапки нельзя выбрать одновременно.', 10, 9, 480, 29, 0),
-        ('SysTreeView32', 101, '', 10, 43, 480, 258, 0x810127),
-        (0x82, 102, 'Выбрано установов: 0', 10, 308, 480, 14, 0),
-        (0x80, 222, 'Снять все', 10, 331, 74, 22, 0x10000),
-        (0x80, 1, 'Далее', 326, 331, 78, 22, 0x30001),
-        (0x80, 2, 'Отмена', 412, 331, 78, 22, 0x10000),
+        (0x80, 230, 'Нумеровать операции', 10, 41, 480, 14, 0x14003),
+        (0x80, 231, 'Добавить параметры инструмента в описание (description)', 10, 62, 480, 14, 0x14003),
+        (0x80, 232, 'Только диаметр — ⌀6', 26, 83, 464, 14, 0x34009),
+        (0x80, 233, 'Диаметр и параметры T, H, D — ⌀6_T2_H3_D4', 26, 104, 464, 14, 0x14009),
+        (0x80, 234, 'Добавить Zmin к именам операций', 10, 83, 480, 14, 0x34003),
+        ('SysTreeView32', 101, '', 10, 105, 480, 258, 0x810127),
+        (0x82, 102, 'Выбрано установов: 0', 10, 370, 480, 14, 0),
+        (0x80, 222, 'Снять все', 10, 393, 74, 22, 0x10000),
+        (0x80, 1, 'Далее', 326, 393, 78, 22, 0x30001),
+        (0x80, 2, 'Отмена', 412, 393, 78, 22, 0x10000),
     ]
-    data = bytearray(struct.pack('<IIHhhhh', 0x80C808C0, 0, len(controls), 0, 0, 500, 364))
+    data = bytearray(struct.pack('<IIHhhhh', 0x80C808C0, 0, len(controls), 0, 0, 500, 426))
     data += struct.pack('<HH', 0, 0) + text(TITLE + ' — Выбор установов')
     data += struct.pack('<H', 9) + text('Segoe UI')
     for cls, ident, label, x, y, width, height, style in controls:
@@ -1859,7 +1875,7 @@ def setup_folders_dialog_template():
     return bytes(data)
 
 
-def show_setup_folders(rows):
+def show_setup_folders(rows, options=None):
     """Native modal tree, built in memory. No resource/configuration files."""
     import ctypes
     from ctypes import wintypes as w
@@ -1896,6 +1912,9 @@ def show_setup_folders(rows):
         'GetDlgItem': ([w.HWND, ctypes.c_int], w.HWND), 'SetFocus': ([w.HWND], w.HWND),
         'EnableWindow': ([w.HWND, w.BOOL], w.BOOL), 'GetSysColor': ([ctypes.c_int], w.DWORD),
         'SetWindowTextW': ([w.HWND, w.LPCWSTR], w.BOOL),
+        'ShowWindow': ([w.HWND, ctypes.c_int], w.BOOL),
+        'MapDialogRect': ([w.HWND, ctypes.POINTER(w.RECT)], w.BOOL),
+        'MoveWindow': ([w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.BOOL], w.BOOL),
         'SetWindowLongPtrW': ([w.HWND, ctypes.c_int, ctypes.c_ssize_t], ctypes.c_ssize_t),
         'SendMessageW': ([w.HWND, w.UINT, w.WPARAM, w.LPARAM], ctypes.c_ssize_t),
         'InvalidateRect': ([w.HWND, ctypes.POINTER(w.RECT), w.BOOL], w.BOOL),
@@ -1919,7 +1938,7 @@ def show_setup_folders(rows):
         raise ctypes.WinError(ctypes.get_last_error())
     model = SetupFolderChoices(rows)
     state = {'window': None, 'tree': None, 'updating': False, 'error': None,
-             'handles': {}, 'keys': {}, 'images': None}
+             'handles': {}, 'keys': {}, 'images': None, 'options': preparation_options(), 'double_click': set()}
     labels = {row['key']: row['name'] + (' — нет операций' if not row['operation_count'] else '') for row in rows}
 
     def item_info(handle):
@@ -1927,6 +1946,34 @@ def show_setup_folders(rows):
         return (labels[key], model.disabled(key)) if key is not None else None
 
     choice_rows = NativeChoiceRows(True, item_info)
+
+    def description_formats():
+        shown = user.SendMessageW(user.GetDlgItem(state['window'], 231), 0xF0, 0, 0) == 1
+        for ident in (232, 233):
+            user.ShowWindow(user.GetDlgItem(state['window'], ident), 5 if shown else 0)
+        offset = 42 if shown else 0
+        for ident, rect in ((234, (10, 83 + offset, 490, 97 + offset)),
+                            (101, (10, 105 + offset, 490, 363))):
+            box = w.RECT(*rect)
+            user.MapDialogRect(state['window'], ctypes.byref(box))
+            user.MoveWindow(user.GetDlgItem(state['window'], ident), box.left, box.top,
+                            box.right - box.left, box.bottom - box.top, True)
+        user.InvalidateRect(state['window'], None, True)
+
+    @subclass_type
+    def option_proc(window, message, wparam, lparam, subclass_id, ref_data):
+        # The first click already toggles the native checkbox (including its
+        # caption). A double click must not immediately toggle it back.
+        if message == 0x0203:
+            state['double_click'].add(window)
+            return 0
+        if message == 0x0202 and window in state['double_click']:
+            state['double_click'].discard(window)
+            return 0
+        if message == 0x0082:
+            state['double_click'].discard(window)
+            common.RemoveWindowSubclass(window, option_proc, 2)
+        return common.DefSubclassProc(window, message, wparam, lparam)
 
     def sync():
         state['updating'] = True
@@ -2000,6 +2047,12 @@ def show_setup_folders(rows):
         try:
             if message == 0x0110:
                 state['window'], state['tree'] = window, user.GetDlgItem(window, 101)
+                for ident in (230, 231, 232, 233, 234):
+                    control = user.GetDlgItem(window, ident)
+                    user.SendMessageW(control, 0xF1, int(ident == 232), 0)
+                    if not common.SetWindowSubclass(control, option_proc, 2, 0):
+                        raise RuntimeError('Не удалось подключить опции подготовки карты.')
+                description_formats()
                 if not state['tree']:
                     raise RuntimeError('Не удалось создать дерево папок.')
                 state['updating'] = True
@@ -2048,7 +2101,14 @@ def show_setup_folders(rows):
                 return 1
             if message == 0x0111:
                 ident = wparam & 0xFFFF
+                if ident == 231:
+                    description_formats()
+                    return 1
                 if ident == 2 or (ident == 1 and model.selected):
+                    if ident == 1:
+                        for key, control in (('number_operations', 230), ('update_descriptions', 231),
+                                             ('include_tool_numbers', 233), ('add_zmin', 234)):
+                            state['options'][key] = user.SendMessageW(user.GetDlgItem(window, control), 0xF0, 0, 0) == 1
                     user.EndDialog(window, ident)
                     return 1
                 if ident == 222:
@@ -2073,6 +2133,8 @@ def show_setup_folders(rows):
         raise state['error']
     if result not in (1, 2):
         raise RuntimeError('Не удалось открыть выбор установов: ' + str(ctypes.WinError(ctypes.get_last_error())))
+    if result == 1 and options is not None:
+        options.update(state['options'])
     return model.values() if result == 1 else None
 
 
@@ -2085,7 +2147,8 @@ def ask_setup_folders(nx, part):
     lock_source = nx.UF.UFConstants.UF_UI_FROM_CUSTOM
     uf_ui.LockUgAccess(lock_source)
     try:
-        choices = show_setup_folders(rows)
+        options = preparation_options()
+        choices = show_setup_folders(rows, options)
     finally:
         uf_ui.UnlockUgAccess(lock_source)
     if choices is None:
@@ -2096,12 +2159,13 @@ def ask_setup_folders(nx, part):
             raise RuntimeError('Одновременно выбраны родительская папка и её подпапка.')
     if not model.selected:
         raise ExportCancelled()
-    return program, [row['object'] for row in rows if row['key'] in model.selected]
+    return program, [row['object'] for row in rows if row['key'] in model.selected], options
 
 
 def resolve_setup_jobs(nx, ui, part, report):
     """Only the startup folder dialog defines jobs; NX preselection is ignored."""
-    program, folders = ask_setup_folders(nx, part)
+    program, folders, options = ask_setup_folders(nx, part)
+    report['_preparation_options'] = options
     selections = [[folder] for folder in folders]
     report['selection_source'] = 'startup_folder_tree'
     jobs = []
@@ -2124,6 +2188,336 @@ def resolve_setup_jobs(nx, ui, part, report):
         item['selected_folder_path'] = navigator_folder_path(program, selection[0]) or []
         jobs.append({'context': context, 'report': item, 'output': None})
     return jobs
+
+
+class PreparationSelection:
+    """Zmin scope frozen before modal dialogs or component previews change NX selection."""
+    def __init__(self, nx, ui, part):
+        self.part_tag, self.operations, self.scope, self.error = object_key(part), [], '', None
+        try:
+            all_operations = list(part.CAMSetup.CAMOperationCollection)
+            known = {object_key(obj) for obj in all_operations + list(part.CAMSetup.CAMGroupCollection)}
+            operation_tags = {object_key(obj) for obj in all_operations}
+            selected, navigator_error = None, None
+            try:
+                count, tags = nx.UF.UFSession.GetUFSession().UiOnt.AskSelectedNodes()
+                tags = list(tags) if tags is not None else []
+                if int(count) < 0 or int(count) != len(tags):
+                    raise RuntimeError('NX вернул неполный список выбранных узлов.')
+                if count:
+                    selected = {str(tag) for tag in tags}
+                    if not selected <= known:
+                        raise RuntimeError('В выделении есть узлы другого CAM-проекта.')
+            except Exception as exc:
+                navigator_error, selected = exc, None
+            if selected is None:
+                manager = ui.SelectionManager
+                objects = [manager.GetSelectedTaggedObject(i) for i in range(manager.GetNumSelectedObjects())]
+                selected = {object_key(obj) for obj in objects}
+                if any(isinstance(obj, nx.CAM.Operation) and object_key(obj) not in operation_tags for obj in objects):
+                    raise RuntimeError('Выделена операция другой детали. Откройте её CAM-проект.')
+                if navigator_error is not None and not selected & operation_tags:
+                    raise RuntimeError('Не удалось надёжно прочитать выделение в навигаторе.\n'
+                                       'Выделите нужные операции и повторите запуск.\n\n' + str(navigator_error))
+            if not selected:
+                self.operations, self.scope = all_operations, 'Все операции проекта'
+            else:
+                self.operations = [obj for obj in all_operations if object_key(obj) in selected]
+                if not self.operations:
+                    raise RuntimeError('Выделены папки или другие объекты, но не операции.\n'
+                                       'Выделите операции либо полностью снимите выделение для всего проекта.')
+                self.scope = 'Выделенные операции'
+        except Exception as exc:
+            # A disabled Zmin option must not block ordinary card generation.
+            self.error = exc
+
+    def validate(self, session, part):
+        if self.error is not None:
+            raise RuntimeError('Zmin: ' + str(self.error)) from self.error
+        if (object_key(part) != self.part_tag or session.Parts.Work is None or session.Parts.Display is None
+                or object_key(session.Parts.Work) != self.part_tag or object_key(session.Parts.Display) != self.part_tag):
+            raise RuntimeError('Zmin: CAM-проект должен оставаться рабочей и отображаемой деталью.')
+
+
+def operation_numbering_plan(jobs):
+    """Restart numbering in each chosen program folder, preserving its NX order."""
+    planned, seen = [], set()
+    for job in jobs:
+        operations = job['context']['operations']
+        width = 2 if len(operations) <= 99 else 3
+        for index, operation in enumerate(operations, 1):
+            key, old = object_key(operation), str(operation.Name)
+            if key in seen:
+                raise RuntimeError('Операция попала в несколько выводимых установов: ' + old)
+            seen.add(key)
+            body = re.sub(r'\A(?:[0-9]+_)+', '', old)
+            if not body:
+                match = re.search(r'([0-9]+)_$', old)
+                body = match.group(1) if match else 'Операция'
+            new = str(index).zfill(width) + '_' + body
+            if new != old:
+                planned.append(dict(op=operation, tag=key, old=old, new=new))
+    return planned
+
+
+def zmin_operation_name(name, value):
+    body = re.sub(r'(?:_Z[+-]?(?:[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+))+$', '', str(name), flags=re.I)
+    if not body:
+        raise ValueError('После удаления старого суффикса Z имя операции пустое.')
+    number = ('%.4f' % finite_number(value)).rstrip('0').rstrip('.')
+    return body + '_Z' + ('0' if number == '-0' else number)
+
+
+def preparation_progress(stage, detail=''):
+    if EXPORT_PROGRESS is not None:
+        EXPORT_PROGRESS.update(stage=stage, detail=detail)
+
+
+def zmin_rename_plan(nx, part, operations):
+    planned, skipped, unchanged, values, frames, frame_errors = [], [], 0, {}, {}, {}
+    status_type = getattr(getattr(nx.CAM, 'CAMObject', None), 'Status', None)
+    for index, operation in enumerate(operations, 1):
+        old = str(operation.Name)
+        try:
+            preparation_progress('Zmin · ' + old, 'Операция %d из %d' % (index, len(operations)))
+            if not operation.AskPathExists():
+                raise ValueError('Нет рассчитанной траектории.')
+            if enum_name(operation.GetStatus(), status_type, ('Complete', 'Approved', 'Regen', 'Repost')) == 'Regen':
+                raise ValueError('Траектория устарела: требуется пересчёт в NX.')
+            group = nearest_mcs(nx, operation)
+            if group is None:
+                raise ValueError('Не найдена СКС операции.')
+            key = object_key(group)
+            if key in frame_errors:
+                raise ValueError(frame_errors[key])
+            if key not in frames:
+                try:
+                    frames[key] = read_mcs(part, group)
+                except Exception as exc:
+                    frame_errors[key] = 'Не удалось прочитать СКС: ' + str(exc)
+                    raise ValueError(frame_errors[key]) from exc
+            basis, origin = frames[key]
+            def progress(completed, count):
+                preparation_progress('Zmin · ' + old, 'Операция %d/%d · Движения: %d/%d' %
+                                     (index, len(operations), completed, count))
+            value = toolpath_zmin(nx, operation, basis, origin, progress)
+            if value is None:
+                raise ValueError('В траектории нет доступных перемещений.')
+            values[object_key(operation)] = value
+            new = zmin_operation_name(old, value)
+            if new == old:
+                unchanged += 1
+            else:
+                planned.append(dict(op=operation, tag=object_key(operation), old=old, new=new))
+        except Exception as exc:
+            skipped.append((old, str(exc)))
+    return planned, skipped, unchanged, values
+
+
+def remove_rename_conflicts(planned, objects):
+    """Same collision rules as Zmin: skip ambiguous names, including blocking chains."""
+    targets = {}
+    for item in planned:
+        targets.setdefault(item['new'].casefold(), []).append(item)
+    remaining, skipped = [], []
+    for item in planned:
+        if len(targets[item['new'].casefold()]) > 1:
+            skipped.append((item['old'], 'Несколько операций получат имя «' + item['new'] + '».'))
+        else:
+            remaining.append(item)
+    while remaining:
+        moving = {item['tag'] for item in remaining}
+        occupied = {str(obj.Name).casefold() for obj in objects if object_key(obj) not in moving}
+        blocked = [item for item in remaining if item['new'].casefold() in occupied]
+        if not blocked:
+            break
+        blocked_tags = {item['tag'] for item in blocked}
+        for item in blocked:
+            skipped.append((item['old'], 'Имя «' + item['new'] + '» уже занято в CAM-проекте.'))
+        remaining = [item for item in remaining if item['tag'] not in blocked_tags]
+    return remaining, skipped
+
+
+def apply_operation_names(planned, objects):
+    """Use temporary NX names for swaps; the enclosing preparation owns rollback."""
+    reserved = {str(obj.Name).casefold() for obj in objects} | {item['new'].casefold() for item in planned}
+    temporary, number = [], 1
+    for item in planned:
+        name = 'NXPREP_' + str(number)
+        # Case-insensitive comparison must include existing mixed-case names.
+        while name.casefold() in reserved:
+            number += 1
+            name = 'NXPREP_' + str(number)
+        reserved.add(name.casefold())
+        temporary.append(name)
+        number += 1
+    for names in (temporary, [item['new'] for item in planned]):
+        for item, name in zip(planned, names):
+            item['op'].SetName(name)
+            actual = str(item['op'].Name)
+            if actual != name:
+                raise RuntimeError('NX изменил запрошенное имя «%s» на «%s».' % (name, actual))
+
+
+def tool_description_numbers(uf, tool):
+    t = uf.Param.AskIntValue(tool.Tag, 1038)  # UF_PARAM_TL_NUMBER
+    h = uf.Param.AskIntValue(tool.Tag, 1040)  # UF_PARAM_TL_ADJ_REG
+    try:
+        status = str(uf.Param.AskParamStatus(tool.Tag, 1041)).rsplit('.', 1)[-1].lower().replace('_', '')
+        d = None if status in ('3', 'invalidindex', 'ufparaminvalidindex') else uf.Param.AskIntValue(tool.Tag, 1041)
+    except Exception as exc:
+        if getattr(exc, 'ErrorCode', None) != 1345036:  # Explicit UF_CAM_ERROR_INVALID_INDEX only.
+            raise
+        d = None
+    return t, h, d
+
+
+def tool_general_description(part, tool, value=None):
+    builder = part.CAMSetup.CAMGroupCollection.CreateNcgroupBuilder(tool)
+    try:
+        if value is not None:
+            builder.Description = value
+            builder.Commit()
+        return builder.Description or ''
+    finally:
+        builder.Destroy()
+
+
+def apply_tool_description(nx, part, uf, tool, include_numbers):
+    family, subtype = tool.GetTypeAndSubtype()
+    if enum_name(family, nx.CAM.Tool.Types, ('Mill', 'Drill', 'Barrel', 'Tcutter', 'MillForm')) not in (
+            'Mill', 'Drill', 'Barrel', 'Tcutter', 'MillForm'):
+        return False
+    diameter = float(uf.Param.AskDoubleValue(tool.Tag, 1000))  # UF_PARAM_TL_DIAMETER
+    if not math.isfinite(diameter) or diameter <= 0:
+        return False
+    rounded = Decimal(str(diameter)).quantize(Decimal('0.000001'), rounding=ROUND_HALF_UP)
+    if rounded <= 0:
+        return False
+    value = '⌀' + format(rounded, 'f').rstrip('0').rstrip('.')
+    numbers = tool_description_numbers(uf, tool) if include_numbers else None
+    if numbers is not None:
+        value += '_T%d_H%d' % numbers[:2]
+        if numbers[2] is not None:
+            value += '_D%d' % numbers[2]
+    general = tool_general_description(part, tool)
+    cutter = uf.Param.AskStrValue(tool.Tag, 1068) or ''  # UF_PARAM_TL_DESCRIPTION
+    if general == value and cutter == value:
+        return False
+    if general != value:
+        tool_general_description(part, tool, value)
+    if (uf.Param.AskStrValue(tool.Tag, 1068) or '') != value:
+        uf.Param.SetStrValue(tool.Tag, 1068, value)
+    if tool_general_description(part, tool) != value or uf.Param.AskStrValue(tool.Tag, 1068) != value:
+        raise RuntimeError('NX не подтвердил записанный текст описания.')
+    after = finite_number(uf.Param.AskDoubleValue(tool.Tag, 1000))
+    if abs(after - diameter) > max(1e-9, abs(diameter) * 1e-12):
+        raise RuntimeError('Контроль диаметра после записи не пройден.')
+    if numbers is not None and tool_description_numbers(uf, tool) != numbers:
+        raise RuntimeError('Контроль номеров T/H/D после записи не пройден.')
+    return True
+
+
+def update_tool_descriptions(nx, part, session, uf, batch_mark, objects, include_numbers):
+    tools = [obj for obj in objects if isinstance(obj, nx.CAM.Tool) and obj.OwningPart is not None
+             and object_key(obj.OwningPart) == object_key(part)]
+    changed, skipped = 0, []
+    for index, tool in enumerate(tools, 1):
+        preparation_progress('Description инструментов', '%d / %d · %s' % (index, len(tools), tool.Name))
+        mark = session.SetUndoMark(nx.Session.MarkVisibility.Invisible, TITLE + ' — Description')
+        try:
+            if apply_tool_description(nx, part, uf, tool, include_numbers):
+                changed += 1
+        except Exception as exc:
+            try:
+                session.UndoToMark(mark, None)
+            except Exception as restore:
+                raise RuntimeError('Не удалось отменить изменение инструмента «%s»: %s. Исходная ошибка: %s' %
+                                   (tool.Name, restore, exc)) from restore
+            skipped.append((str(tool.Name), str(exc)))
+        finally:
+            session.DeleteUndoMark(mark, None)
+    if changed:
+        errors = session.UpdateManager.DoUpdate(batch_mark)
+        if errors:
+            raise RuntimeError('NX сообщил об ошибках обновления Description: ' + str(errors))
+    return changed, skipped
+
+
+class SetupPreparation:
+    """Keep preparation only after HTML publication; no files and no part save."""
+    def __init__(self, nx, part, jobs, options, selection):
+        self.nx, self.part, self.jobs, self.options, self.selection = nx, part, jobs, options, selection
+        self.session, self.mark = nx.Session.GetSession(), None
+        self.messages, self.warnings, self.original_names = [], [], []
+
+    def apply(self):
+        options = self.options
+        if not any(options.get(key) for key in ('number_operations', 'update_descriptions', 'add_zmin')):
+            return
+        if options.get('add_zmin'):
+            self.selection.validate(self.session, self.part)
+        uf = self.nx.UF.UFSession.GetUFSession()
+        objects = list(self.part.CAMSetup.CAMOperationCollection) + list(self.part.CAMSetup.CAMGroupCollection)
+        self.original_names = [(obj, str(obj.Name)) for obj in objects if isinstance(obj, self.nx.CAM.Operation)]
+        self.mark = self.session.SetUndoMark(self.nx.Session.MarkVisibility.Visible, TITLE + ' — Подготовка карты')
+        if options.get('update_descriptions'):
+            changed, skipped = update_tool_descriptions(self.nx, self.part, self.session, uf, self.mark,
+                                                       objects, options.get('include_tool_numbers', False))
+            self.messages.append('Description: обновлено инструментов — %d; ошибок — %d.' % (changed, len(skipped)))
+            self.warnings.extend('%s: %s' % item for item in skipped)
+        if options.get('number_operations'):
+            preparation_progress('Нумерация операций')
+            planned = operation_numbering_plan(self.jobs)
+            allowed, conflicts = remove_rename_conflicts(planned, objects)
+            if conflicts:
+                raise RuntimeError('Нумерация: ' + '\n'.join('%s: %s' % item for item in conflicts[:8]))
+            apply_operation_names(allowed, objects)
+            self.messages.append('Нумерация: переименовано операций — %d.' % len(allowed))
+        if options.get('add_zmin'):
+            planned, skipped, unchanged, values = zmin_rename_plan(self.nx, self.part, self.selection.operations)
+            planned, conflicts = remove_rename_conflicts(planned, objects)
+            skipped.extend(conflicts)
+            apply_operation_names(planned, objects)
+            self.messages.append('Zmin: %s. Переименовано — %d; уже актуальны — %d; пропущено — %d.' %
+                                 (self.selection.scope, len(planned), unchanged, len(skipped)))
+            self.warnings.extend('%s: %s' % item for item in skipped)
+            for job in self.jobs:
+                job['context']['prepared_zmin'] = values
+        for job in self.jobs:
+            record_setup_identity(job['context'], job['report'])
+        self.refresh()
+
+    def refresh(self):
+        try:
+            self.nx.UF.UFSession.GetUFSession().UiOnt.Refresh()
+        except Exception as exc:
+            self.warnings.append('Не удалось обновить навигатор NX: ' + str(exc))
+
+    def finish(self, published):
+        if self.mark is None:
+            return
+        if not published:
+            try:
+                self.session.UndoToMark(self.mark, None)
+                if any(str(obj.Name) != name for obj, name in self.original_names):
+                    raise RuntimeError('NX не восстановил исходные имена операций.')
+                self.session.DeleteUndoMark(self.mark, None)
+                self.mark = None
+            except Exception as exc:
+                raise RuntimeError('Не удалось полностью отменить подготовку карты. Проверьте имена операций '
+                                   'и Description инструментов; выполните отмену в NX.\n' + str(exc)) from exc
+            self.refresh()
+
+    def result(self):
+        lines = self.messages[:]
+        if self.warnings:
+            lines.append('Пропуски и замечания:\n' + '\n'.join(self.warnings[:8]))
+            if len(self.warnings) > 8:
+                lines.append('И ещё %d.' % (len(self.warnings) - 8))
+        if self.mark is not None:
+            lines.append('Отмена подготовки в NX: Ctrl+Z. Файл .prt автоматически не сохранён.')
+        return '\n'.join(lines)
 
 
 def component_inventory(part):
@@ -3476,7 +3870,10 @@ def read_operation_data(nx, part, context, report):
         record["path_status"] = try_read(report, operation, "Path status", lambda: enum_name(
             operation.GetStatus(), status_type, ("Complete", "Approved", "Regen", "Repost")))
         record['zmin'] = None
-        if record['has_path'] and record['path_status'] != 'Regen':
+        prepared = context.get('prepared_zmin', {})
+        if record['has_path'] and record['path_status'] != 'Regen' and object_key(operation) in prepared:
+            record['zmin'] = prepared[object_key(operation)]
+        elif record['has_path'] and record['path_status'] != 'Regen':
             frame_key = object_key(group)
             if frame_key not in mcs_frames:
                 mcs_frames[frame_key] = try_read(report, group, 'Zmin: СКС', lambda: read_mcs(part, group), True)
@@ -9335,7 +9732,7 @@ def main():
     global EXPORT_PROGRESS
     previous_progress, progress = EXPORT_PROGRESS, None
     ui, nx, part, staging, card = None, None, None, None, None
-    components = None
+    components, preparation = None, None
     jobs, state = [], new_report()
     processing, cancelled = False, False
     created_directories = []
@@ -9355,6 +9752,7 @@ def main():
                 raise RuntimeError('Открой CAM-файл в NX и повтори запуск.')
             if display is None or str(part.Tag) != str(display.Tag):
                 raise RuntimeError('CAM-файл должен быть рабочей и отображаемой деталью.')
+            preparation_selection = PreparationSelection(nx, ui, part)
             project_camera = snapshot_view(display.ModelingViews.WorkView)
             project_camera['projection'] = read_view_projection(nx, display.ModelingViews.WorkView)
             project_camera['axes'] = [xyz(display.ModelingViews.WorkView.GetAxis(axis)) for axis in
@@ -9381,6 +9779,8 @@ def main():
             plan_setup_update(state['_existing_card'], [job['report'] for job in jobs])
             progress = ExportProgress(len(jobs))
             EXPORT_PROGRESS = progress
+            preparation = SetupPreparation(nx, part, jobs, state['_preparation_options'], preparation_selection)
+            preparation.apply()
             created_directories.extend(path for path in (destination.parent, destination) if not path.exists())
             staging = make_output_folder(project_file.parent, project_name)
             prepare_capture_folders(staging, jobs)
@@ -9438,10 +9838,7 @@ def main():
                     report['restore_errors'].extend(errors)
                     if errors and report['status'] != 'error':
                         report['status'] = 'warning'
-        if cancelled:
-            diagnostic_event('export.cancelled')
-            return
-        if staging is not None:
+        if not cancelled and staging is not None:
             state['setups'] = [j['report'] for j in jobs]
             state['setup_total'] = len(jobs)
             state['setups_completed'] = sum(export_is_complete(j['report']) for j in jobs)
@@ -9459,6 +9856,13 @@ def main():
                 state.update(status='error', error=state.get('error', '') + '\nНе удалось сохранить общий документ: ' + str(exc))
     finally:
         try:
+            if preparation is not None:
+                try:
+                    preparation.finish(card is not None)
+                except Exception as exc:
+                    state.update(status='error', error=(state.get('error', '') + '\n' + str(exc)).strip())
+                if card is not None and preparation.warnings and state['status'] == 'ok':
+                    state['status'] = 'warning'
             if progress is not None:
                 progress.phase = 'finish'
                 progress.update(99 if card is not None else None, 'Завершение создания карты')
@@ -9471,6 +9875,9 @@ def main():
             EXPORT_PROGRESS = previous_progress
             if progress is not None:
                 progress.close()
+    if cancelled and not state.get('error'):
+        diagnostic_event('export.cancelled')
+        return
     diagnostic_event('export.result', status=state['status'], error=state.get('error'),
                      setups=[{'name': setup_label(j['report']), 'status': j['report']['status'],
                               'error': j['report'].get('error')} for j in jobs])
@@ -9498,6 +9905,8 @@ def main():
             message += '\n\n' + '\n'.join(failures)
     if state.get('cleanup_errors'):
         message += '\n\n' + '\n'.join(state['cleanup_errors'])
+    if card is not None and preparation is not None and preparation.result():
+        message += '\n\n' + preparation.result()
     message += copy_card_path(card, state)
     if ui is None:
         print('Это журнал NX. Запускайте его внутри NX: Журнал / Воспроизвести.\n' + message)
