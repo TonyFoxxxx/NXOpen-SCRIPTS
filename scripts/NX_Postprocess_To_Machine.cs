@@ -1,7 +1,7 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.43
+// SCRIPT_VERSION: V1.44
 // Optional numbering, tool descriptions and operation Zmin.
-// Use native row bounds for tree labels; choose Description format when enabled.
+// Unified tree row drawing; inline, exclusive Description format options.
 // Description behavior: NX_Tool_D_To_Description; Zmin behavior: NX_Operation_Zmin.
 // Preserve NC processing, modal validation, output paths and other INI settings.
 // Siemens NX / Designcenter, Windows. C# journal with an external INI.
@@ -2205,27 +2205,6 @@ internal static class ProgramFolderCatalog
     }
 }
 
-internal sealed class DescriptionModePicker : RouterDialog
-{
-    internal bool IncludeToolNumbers { get; private set; }
-
-    internal DescriptionModePicker() : base("\u041F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 \u0432 description", 54)
-    {
-        RuntimeForms.SetValue(Window, "MinimumSize", 620, 300);
-        RuntimeForms.SetValue(Window, "ClientSize", 620, 302);
-        RuntimeForms.SetEnum(Window, "FormBorderStyle", "FixedDialog");
-        RuntimeForms.Set(Window, "MaximizeBox", false);
-        RuntimeForms.SetEnum(Grid, "FlowDirection", "TopDown");
-        RuntimeForms.Set(Grid, "WrapContents", false);
-        RuntimeForms.Add(Header, Label("\u041A\u0430\u043A\u043E\u0439 \u0432\u0430\u0440\u0438\u0430\u043D\u0442 \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u044F \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u044C?\n\u0415\u0441\u043B\u0438 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440 D \u043E\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442, \u043E\u043D \u043D\u0435 \u0434\u043E\u0431\u0430\u0432\u043B\u044F\u0435\u0442\u0441\u044F.", 0, 0, 560, 46));
-        object diameter = Button("\u0422\u043E\u043B\u044C\u043A\u043E \u0434\u0438\u0430\u043C\u0435\u0442\u0440\n\u23006", 548, 58);
-        object full = Button("\u0414\u0438\u0430\u043C\u0435\u0442\u0440 \u0438 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B T, H, D\n\u23006_T2_H3_D4", 548, 58);
-        RuntimeForms.On(diameter, "Click", delegate { IncludeToolNumbers = false; Finish("OK"); });
-        RuntimeForms.On(full, "Click", delegate { IncludeToolNumbers = true; Finish("OK"); });
-        RuntimeForms.Add(Grid, diameter); RuntimeForms.Add(Grid, full);
-    }
-}
-
 internal sealed class ProgramFolderPicker : RouterDialog
 {
     private readonly List<ProgramFolderEntry> entries;
@@ -2236,12 +2215,15 @@ internal sealed class ProgramFolderPicker : RouterDialog
     private readonly object countLabel, next;
     private readonly object numberOperations = RuntimeForms.New("CheckBox");
     private readonly object updateDescriptions = RuntimeForms.New("CheckBox");
+    private readonly object descriptionFormats = RuntimeForms.New("Panel");
+    private readonly object diameterOnly = RuntimeForms.New("RadioButton");
+    private readonly object diameterAndNumbers = RuntimeForms.New("RadioButton");
     private readonly object addZmin = RuntimeForms.New("CheckBox");
     private bool updating;
     internal List<ProgramJob> Jobs;
     internal bool NumberOperations { get { return (bool)RuntimeForms.Get(numberOperations, "Checked"); } }
     internal bool UpdateDescriptions { get { return (bool)RuntimeForms.Get(updateDescriptions, "Checked"); } }
-    internal bool IncludeToolNumbers { get; private set; }
+    internal bool IncludeToolNumbers { get { return UpdateDescriptions && (bool)RuntimeForms.Get(diameterAndNumbers, "Checked"); } }
     internal bool AddZmin { get { return (bool)RuntimeForms.Get(addZmin, "Checked"); } }
 
     internal ProgramFolderPicker(NCGroup programRoot, OperationSelectionSnapshot selectedOperations) : base("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u044B \u0434\u043B\u044F \u0432\u044B\u0432\u043E\u0434\u0430", 258)
@@ -2265,10 +2247,19 @@ internal sealed class ProgramFolderPicker : RouterDialog
         RuntimeForms.SetEnum(numberOperations, "TextAlign", "MiddleLeft");
         RuntimeForms.Add(Header, numberOperations);
         AddPreparationOption(updateDescriptions, "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 \u0432 \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u0435 (description)", 188,
-            "\u0412\u0441\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043C\u044B\u0435 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u044B \u0442\u0435\u043A\u0443\u0449\u0435\u0439 \u0434\u0435\u0442\u0430\u043B\u0438. \u041F\u0440\u0438 \u0432\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435: \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u0438\u0430\u043C\u0435\u0442\u0440 \u043B\u0438\u0431\u043E \u0434\u0438\u0430\u043C\u0435\u0442\u0440 \u0438 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B T, H, D.");
-        RuntimeForms.On(updateDescriptions, "CheckedChanged", delegate { ChooseDescriptionFormat(); });
+            "\u0412\u0441\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043C\u044B\u0435 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u044B \u0442\u0435\u043A\u0443\u0449\u0435\u0439 \u0434\u0435\u0442\u0430\u043B\u0438. \u0424\u043E\u0440\u043C\u0430\u0442 \u0437\u0430\u0434\u0430\u0451\u0442\u0441\u044F \u043D\u0438\u0436\u0435. \u0415\u0441\u043B\u0438 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440 D \u043E\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442, \u043E\u043D \u043D\u0435 \u0434\u043E\u0431\u0430\u0432\u043B\u044F\u0435\u0442\u0441\u044F.");
         AddPreparationOption(addZmin, "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C Zmin \u043A \u0438\u043C\u0435\u043D\u0430\u043C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439", 220,
             "\u041A\u0430\u043A \u0432 \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u043E\u043C \u0441\u043A\u0440\u0438\u043F\u0442\u0435 Zmin: \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0435 \u0432 NX \u043F\u0435\u0440\u0435\u0434 \u0437\u0430\u043F\u0443\u0441\u043A\u043E\u043C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438; \u0435\u0441\u043B\u0438 \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u044F \u043D\u0435\u0442 \u2014 \u0432\u0441\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u043F\u0440\u043E\u0435\u043A\u0442\u0430. \u0421\u0442\u0430\u0440\u044B\u0439 \u043A\u043E\u043D\u0435\u0447\u043D\u044B\u0439 _Z\u0447\u0438\u0441\u043B\u043E \u0437\u0430\u043C\u0435\u043D\u044F\u0435\u0442\u0441\u044F.");
+        Position(descriptionFormats, 20, 220, 740, 56);
+        RuntimeForms.SetEnum(descriptionFormats, "Anchor", "Top, Left, Right");
+        RuntimeForms.SetValue(descriptionFormats, "Margin", 0, 0, 0, 4);
+        AddDescriptionFormat(diameterOnly, "\u0422\u043E\u043B\u044C\u043A\u043E \u0434\u0438\u0430\u043C\u0435\u0442\u0440 \u2014 \u23006", 0, 0);
+        AddDescriptionFormat(diameterAndNumbers, "\u0414\u0438\u0430\u043C\u0435\u0442\u0440 \u0438 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B T, H, D \u2014 \u23006_T2_H3_D4", 28, 1);
+        RuntimeForms.Set(diameterOnly, "Checked", true);
+        RuntimeForms.Set(descriptionFormats, "Visible", false);
+        RuntimeForms.Add(Header, descriptionFormats);
+        RuntimeForms.SetValue(Header, "Padding", 0, 0, 0, 10);
+        RuntimeForms.On(updateDescriptions, "CheckedChanged", delegate { ShowDescriptionFormats(); });
         // Replace the flat FlowLayoutPanel in the same docking position.
         object controls = RuntimeForms.Get(Window, "Controls");
         RuntimeForms.Call(controls, "Remove", Grid); RuntimeForms.Dispose(Grid);
@@ -2330,29 +2321,42 @@ internal sealed class ProgramFolderPicker : RouterDialog
         RuntimeForms.Add(Footer, expand); RuntimeForms.Add(Footer, collapse); RuntimeForms.Add(Footer, next);
         RefreshCount();
     }
-    private void ChooseDescriptionFormat()
+    private void AddDescriptionFormat(object option, string text, int top, int tabIndex)
     {
-        IncludeToolNumbers = false;
-        if (!UpdateDescriptions) return;
+        Position(option, 0, top, 740, 28);
+        RuntimeForms.Set(option, "Text", text);
+        RuntimeForms.Set(option, "AutoEllipsis", true);
+        RuntimeForms.Set(option, "UseMnemonic", false);
+        RuntimeForms.Set(option, "UseVisualStyleBackColor", true);
+        RuntimeForms.Set(option, "TabIndex", tabIndex);
+        RuntimeForms.SetEnum(option, "CheckAlign", "MiddleLeft");
+        RuntimeForms.SetEnum(option, "TextAlign", "MiddleLeft");
+        RuntimeForms.SetEnum(option, "Anchor", "Top, Left, Right");
+        // Siblings in one panel form a native, mutually exclusive radio group.
+        RuntimeForms.Add(descriptionFormats, option);
+    }
+    private void ShowDescriptionFormats()
+    {
+        RuntimeForms.Call(Window, "SuspendLayout");
+        RuntimeForms.Call(Header, "SuspendLayout");
         try
         {
-            using (DescriptionModePicker dialog = new DescriptionModePicker())
-            {
-                if (dialog.ShowDialog(Window) == "OK")
-                {
-                    IncludeToolNumbers = dialog.IncludeToolNumbers;
-                    return;
-                }
-            }
+            bool visible = UpdateDescriptions;
+            RuntimeForms.Set(descriptionFormats, "Visible", visible);
+            // Read scaled control bounds and margins; toggling never accumulates
+            // pixel offsets, including after DPI scaling or repeated changes.
+            int top = (int)RuntimeForms.Get(descriptionFormats, "Top");
+            if (visible) top += (int)RuntimeForms.Get(descriptionFormats, "Height") +
+                (int)RuntimeForms.Get(RuntimeForms.Get(descriptionFormats, "Margin"), "Bottom");
+            RuntimeForms.Set(addZmin, "Top", top);
+            RuntimeForms.Set(Header, "Height", (int)RuntimeForms.Get(addZmin, "Bottom") +
+                (int)RuntimeForms.Get(RuntimeForms.Get(Header, "Padding"), "Bottom"));
         }
-        catch (Exception ex)
+        finally
         {
-            RuntimeForms.Set(updateDescriptions, "Checked", false);
-            ShowProblem(ex);
-            return;
+            RuntimeForms.Call(Header, "ResumeLayout", true);
+            RuntimeForms.Call(Window, "ResumeLayout", true);
         }
-        // Cancel and window-close both turn the option off, leaving this picker open.
-        RuntimeForms.Set(updateDescriptions, "Checked", false);
     }
     private void AddPreparationOption(object option, string text, int top, string hint)
     {
@@ -4729,7 +4733,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.43";
+    internal const string SCRIPT_VERSION = "V1.44";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
 
     internal static string WindowTitle(string detail)
