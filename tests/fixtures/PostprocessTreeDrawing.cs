@@ -13,6 +13,15 @@ using System.Windows.Forms;
 internal static class RuntimeForms
 {
     internal static Type FormType(string name) { return typeof(Form).Assembly.GetType("System.Windows.Forms." + name, true); }
+    internal static object New(string name) { return Activator.CreateInstance(FormType(name)); }
+    internal static void SetValue(object target, string name, params object[] values)
+    {
+        PropertyInfo property = target.GetType().GetProperty(name);
+        property.SetValue(target, Activator.CreateInstance(property.PropertyType, values), null);
+    }
+    internal static void Add(object parent, object child) { ((Control)parent).Controls.Add((Control)child); }
+    internal static void On(object target, string name, EventHandler handler)
+    { target.GetType().GetEvent(name).AddEventHandler(target, handler); }
     internal static object Get(object target, string name) { return target.GetType().GetProperty(name).GetValue(target, null); }
     internal static void Set(object target, string name, object value) { target.GetType().GetProperty(name).SetValue(target, value, null); }
     internal static void SetEnum(object target, string name, string value)
@@ -44,6 +53,7 @@ internal static class TreeDrawingChecks
                 Run(sizes[i], heights[i], true, i == 0, themed);
             Run(8.25F, 26, false, false, themed);
             Console.WriteLine("PASS real Windows tree: " + checks + " pixel/interaction checks; " + args[0]);
+            DescriptionInlineChecks.Run(themed);
             return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
