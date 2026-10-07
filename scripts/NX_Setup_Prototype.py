@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.46
+# SCRIPT_VERSION: V2.47
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -86,7 +86,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.46"
+SCRIPT_VERSION = "V2.47"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
@@ -1622,6 +1622,207 @@ class SetupFolderChoices:
         return [row['key'] for row in self.rows if row['key'] in self.selected]
 
 
+class NativeChoiceRows:
+    """Paint native checkboxes and labels around one actual row center.
+
+    The controls still own selection, check states, scrolling and hit testing.
+    Like the postprocessor tree, geometry comes from Win32, never font offsets.
+    """
+    def __init__(self, tree, item_info):
+        import ctypes
+        from ctypes import wintypes as w
+
+        class NMHDR(ctypes.Structure):
+            _fields_ = [('hwndFrom', w.HWND), ('idFrom', ctypes.c_size_t), ('code', w.UINT)]
+
+        class NMCUSTOMDRAW(ctypes.Structure):
+            _fields_ = [('hdr', NMHDR), ('dwDrawStage', w.DWORD), ('hdc', w.HDC),
+                        ('rc', w.RECT), ('dwItemSpec', ctypes.c_size_t),
+                        ('uItemState', w.UINT), ('lItemlParam', w.LPARAM)]
+
+        class TVITEMW(ctypes.Structure):
+            _fields_ = [('mask', w.UINT), ('hItem', w.HANDLE), ('state', w.UINT),
+                        ('stateMask', w.UINT), ('pszText', w.LPWSTR), ('cchTextMax', ctypes.c_int),
+                        ('iImage', ctypes.c_int), ('iSelectedImage', ctypes.c_int),
+                        ('cChildren', ctypes.c_int), ('lParam', w.LPARAM)]
+
+        self.ctypes, self.w = ctypes, w
+        self.Draw, self.Item = NMCUSTOMDRAW, TVITEMW
+        self.tree, self.item_info = tree, item_info
+        self.user = ctypes.WinDLL('user32', use_last_error=True)
+        self.gdi = ctypes.WinDLL('gdi32', use_last_error=True)
+        self.common = ctypes.WinDLL('comctl32', use_last_error=True)
+        for library, name, result, arguments in (
+                (self.user, 'SendMessageW', ctypes.c_ssize_t, [w.HWND, w.UINT, w.WPARAM, w.LPARAM]),
+                (self.user, 'GetClientRect', w.BOOL, [w.HWND, ctypes.POINTER(w.RECT)]),
+                (self.user, 'GetWindowLongW', w.LONG, [w.HWND, ctypes.c_int]),
+                (self.user, 'GetFocus', w.HWND, []),
+                (self.user, 'IsWindowEnabled', w.BOOL, [w.HWND]),
+                (self.user, 'GetSysColor', w.DWORD, [ctypes.c_int]),
+                (self.user, 'FillRect', ctypes.c_int, [w.HDC, ctypes.POINTER(w.RECT), w.HBRUSH]),
+                (self.user, 'DrawTextW', ctypes.c_int,
+                 [w.HDC, w.LPCWSTR, ctypes.c_int, ctypes.POINTER(w.RECT), w.UINT]),
+                (self.user, 'DrawFrameControl', w.BOOL, [w.HDC, ctypes.POINTER(w.RECT), w.UINT, w.UINT]),
+                (self.user, 'DrawFocusRect', w.BOOL, [w.HDC, ctypes.POINTER(w.RECT)]),
+                (self.gdi, 'SaveDC', ctypes.c_int, [w.HDC]),
+                (self.gdi, 'RestoreDC', w.BOOL, [w.HDC, ctypes.c_int]),
+                (self.gdi, 'IntersectClipRect', ctypes.c_int,
+                 [w.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]),
+                (self.gdi, 'SelectObject', w.HANDLE, [w.HDC, w.HANDLE]),
+                (self.gdi, 'GetStockObject', w.HANDLE, [ctypes.c_int]),
+                (self.gdi, 'SetDCBrushColor', w.DWORD, [w.HDC, w.DWORD]),
+                (self.gdi, 'SetTextColor', w.DWORD, [w.HDC, w.DWORD]),
+                (self.gdi, 'SetBkMode', ctypes.c_int, [w.HDC, ctypes.c_int]),
+                (self.gdi, 'GetDeviceCaps', ctypes.c_int, [w.HDC, ctypes.c_int]),
+                (self.gdi, 'CreatePen', w.HANDLE, [ctypes.c_int, ctypes.c_int, w.DWORD]),
+                (self.gdi, 'MoveToEx', w.BOOL, [w.HDC, ctypes.c_int, ctypes.c_int, ctypes.POINTER(w.POINT)]),
+                (self.gdi, 'LineTo', w.BOOL, [w.HDC, ctypes.c_int, ctypes.c_int]),
+                (self.gdi, 'Rectangle', w.BOOL,
+                 [w.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]),
+                (self.gdi, 'DeleteObject', w.BOOL, [w.HANDLE]),
+                (self.common, 'ImageList_GetIconSize', w.BOOL,
+                 [w.HANDLE, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)])):
+            function = getattr(library, name)
+            function.restype, function.argtypes = result, arguments
+
+    def rect(self, window, item, label=False):
+        rectangle = self.w.RECT()
+        if self.tree:
+            self.ctypes.c_void_p.from_buffer(rectangle).value = item
+            ok = self.user.SendMessageW(window, 0x1104, int(label), self.ctypes.addressof(rectangle))
+        else:
+            rectangle.left = 2 if label else 0
+            ok = self.user.SendMessageW(window, 0x100E, item, self.ctypes.addressof(rectangle))
+        return rectangle if ok else None
+
+    def fill(self, dc, rectangle, color):
+        self.gdi.SetDCBrushColor(dc, color)
+        self.user.FillRect(dc, self.ctypes.byref(rectangle), self.gdi.GetStockObject(18))  # DC_BRUSH
+
+    def branches(self, window, item, state, children, dc, row, label, slot, background):
+        user, gdi, w = self.user, self.gdi, self.w
+        style = user.GetWindowLongW(window, -16)
+        indent = max(1, user.SendMessageW(window, 0x1106, 0, 0))
+        center = row.top + (row.bottom - row.top) // 2
+        x, right = label.left - slot - indent // 2, label.left - slot
+        parent = user.SendMessageW(window, 0x110A, 3, item)
+        root_lines = bool(style & 4)
+        pen = gdi.CreatePen(2, 1, user.GetSysColor(16))  # PS_DOT / COLOR_3DSHADOW
+        old = gdi.SelectObject(dc, pen)
+
+        def line(x1, y1, x2, y2):
+            gdi.MoveToEx(dc, x1, y1, None)
+            gdi.LineTo(dc, x2, y2)
+
+        try:
+            if style & 2:  # TVS_HASLINES
+                if parent or root_lines:
+                    top = center if not parent and not user.SendMessageW(window, 0x110A, 2, item) else row.top
+                    bottom = row.bottom if user.SendMessageW(window, 0x110A, 1, item) else center
+                    line(x, top, x, bottom)
+                    line(x, center, right, center)
+                ancestor, ancestor_x = parent, x - indent
+                while ancestor:
+                    ancestor_parent = user.SendMessageW(window, 0x110A, 3, ancestor)
+                    if user.SendMessageW(window, 0x110A, 1, ancestor) and (root_lines or ancestor_parent):
+                        line(ancestor_x, row.top, ancestor_x, row.bottom)
+                    ancestor, ancestor_x = ancestor_parent, ancestor_x - indent
+        finally:
+            gdi.SelectObject(dc, old)
+            gdi.DeleteObject(pen)
+        if style & 1 and children and (parent or root_lines):
+            size = max(7, round(9 * gdi.GetDeviceCaps(dc, 88) / 96)) | 1
+            size = min(size, max(7, indent - 4) | 1)
+            half = size // 2
+            box = w.RECT(x - half, center - half, x + half + 1, center + half + 1)
+            self.fill(dc, box, background)
+            pen = gdi.CreatePen(0, 1, user.GetSysColor(16))
+            old = gdi.SelectObject(dc, pen)
+            brush = gdi.SelectObject(dc, gdi.GetStockObject(5))  # NULL_BRUSH
+            try:
+                gdi.Rectangle(dc, box.left, box.top, box.right, box.bottom)
+                line(x - half + 2, center, x + half - 1, center)
+                if not state & 0x20:  # TVIS_EXPANDED
+                    line(x, center - half + 2, x, center + half - 1)
+            finally:
+                gdi.SelectObject(dc, brush)
+                gdi.SelectObject(dc, old)
+                gdi.DeleteObject(pen)
+
+    def paint(self, notification):
+        c, w, user, gdi = self.ctypes, self.w, self.user, self.gdi
+        draw = self.Draw.from_address(notification)
+        if draw.dwDrawStage == 1:  # CDDS_PREPAINT
+            return 0x20  # CDRF_NOTIFYITEMDRAW
+        if draw.dwDrawStage != 0x10001:  # CDDS_ITEMPREPAINT
+            return 0
+        window, item, dc = draw.hdr.hwndFrom, draw.dwItemSpec, draw.hdc
+        info = self.item_info(item)
+        if info is None:
+            return 0
+        text, disabled = info
+        row, label = self.rect(window, item), self.rect(window, item, True)
+        client = w.RECT()
+        if row is None or label is None or row.bottom <= row.top or not user.GetClientRect(window, c.byref(client)):
+            return 0
+        if self.tree:
+            data = self.Item(mask=0x48, hItem=item, stateMask=0xFFFF)
+            if not user.SendMessageW(window, 0x113E, 0, c.addressof(data)):
+                return 0
+            state, children = data.state, data.cChildren
+        else:
+            state = user.SendMessageW(window, 0x102C, item, 0xF003)
+            children = 0
+        images = user.SendMessageW(window, 0x1108 if self.tree else 0x1002, 2, 0)
+        image_width, image_height = c.c_int(), c.c_int()
+        slot = image_width.value if images and self.common.ImageList_GetIconSize(
+            images, c.byref(image_width), c.byref(image_height)) else 16
+        slot = max(1, slot)
+        saved = gdi.SaveDC(dc)
+        if not saved:
+            return 0
+        try:
+            gdi.IntersectClipRect(dc, client.left, max(client.top, row.top), client.right, min(client.bottom, row.bottom))
+            font = user.SendMessageW(window, 0x31, 0, 0)
+            if font:
+                gdi.SelectObject(dc, font)
+            background = user.SendMessageW(window, 0x111F if self.tree else 0x1000, 0, 0) & 0xFFFFFFFF
+            foreground = user.SendMessageW(window, 0x1120 if self.tree else 0x1023, 0, 0) & 0xFFFFFFFF
+            if background == 0xFFFFFFFF:
+                background = user.GetSysColor(5)
+            if foreground == 0xFFFFFFFF:
+                foreground = user.GetSysColor(8)
+            full = w.RECT(client.left, row.top, client.right, row.bottom)
+            self.fill(dc, full, background)
+            focused = user.GetFocus() == window
+            style = user.GetWindowLongW(window, -16)
+            selected = bool(state & 2) and (focused or bool(style & (0x20 if self.tree else 8)))
+            label = w.RECT(label.left, row.top, label.right, row.bottom)
+            selected_box = label if self.tree else w.RECT(max(client.left, row.left), row.top, min(client.right, row.right), row.bottom)
+            if selected:
+                self.fill(dc, selected_box, user.GetSysColor(13 if focused else 15))
+                foreground = user.GetSysColor(14 if focused else 8)
+            disabled = disabled or not user.IsWindowEnabled(window)
+            if disabled:
+                foreground = user.GetSysColor(17)
+            if self.tree:
+                self.branches(window, item, state, children, dc, row, label, slot, background)
+            center = row.top + (row.bottom - row.top) // 2
+            size = max(9, min(slot - 2, row.bottom - row.top - 2, round(13 * gdi.GetDeviceCaps(dc, 88) / 96)))
+            x = label.left - slot // 2 - size // 2
+            box = w.RECT(x, center - size // 2, x + size, center - size // 2 + size)
+            user.DrawFrameControl(dc, c.byref(box), 4,
+                                  (0x400 if state & 0xF000 == 0x2000 else 0) | (0x100 if disabled else 0))
+            gdi.SetTextColor(dc, foreground)
+            gdi.SetBkMode(dc, 1)
+            user.DrawTextW(dc, text, -1, c.byref(label), 0x824)  # DT_VCENTER | SINGLELINE | NOPREFIX
+            if selected and focused and not user.SendMessageW(window, 0x129, 0, 0) & 1:
+                user.DrawFocusRect(dc, c.byref(selected_box))
+            return 4  # CDRF_SKIPDEFAULT: glyphs and label must not be painted twice.
+        finally:
+            gdi.RestoreDC(dc, saved)
+
+
 def setup_folders_dialog_template():
     def text(value):
         return (value + '\0').encode('utf-16-le')
@@ -1672,15 +1873,6 @@ def show_setup_folders(rows):
         _fields_ = [('hdr', NMHDR), ('uChanged', w.UINT), ('hItem', w.HANDLE),
                     ('uStateNew', w.UINT), ('uStateOld', w.UINT), ('lParam', w.LPARAM)]
 
-    class NMCUSTOMDRAW(ctypes.Structure):
-        _fields_ = [('hdr', NMHDR), ('dwDrawStage', w.DWORD), ('hdc', w.HDC),
-                    ('rc', w.RECT), ('dwItemSpec', ctypes.c_size_t),
-                    ('uItemState', w.UINT), ('lItemlParam', w.LPARAM)]
-
-    class NMTVCUSTOMDRAW(ctypes.Structure):
-        _fields_ = [('nmcd', NMCUSTOMDRAW), ('clrText', w.DWORD),
-                    ('clrTextBk', w.DWORD), ('iLevel', ctypes.c_int)]
-
     user = ctypes.WinDLL('user32', use_last_error=True)
     common = ctypes.WinDLL('comctl32', use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
@@ -1715,6 +1907,13 @@ def show_setup_folders(rows):
     model = SetupFolderChoices(rows)
     state = {'window': None, 'tree': None, 'updating': False, 'error': None,
              'handles': {}, 'keys': {}, 'images': None}
+    labels = {row['key']: row['name'] + (' — нет операций' if not row['operation_count'] else '') for row in rows}
+
+    def item_info(handle):
+        key = state['keys'].get(handle)
+        return (labels[key], model.disabled(key)) if key is not None else None
+
+    choice_rows = NativeChoiceRows(True, item_info)
 
     def sync():
         state['updating'] = True
@@ -1793,7 +1992,7 @@ def show_setup_folders(rows):
                 state['updating'] = True
                 user.SendMessageW(state['tree'], 0x2005, 1, 0)  # Unicode notifications.
                 for row in rows:
-                    label = row['name'] + (' — нет операций' if not row['operation_count'] else '')
+                    label = labels[row['key']]
                     buffer = ctypes.create_unicode_buffer(label)
                     insert = TVINSERTSTRUCTW()
                     insert.hParent = state['handles'].get(row['parent'], ctypes.c_void_p(-0x10000).value)
@@ -1819,15 +2018,8 @@ def show_setup_folders(rows):
                 header = ctypes.cast(lparam, ctypes.POINTER(NMHDR)).contents
                 if header.idFrom == 101:
                     code = ctypes.c_int(header.code).value
-                    if code == -12:  # NM_CUSTOMDRAW: gray text, even when focused.
-                        draw = ctypes.cast(lparam, ctypes.POINTER(NMTVCUSTOMDRAW)).contents
-                        if draw.nmcd.dwDrawStage == 1:
-                            return notify_result(window, 0x20)
-                        if draw.nmcd.dwDrawStage == 0x10001:
-                            key = state['keys'].get(draw.nmcd.dwItemSpec)
-                            if key is not None and model.disabled(key):
-                                draw.clrText = user.GetSysColor(17)
-                            return notify_result(window, 0)
+                    if code == -12:  # NM_CUSTOMDRAW
+                        return notify_result(window, choice_rows.paint(lparam))
                     if not state['updating'] and code in (-416, -417, -418, -419):
                         notice = ctypes.cast(lparam, ctypes.POINTER(NMTVITEMCHANGE)).contents
                         key = state['keys'].get(notice.hItem)
@@ -2150,6 +2342,7 @@ def show_all_setup_components(rows, reports, preview=None):
         'SetWindowTextW': ([w.HWND, w.LPCWSTR], w.BOOL),
         'SendMessageW': ([w.HWND, w.UINT, w.WPARAM, w.LPARAM], ctypes.c_ssize_t),
         'GetClientRect': ([w.HWND, ctypes.POINTER(w.RECT)], w.BOOL),
+        'SetWindowLongPtrW': ([w.HWND, ctypes.c_int, ctypes.c_ssize_t], ctypes.c_ssize_t),
         'DialogBoxIndirectParamW': ([w.HINSTANCE, ctypes.c_void_p, w.HWND, callback_type, w.LPARAM], ctypes.c_ssize_t),
     }
     for name, (arguments, result) in signatures.items():
@@ -2162,6 +2355,9 @@ def show_all_setup_components(rows, reports, preview=None):
         raise ctypes.WinError(ctypes.get_last_error())
     model = SetupComponentChoices(rows, len(reports))
     state = {'updating': False, 'error': None, 'list': None, 'setups': None, 'preview': None}
+    labels = [r['path'] + (' — ПОДАВЛЕН' if r['suppressed'] else '') for r in rows]
+    choice_rows = NativeChoiceRows(False, lambda index: (labels[index], rows[index]['suppressed'])
+                                   if 0 <= index < len(rows) else None)
 
     def fill_list(listing, heading, labels, checkboxes=False):
         if not listing:
@@ -2224,7 +2420,7 @@ def show_all_setup_components(rows, reports, preview=None):
                     ' — ' + r['selected_folder'] if r.get('selected_folder') else '')
                     for i, r in enumerate(reports, 1)])
                 fill_list(state['list'], 'Компоненты детали и оснастки',
-                          [r['path'] + (' — ПОДАВЛЕН' if r['suppressed'] else '') for r in rows], True)
+                          labels, True)
                 item = LVITEMW()
                 item.stateMask, item.state = 3, 3  # Focused and selected.
                 if not user.SendMessageW(state['setups'], 0x102B, 0, ctypes.addressof(item)):
@@ -2232,9 +2428,14 @@ def show_all_setup_components(rows, reports, preview=None):
                 sync(window)
                 user.SetFocus(state['setups'])
                 return 0
-            if message == 0x004E and lparam and not state['updating']:
+            if message == 0x004E and lparam:
                 header = ctypes.cast(lparam, ctypes.POINTER(NMHDR)).contents
                 code = ctypes.c_int(header.code).value
+                if header.idFrom == 101 and code == -12:  # Paint even while selection is being synchronized.
+                    user.SetWindowLongPtrW(window, 0, choice_rows.paint(lparam))
+                    return 1
+                if state['updating']:
+                    return 0
                 if header.idFrom == 101 and code == -3:  # NM_DBLCLK.
                     notice = ctypes.cast(lparam, ctypes.POINTER(NMITEMACTIVATE)).contents
                     hit = LVHITTESTINFO()
