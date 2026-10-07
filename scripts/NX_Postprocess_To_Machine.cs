@@ -1,5 +1,5 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.42
+// SCRIPT_VERSION: V1.43
 // Optional numbering, tool descriptions and operation Zmin.
 // Use native row bounds for tree labels; choose Description format when enabled.
 // Description behavior: NX_Tool_D_To_Description; Zmin behavior: NX_Operation_Zmin.
@@ -1488,12 +1488,13 @@ internal static class ToolDescriptionUpdate
 
 }
 
-// Keep native checkboxes/expanders; center only the text in each native row.
+// Draw every part of a row around the same center. Native TreeView still owns
+// checking, selection, keyboard navigation, expansion and hit testing.
 internal static class TreeTextLayout
 {
     internal static void Attach(object tree)
     {
-        RuntimeForms.SetEnum(tree, "DrawMode", "OwnerDrawText");
+        RuntimeForms.SetEnum(tree, "DrawMode", "OwnerDrawAll");
         EventInfo draw = tree.GetType().GetEvent("DrawNode");
         draw.AddEventHandler(tree, Delegate.CreateDelegate(draw.EventHandlerType,
             typeof(TreeTextLayout).GetMethod("Draw", BindingFlags.Static | BindingFlags.NonPublic)));
@@ -1524,11 +1525,45 @@ internal static class TreeTextLayout
 
     internal static void DrawInRow(object sender, EventArgs args, int rowTop, int rowBottom)
     {
-        object node = RuntimeForms.Get(args, "Node"), bounds = RuntimeForms.Get(args, "Bounds");
-        int width = (int)RuntimeForms.Get(bounds, "Width"), height = rowBottom - rowTop;
+        object node = RuntimeForms.Get(args, "Node"), label = RuntimeForms.Get(node, "Bounds");
+        int width = (int)RuntimeForms.Get(label, "Width"), height = rowBottom - rowTop;
         if (width <= 0 || height <= 0) return;
-        bounds = Activator.CreateInstance(bounds.GetType(), new object[] {
-            RuntimeForms.Get(bounds, "X"), rowTop, width, height });
+        int labelX = (int)RuntimeForms.Get(label, "X"), centerY = rowTop + height / 2;
+        Type rectangleType = label.GetType();
+        object bounds = Rectangle(rectangleType, labelX, rowTop, width, height);
+        object graphics = RuntimeForms.Get(args, "Graphics");
+        object treeBackground = RuntimeForms.Get(sender, "BackColor");
+        object client = RuntimeForms.Get(sender, "ClientRectangle");
+        Fill(graphics, treeBackground, Rectangle(rectangleType, 0, rowTop,
+            (int)RuntimeForms.Get(client, "Width"), height));
+
+        bool checkBoxes = (bool)RuntimeForms.Get(sender, "CheckBoxes");
+        int stateWidth = 0, stateHeight;
+        if (checkBoxes)
+        {
+            IntPtr images = SendMessageW((IntPtr)RuntimeForms.Get(sender, "Handle"),
+                0x1108U, new IntPtr(2), IntPtr.Zero); // TVM_GETIMAGELIST / TVSIL_STATE
+            if (images == IntPtr.Zero || !ImageList_GetIconSize(images, out stateWidth, out stateHeight))
+                stateWidth = 16;
+        }
+        int indent = (int)RuntimeForms.Get(sender, "Indent");
+        int branchX = labelX - stateWidth - indent / 2;
+        float dpi = Convert.ToSingle(RuntimeForms.Get(graphics, "DpiX"), CultureInfo.InvariantCulture);
+        int boxSize = Math.Max(9, Math.Min(stateWidth - 2, (int)Math.Round(13.0 * dpi / 96.0)));
+        DrawBranches(sender, node, graphics, rectangleType, treeBackground,
+            branchX, labelX - stateWidth, rowTop, rowBottom, centerY, indent, dpi);
+        if (checkBoxes)
+        {
+            // The horizontal state-image slot stays native, but its old vertical
+            // offset is deliberately not reused. This also keeps clicks native.
+            object box = Rectangle(rectangleType, labelX - stateWidth / 2 - boxSize / 2,
+                centerY - boxSize / 2, boxSize, boxSize);
+            string state = (bool)RuntimeForms.Get(node, "Checked") ? "Checked" : "Normal";
+            if (!(bool)RuntimeForms.Get(sender, "Enabled")) state += ", Inactive";
+            RuntimeForms.FormType("ControlPaint").InvokeMember("DrawCheckBox",
+                BindingFlags.Public | BindingFlags.Static | BindingFlags.InvokeMethod,
+                null, null, new object[] { graphics, box, Enum.Parse(RuntimeForms.FormType("ButtonState"), state) });
+        }
         object font = RuntimeForms.Get(node, "NodeFont") ?? RuntimeForms.Get(sender, "Font");
         object foreground = RuntimeForms.Get(node, "ForeColor"), background = RuntimeForms.Get(node, "BackColor");
         if ((bool)RuntimeForms.Get(foreground, "IsEmpty")) foreground = RuntimeForms.Get(sender, "ForeColor");
@@ -1539,7 +1574,6 @@ internal static class TreeTextLayout
             foreground = SystemColor(foreground.GetType(), focused ? 14 : 18); // HighlightText / ControlText
             background = SystemColor(background.GetType(), focused ? 13 : 15); // Highlight / Control
         }
-        object graphics = RuntimeForms.Get(args, "Graphics");
         object flags = Enum.Parse(RuntimeForms.FormType("TextFormatFlags"),
             "VerticalCenter, SingleLine, NoPrefix, NoPadding, PreserveGraphicsClipping");
         RuntimeForms.FormType("TextRenderer").InvokeMember("DrawText", BindingFlags.Public | BindingFlags.Static | BindingFlags.InvokeMethod,
@@ -1548,6 +1582,67 @@ internal static class TreeTextLayout
             RuntimeForms.FormType("ControlPaint").InvokeMember("DrawFocusRectangle", BindingFlags.Public | BindingFlags.Static | BindingFlags.InvokeMethod,
                 null, null, new object[] { graphics, bounds, foreground, background });
         RuntimeForms.Set(args, "DrawDefault", false);
+    }
+
+    private static object Rectangle(Type type, int x, int y, int width, int height)
+    { return Activator.CreateInstance(type, new object[] { x, y, width, height }); }
+
+    private static void Fill(object graphics, object color, object rectangle)
+    {
+        object brush = Activator.CreateInstance(graphics.GetType().Assembly.GetType("System.Drawing.SolidBrush", true),
+            new object[] { color });
+        try { RuntimeForms.Call(graphics, "FillRectangle", brush, rectangle); }
+        finally { RuntimeForms.Dispose(brush); }
+    }
+
+    private static void Line(object graphics, object pen, int x1, int y1, int x2, int y2)
+    { RuntimeForms.Call(graphics, "DrawLine", pen, x1, y1, x2, y2); }
+
+    private static void DrawBranches(object tree, object node, object graphics, Type rectangleType,
+        object background, int x, int right, int top, int bottom, int center, int indent, float dpi)
+    {
+        bool rootLines = (bool)RuntimeForms.Get(tree, "ShowRootLines");
+        object parent = RuntimeForms.Get(node, "Parent");
+        object pen = Activator.CreateInstance(graphics.GetType().Assembly.GetType("System.Drawing.Pen", true),
+            new object[] { SystemColor(background.GetType(), 16) }); // ControlDark
+        try
+        {
+            if ((bool)RuntimeForms.Get(tree, "ShowLines"))
+            {
+                RuntimeForms.SetEnum(pen, "DashStyle", "Dot");
+                if (parent != null || rootLines)
+                {
+                    int start = parent == null && RuntimeForms.Get(node, "PrevNode") == null ? center : top;
+                    int end = RuntimeForms.Get(node, "NextNode") == null ? center : bottom;
+                    Line(graphics, pen, x, start, x, end);
+                    Line(graphics, pen, x, center, right, center);
+                }
+                int ancestorX = x - indent;
+                for (object ancestor = parent; ancestor != null; ancestor = RuntimeForms.Get(ancestor, "Parent"))
+                {
+                    if (RuntimeForms.Get(ancestor, "NextNode") != null &&
+                        (rootLines || RuntimeForms.Get(ancestor, "Parent") != null))
+                        Line(graphics, pen, ancestorX, top, ancestorX, bottom);
+                    ancestorX -= indent;
+                }
+            }
+            if ((bool)RuntimeForms.Get(tree, "ShowPlusMinus") && (parent != null || rootLines) &&
+                (int)RuntimeForms.Get(RuntimeForms.Get(node, "Nodes"), "Count") > 0)
+            {
+                int size = Math.Max(7, (int)Math.Round(9.0 * dpi / 96.0)) | 1;
+                size = Math.Min(size, (Math.Max(7, indent - 4) | 1));
+                int half = size / 2;
+                object box = Rectangle(rectangleType, x - half, center - half, size - 1, size - 1);
+                Fill(graphics, background, box);
+                RuntimeForms.SetEnum(pen, "DashStyle", "Solid");
+                RuntimeForms.Call(graphics, "DrawRectangle", pen, box);
+                RuntimeForms.Set(pen, "Color", SystemColor(background.GetType(), 18)); // ControlText
+                Line(graphics, pen, x - half + 2, center, x + half - 2, center);
+                if (!(bool)RuntimeForms.Get(node, "IsExpanded"))
+                    Line(graphics, pen, x, center - half + 2, x, center + half - 2);
+            }
+        }
+        finally { RuntimeForms.Dispose(pen); }
     }
 
     // TVM_GETITEMRECT takes an HTREEITEM in the first pointer-sized bytes of RECT.
@@ -1563,6 +1658,11 @@ internal static class TreeTextLayout
     }
     [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     private static extern IntPtr SendMessageW(IntPtr window, uint message, IntPtr wParam, ref NativeTreeRect rectangle);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern IntPtr SendMessageW(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+    [DllImport("comctl32.dll", ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ImageList_GetIconSize(IntPtr imageList, out int width, out int height);
     [DllImport("user32.dll", ExactSpelling = true)]
     private static extern uint GetSysColor(int index);
 }
@@ -4629,7 +4729,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.42";
+    internal const string SCRIPT_VERSION = "V1.43";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
 
     internal static string WindowTitle(string detail)
