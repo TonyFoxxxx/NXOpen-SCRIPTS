@@ -1,5 +1,7 @@
 # Открытие папки карт наладки
 
+**Русский** | [English](en/open-setup-cards-folder.md)
+
 Скрипт: [NX_Open_Setup_Cards_Folder.py](../scripts/NX_Open_Setup_Cards_Folder.py). [Все скрипты](../README.md#скрипты).
 
 Открывает в Проводнике существующую папку карт наладки текущей рабочей детали:

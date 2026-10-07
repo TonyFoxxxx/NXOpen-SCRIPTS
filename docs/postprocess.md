@@ -1,5 +1,7 @@
 # Постпроцессирование и вывод на станок
 
+**Русский** | [English](en/postprocess.md)
+
 Скрипт: [NX_Postprocess_To_Machine.cs](../scripts/NX_Postprocess_To_Machine.cs). [Все скрипты](../README.md#скрипты).
 
 Выводит выбранные CAM-программы через назначенные постпроцессоры, сохраняет отдельные УП и при необходимости контейнер FANUCPRG.BIN.

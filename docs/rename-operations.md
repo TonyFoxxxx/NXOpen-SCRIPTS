@@ -1,5 +1,7 @@
 # Переименование операций
 
+**Русский** | [English](en/rename-operations.md)
+
 Скрипт: [NX_Rename_Operations_In_Selected_Folder.cs](../scripts/NX_Rename_Operations_In_Selected_Folder.cs). [Все скрипты](../README.md#скрипты).
 
 Назначает операциям общее базовое имя с последовательными суффиксами: например, `ROUGH_1`, `ROUGH_2`, `ROUGH_3`.

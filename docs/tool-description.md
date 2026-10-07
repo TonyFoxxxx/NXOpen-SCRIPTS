@@ -1,5 +1,7 @@
 # Описания инструментов
 
+**Русский** | [English](en/tool-description.md)
+
 Скрипт: [NX_Tool_D_To_Description.cs](../scripts/NX_Tool_D_To_Description.cs). [Все скрипты](../README.md#скрипты).
 
 Заполняет General Description и Cutter Description инструмента по фактическим параметрам CAM.

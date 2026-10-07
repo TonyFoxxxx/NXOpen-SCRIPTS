@@ -1,5 +1,7 @@
 # Нумерация папок программ
 
+**Русский** | [English](en/number-program-folders.md)
+
 Скрипт: [NX_Number_Program_Folders.cs](../scripts/NX_Number_Program_Folders.cs). [Все скрипты](../README.md#скрипты).
 
 Присваивает программным папкам номера из заданного диапазона и ведёт историю выдачи в XLSX.

@@ -1,5 +1,7 @@
 # Сторонние ресурсы
 
+**Русский** | [English](THIRD_PARTY_NOTICES.en.md)
+
 ## Twemoji
 
 В редакциях `scripts/NX_Postprocess_To_Machine.cs` до V1.39 использовался встроенный PNG Twemoji «folded hands» (`1f64f.png`). В V1.39 значок удалён; сведения ниже сохранены для предыдущих редакций в истории репозитория.

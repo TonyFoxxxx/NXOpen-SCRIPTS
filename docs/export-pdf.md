@@ -1,5 +1,7 @@
 # Экспорт текущего листа в PDF
 
+**Русский** | [English](en/export-pdf.md)
+
 Скрипт: [NX_Export_Drawing_To_PDF.cs](../scripts/NX_Export_Drawing_To_PDF.cs). [Все скрипты](../README.md#скрипты).
 
 Сохраняет текущий чертёжный лист отображаемой детали в PDF с его физическим размером и масштабом 1:1.

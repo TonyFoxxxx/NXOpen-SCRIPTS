@@ -1,5 +1,7 @@
 # Экспорт текущего вида в DXF
 
+**Русский** | [English](en/export-dxf.md)
+
 Скрипт: [NX_Export_Current_View_To_DXF.cs](../scripts/NX_Export_Current_View_To_DXF.cs). [Все скрипты](../README.md#скрипты).
 
 Создаёт ортогональную 2D-проекцию модели в текущей ориентации вида и масштабе 1:1.

@@ -1,5 +1,7 @@
 # Открытие папки проекта
 
+**Русский** | [English](en/open-project-folder.md)
+
 Скрипт: [NX_Open_Project_Folder.cs](../scripts/NX_Open_Project_Folder.cs). [Все скрипты](../README.md#скрипты).
 
 Открывает в Проводнике папку PRT текущей рабочей детали. Если рабочей детали нет, использует отображаемую.
