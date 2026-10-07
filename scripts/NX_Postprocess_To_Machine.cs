@@ -1,6 +1,7 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.41
-// Optional numbering, tool descriptions and operation Zmin; centered tree labels.
+// SCRIPT_VERSION: V1.42
+// Optional numbering, tool descriptions and operation Zmin.
+// Use native row bounds for tree labels; choose Description format when enabled.
 // Description behavior: NX_Tool_D_To_Description; Zmin behavior: NX_Operation_Zmin.
 // Preserve NC processing, modal validation, output paths and other INI settings.
 // Siemens NX / Designcenter, Windows. C# journal with an external INI.
@@ -95,13 +96,13 @@ public class NX_Postprocess_To_Machine
             owner = RuntimeForms.CreateOwner();
             stage = "\u0412\u044B\u0431\u043E\u0440 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C \u0434\u043B\u044F \u0432\u044B\u0432\u043E\u0434\u0430";
             List<ProgramJob> jobs;
-            bool numberOperations, updateDescriptions, addZmin;
+            bool numberOperations, updateDescriptions, includeToolNumbers, addZmin;
             using (ProgramFolderPicker dialog = new ProgramFolderPicker(setup.GetRoot(CamSetup.View.ProgramOrder), selectedOperations))
             {
                 if (dialog.ShowDialog(owner) != "OK") return;
                 jobs = dialog.Jobs;
                 numberOperations = dialog.NumberOperations;
-                updateDescriptions = dialog.UpdateDescriptions; addZmin = dialog.AddZmin;
+                updateDescriptions = dialog.UpdateDescriptions; includeToolNumbers = dialog.IncludeToolNumbers; addZmin = dialog.AddZmin;
             }
             // Project-wide: include unused tools and tools outside the selected jobs.
             // This gate runs after program selection, before configuration, posting and file writes.
@@ -154,7 +155,7 @@ public class NX_Postprocess_To_Machine
             }
             stage = numberOperations ? "\u041D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u044F \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439, \u043F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435 \u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u0435 \u0423\u041F/BIN" : "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435 \u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u0435 \u0423\u041F/BIN";
             stage = "\u041F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043A\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439, \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432 \u0438 \u0432\u044B\u0432\u043E\u0434 \u0423\u041F/BIN";
-            string message = PostPreparation.Run(session, work, jobs, numberOperations, updateDescriptions, addZmin, zminSelection,
+            string message = PostPreparation.Run(session, work, jobs, numberOperations, updateDescriptions, includeToolNumbers, addZmin, zminSelection,
                 delegate { return PostprocessPrograms(setup, jobs, programPosts, choice, projectFile, projectDirectory, owner, copies, ref published); },
                 delegate { return published; });
             stage = "\u041F\u043E\u043A\u0430\u0437 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u0430 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u044F";
@@ -806,13 +807,11 @@ internal sealed class OperationNumbering
 internal static class PostPreparation
 {
     internal static string Run(Session session, Part part, List<ProgramJob> jobs,
-        bool number, bool description, bool zmin, ZminSelectionSnapshot selection,
+        bool number, bool description, bool includeNumbers, bool zmin, ZminSelectionSnapshot selection,
         Func<string> output, Func<bool> published)
     {
         if (!description && !zmin) return OperationNumbering.Run(session, jobs, number, output, published);
         if (zmin) selection.Validate(session, part);
-        bool includeNumbers = false;
-        if (description && !ToolDescriptionUpdate.ChooseDescriptionMode(out includeNumbers)) return null;
         Session.UndoMarkId mark = session.SetUndoMark(Session.MarkVisibility.Visible,
             ScriptInfo.WindowTitle("\u041F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043A\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u0438 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432"));
         Exception processingError = null;
@@ -1364,40 +1363,6 @@ internal static class ToolDescriptionUpdate
         return errorMessage;
     }
 
-    internal static bool ChooseDescriptionMode(out bool includeToolNumbers)
-    {
-        uf = UFSession.GetUFSession();
-        // Custom responses avoid treating standard NX cancellation codes as a choice.
-        const int fullDescriptionResponse = 11;
-        const int diameterOnlyResponse = 12;
-        const int cancelResponse = 13;
-
-        includeToolNumbers = false;
-        string[] messages = { "\u041A\u0430\u043A\u043E\u0439 \u0432\u0430\u0440\u0438\u0430\u043D\u0442 \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u044F \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u044C?" };
-        UFUi.MessageButtons buttons = new UFUi.MessageButtons();
-        buttons.button1 = true;
-        buttons.label1 = "1) " + PREFIX + "*_T*_H*_D*";
-        buttons.response1 = fullDescriptionResponse;
-        buttons.button2 = true;
-        buttons.label2 = "2) " + PREFIX + "*";
-        buttons.response2 = diameterOnlyResponse;
-        buttons.button3 = true;
-        buttons.label3 = "\u041E\u0442\u043C\u0435\u043D\u0430";
-        buttons.response3 = cancelResponse;
-
-        int response;
-        uf.Ui.MessageDialog(WINDOW_TITLE, UiMessageDialogType.UiMessageQuestion,
-            messages, messages.Length, false, ref buttons, out response);
-
-        if (response == fullDescriptionResponse)
-        {
-            includeToolNumbers = true;
-            return true;
-        }
-        // Cancellation or any other response exits before undo marks or edits.
-        return response == diameterOnlyResponse;
-    }
-
     private static bool Apply(NXOpen.CAM.Tool tool, bool includeToolNumbers)
     {
         NXOpen.CAM.Tool.Types type;
@@ -1543,12 +1508,27 @@ internal static class TreeTextLayout
 
     private static void Draw(object sender, EventArgs args)
     {
+        object node = RuntimeForms.Get(args, "Node");
+        NativeTreeRect row = new NativeTreeRect();
+        row.Item = (IntPtr)RuntimeForms.Get(node, "Handle");
+        // FALSE requests the full native row, not the vertically inset label.
+        // ItemHeight may also differ from the actual row after font/DPI changes.
+        if (SendMessageW((IntPtr)RuntimeForms.Get(sender, "Handle"), 0x1104U,
+            IntPtr.Zero, ref row) == IntPtr.Zero)
+        {
+            RuntimeForms.Set(args, "DrawDefault", true);
+            return;
+        }
+        DrawInRow(sender, args, row.Top, row.Bottom);
+    }
+
+    internal static void DrawInRow(object sender, EventArgs args, int rowTop, int rowBottom)
+    {
         object node = RuntimeForms.Get(args, "Node"), bounds = RuntimeForms.Get(args, "Bounds");
-        int width = (int)RuntimeForms.Get(bounds, "Width"), height = (int)RuntimeForms.Get(sender, "ItemHeight");
+        int width = (int)RuntimeForms.Get(bounds, "Width"), height = rowBottom - rowTop;
         if (width <= 0 || height <= 0) return;
-        // X/Y come from the native node rectangle, including scroll and DPI scaling.
         bounds = Activator.CreateInstance(bounds.GetType(), new object[] {
-            RuntimeForms.Get(bounds, "X"), RuntimeForms.Get(bounds, "Y"), width, height });
+            RuntimeForms.Get(bounds, "X"), rowTop, width, height });
         object font = RuntimeForms.Get(node, "NodeFont") ?? RuntimeForms.Get(sender, "Font");
         object foreground = RuntimeForms.Get(node, "ForeColor"), background = RuntimeForms.Get(node, "BackColor");
         if ((bool)RuntimeForms.Get(foreground, "IsEmpty")) foreground = RuntimeForms.Get(sender, "ForeColor");
@@ -1570,6 +1550,19 @@ internal static class TreeTextLayout
         RuntimeForms.Set(args, "DrawDefault", false);
     }
 
+    // TVM_GETITEMRECT takes an HTREEITEM in the first pointer-sized bytes of RECT.
+    // A blittable union preserves the Win32 layout on both 32-bit and 64-bit hosts.
+    [StructLayout(LayoutKind.Explicit, Size = 16)]
+    private struct NativeTreeRect
+    {
+        [FieldOffset(0)] internal IntPtr Item;
+        [FieldOffset(0)] internal int Left;
+        [FieldOffset(4)] internal int Top;
+        [FieldOffset(8)] internal int Right;
+        [FieldOffset(12)] internal int Bottom;
+    }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern IntPtr SendMessageW(IntPtr window, uint message, IntPtr wParam, ref NativeTreeRect rectangle);
     [DllImport("user32.dll", ExactSpelling = true)]
     private static extern uint GetSysColor(int index);
 }
@@ -2112,6 +2105,27 @@ internal static class ProgramFolderCatalog
     }
 }
 
+internal sealed class DescriptionModePicker : RouterDialog
+{
+    internal bool IncludeToolNumbers { get; private set; }
+
+    internal DescriptionModePicker() : base("\u041F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 \u0432 description", 54)
+    {
+        RuntimeForms.SetValue(Window, "MinimumSize", 620, 300);
+        RuntimeForms.SetValue(Window, "ClientSize", 620, 302);
+        RuntimeForms.SetEnum(Window, "FormBorderStyle", "FixedDialog");
+        RuntimeForms.Set(Window, "MaximizeBox", false);
+        RuntimeForms.SetEnum(Grid, "FlowDirection", "TopDown");
+        RuntimeForms.Set(Grid, "WrapContents", false);
+        RuntimeForms.Add(Header, Label("\u041A\u0430\u043A\u043E\u0439 \u0432\u0430\u0440\u0438\u0430\u043D\u0442 \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u044F \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u044C?\n\u0415\u0441\u043B\u0438 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440 D \u043E\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442, \u043E\u043D \u043D\u0435 \u0434\u043E\u0431\u0430\u0432\u043B\u044F\u0435\u0442\u0441\u044F.", 0, 0, 560, 46));
+        object diameter = Button("\u0422\u043E\u043B\u044C\u043A\u043E \u0434\u0438\u0430\u043C\u0435\u0442\u0440\n\u23006", 548, 58);
+        object full = Button("\u0414\u0438\u0430\u043C\u0435\u0442\u0440 \u0438 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B T, H, D\n\u23006_T2_H3_D4", 548, 58);
+        RuntimeForms.On(diameter, "Click", delegate { IncludeToolNumbers = false; Finish("OK"); });
+        RuntimeForms.On(full, "Click", delegate { IncludeToolNumbers = true; Finish("OK"); });
+        RuntimeForms.Add(Grid, diameter); RuntimeForms.Add(Grid, full);
+    }
+}
+
 internal sealed class ProgramFolderPicker : RouterDialog
 {
     private readonly List<ProgramFolderEntry> entries;
@@ -2127,6 +2141,7 @@ internal sealed class ProgramFolderPicker : RouterDialog
     internal List<ProgramJob> Jobs;
     internal bool NumberOperations { get { return (bool)RuntimeForms.Get(numberOperations, "Checked"); } }
     internal bool UpdateDescriptions { get { return (bool)RuntimeForms.Get(updateDescriptions, "Checked"); } }
+    internal bool IncludeToolNumbers { get; private set; }
     internal bool AddZmin { get { return (bool)RuntimeForms.Get(addZmin, "Checked"); } }
 
     internal ProgramFolderPicker(NCGroup programRoot, OperationSelectionSnapshot selectedOperations) : base("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u044B \u0434\u043B\u044F \u0432\u044B\u0432\u043E\u0434\u0430", 258)
@@ -2149,8 +2164,9 @@ internal sealed class ProgramFolderPicker : RouterDialog
         RuntimeForms.SetEnum(numberOperations, "CheckAlign", "MiddleLeft");
         RuntimeForms.SetEnum(numberOperations, "TextAlign", "MiddleLeft");
         RuntimeForms.Add(Header, numberOperations);
-        AddPreparationOption(updateDescriptions, "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C Description \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432", 188,
-            "\u0412\u0441\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043C\u044B\u0435 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u044B \u0442\u0435\u043A\u0443\u0449\u0435\u0439 \u0434\u0435\u0442\u0430\u043B\u0438. \u041F\u0435\u0440\u0435\u0434 \u0432\u044B\u0432\u043E\u0434\u043E\u043C \u0432\u044B\u0431\u0440\u0430\u0442\u044C \u043F\u043E\u043B\u043D\u044B\u0439 \u0444\u043E\u0440\u043C\u0430\u0442 \u2300*_T*_H*_D* \u043B\u0438\u0431\u043E \u0442\u043E\u043B\u044C\u043A\u043E \u2300*.");
+        AddPreparationOption(updateDescriptions, "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 \u0432 \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u0435 (description)", 188,
+            "\u0412\u0441\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043C\u044B\u0435 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u044B \u0442\u0435\u043A\u0443\u0449\u0435\u0439 \u0434\u0435\u0442\u0430\u043B\u0438. \u041F\u0440\u0438 \u0432\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435: \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u0438\u0430\u043C\u0435\u0442\u0440 \u043B\u0438\u0431\u043E \u0434\u0438\u0430\u043C\u0435\u0442\u0440 \u0438 \u043F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u044B T, H, D.");
+        RuntimeForms.On(updateDescriptions, "CheckedChanged", delegate { ChooseDescriptionFormat(); });
         AddPreparationOption(addZmin, "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C Zmin \u043A \u0438\u043C\u0435\u043D\u0430\u043C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439", 220,
             "\u041A\u0430\u043A \u0432 \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u043E\u043C \u0441\u043A\u0440\u0438\u043F\u0442\u0435 Zmin: \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0435 \u0432 NX \u043F\u0435\u0440\u0435\u0434 \u0437\u0430\u043F\u0443\u0441\u043A\u043E\u043C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438; \u0435\u0441\u043B\u0438 \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u044F \u043D\u0435\u0442 \u2014 \u0432\u0441\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u043F\u0440\u043E\u0435\u043A\u0442\u0430. \u0421\u0442\u0430\u0440\u044B\u0439 \u043A\u043E\u043D\u0435\u0447\u043D\u044B\u0439 _Z\u0447\u0438\u0441\u043B\u043E \u0437\u0430\u043C\u0435\u043D\u044F\u0435\u0442\u0441\u044F.");
         // Replace the flat FlowLayoutPanel in the same docking position.
@@ -2213,6 +2229,30 @@ internal sealed class ProgramFolderPicker : RouterDialog
         RuntimeForms.Add(Footer, all); RuntimeForms.Add(Footer, clear);
         RuntimeForms.Add(Footer, expand); RuntimeForms.Add(Footer, collapse); RuntimeForms.Add(Footer, next);
         RefreshCount();
+    }
+    private void ChooseDescriptionFormat()
+    {
+        IncludeToolNumbers = false;
+        if (!UpdateDescriptions) return;
+        try
+        {
+            using (DescriptionModePicker dialog = new DescriptionModePicker())
+            {
+                if (dialog.ShowDialog(Window) == "OK")
+                {
+                    IncludeToolNumbers = dialog.IncludeToolNumbers;
+                    return;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            RuntimeForms.Set(updateDescriptions, "Checked", false);
+            ShowProblem(ex);
+            return;
+        }
+        // Cancel and window-close both turn the option off, leaving this picker open.
+        RuntimeForms.Set(updateDescriptions, "Checked", false);
     }
     private void AddPreparationOption(object option, string text, int top, string hint)
     {
@@ -4589,7 +4629,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.41";
+    internal const string SCRIPT_VERSION = "V1.42";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
 
     internal static string WindowTitle(string detail)
