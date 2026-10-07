@@ -48,4 +48,5 @@ class NativeTreeDrawingTests(unittest.TestCase):
                 with self.subTest(theme=theme):
                     result = subprocess.run([str(exe), theme], capture_output=True, text=True, timeout=60)
                     print(result.stdout, flush=True)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    diagnostic = "\n".join(line for line in result.stdout.splitlines() if "_PNG" not in line)
+                    self.assertEqual(result.returncode, 0, diagnostic + result.stderr)

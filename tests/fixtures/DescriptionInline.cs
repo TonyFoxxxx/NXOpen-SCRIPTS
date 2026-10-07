@@ -41,6 +41,9 @@ internal static class DescriptionInlineChecks
         {
             // Explicit control scaling tests geometry; this is not a desktop DPI test.
             ui.Window.Scale(new SizeF(scale, scale));
+            // Match the production minimum size. Otherwise the small CI desktop
+            // clamps the scaled test form and consumes its entire tree area.
+            ui.Window.MinimumSize = new Size((int)(800 * scale), (int)(544 * scale));
             ui.Window.Show(); Application.DoEvents();
             int header = ui.Header.Height, top = ui.Zmin.Top, treeHeight = ui.Tree.Height;
             Assert(!ui.UpdateDescriptions && !ui.IncludeToolNumbers && !ui.Choices.Visible, "initially disabled and hidden");
@@ -53,7 +56,7 @@ internal static class DescriptionInlineChecks
                 Assert(ui.Choices.Visible && ui.UpdateDescriptions, "choices appear inline");
                 Assert(ui.Choices.Top >= ui.Toggle.Bottom && ui.Zmin.Top > ui.Choices.Bottom, "inline rows must not overlap");
                 Assert(ui.Header.Height > ui.Zmin.Bottom && ui.Tree.Top >= ui.Header.Bottom, "header and tree must not overlap");
-                Assert(ui.Tree.Height > 0, "tree remains available");
+                Assert(ui.Tree.Height > 0, "tree remains available at " + scale + "; client=" + ui.Window.ClientSize + "; header=" + ui.Header.Height);
                 ui.Full.PerformClick();
                 Assert(ui.Full.Checked && !ui.Diameter.Checked && ui.IncludeToolNumbers, "full format excludes diameter-only");
                 ui.Diameter.PerformClick();
