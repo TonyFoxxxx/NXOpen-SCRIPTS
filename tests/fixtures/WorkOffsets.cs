@@ -163,7 +163,8 @@ internal static class WorkOffsetChecks
             "\r\nWorkOffsetProfile=ISO_G53\r\nWorkOffsetG53Z=-5\r\n";
         RouterConfig config = RouterConfig.Parse(ini, iniPath, delegate(string key) { return ""; });
         Check(config.Posts[0].WorkOffsetProfile == "ISO_G53" && config.Posts[0].WorkOffsetG53Z == -5, "INI profile parsed");
-        Check(WorkOffsetRules.FromPost(config.Posts[0]).Describe().Contains(tcl), "post identity in diagnostics");
+        // .NET Framework expands Windows 8.3 TEMP paths when resolving the INI.
+        Check(WorkOffsetRules.FromPost(config.Posts[0]).Describe().Contains(Path.GetFullPath(tcl)), "post identity in diagnostics");
         foreach (string bad in new string[] { ini.Replace("ISO_G53", "Unknown"), ini.Replace("WorkOffsetG53Z=-5\r\n", ""), ini.Replace("=-5", "=-5,2"), ini.Replace("ISO_G53", "ISO_G28") })
         {
             bool failed = false; try { RouterConfig.Parse(bad, iniPath, delegate(string key) { return ""; }); } catch (FormatException) { failed = true; }
