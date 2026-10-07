@@ -146,9 +146,9 @@
       "id": "NX_Update_Scripts",
       "name": "Апдейтер скриптов",
       "file": "NX_Update_Scripts.py",
-      "version": "V1.16",
+      "version": "V1.17",
       "path": "scripts/NX_Update_Scripts.py",
-      "sha256": "79e0b1debe6f9db8915f1b76d092911c5fcbe00beb83d60a962f4e0aa1cf0c7b",
+      "sha256": "35b371893665ca7bd45eb29373773f34b9d4528816aa1ba9f1822b4066dc8d0a",
       "description": "Установка и обновление выбранных скриптов из GitHub или папки.",
       "config": {
         "path": "config/NX_Update_Scripts.example.ini",

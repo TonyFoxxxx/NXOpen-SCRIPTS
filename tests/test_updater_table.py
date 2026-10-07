@@ -25,6 +25,10 @@ class Point(ctypes.Structure):
     _fields_ = [('x', ctypes.c_int32), ('y', ctypes.c_int32)]
 
 
+class Rect(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_int32) for name in ('left', 'top', 'right', 'bottom')]
+
+
 def record(name, installed='V1.09', available='V1.10', selected=False, checked=True, eligible=True):
     return dict(path='C:\\NX_SCRIPTS\\' + name + '.py', titles=[name],
                 installed_label=installed, available_label=available,
@@ -111,12 +115,14 @@ class TableTests(unittest.TestCase):
         env = vars(u).copy()
         # Model the Windows LLP64 layout even when these tests run on Linux.
         env.update(W=SimpleNamespace(HWND=ctypes.c_void_p, UINT=ctypes.c_uint32,
+                                     DWORD=ctypes.c_uint32, HDC=ctypes.c_void_p, RECT=Rect,
                                      LPWSTR=ctypes.c_wchar_p, POINT=Point),
                    LPARAM=ctypes.c_ssize_t, WPARAM=ctypes.c_size_t,
                    state=state, controls={'list': 101, 'details': 102, 'status': 103},
                    message=Mock(), result_queue=queue.Queue(),
                    busy=lambda value: state.update(busy=value))
-        names = ('NMHDR', 'NMLISTVIEW', 'LVHITTESTINFO', 'LVITEM', 'LVCOLUMN',
+        names = ('NMHDR', 'NMCUSTOMDRAW', 'NMLVCUSTOMDRAW', 'NMLISTVIEW', 'LVHITTESTINFO', 'LVITEM', 'LVCOLUMN',
+                 'draw_update_cell', 'handle_list_draw',
                  'checked', 'paint_check', 'set_checked', 'highlighted_row', 'show_row_details',
                  'toggle_row', 'handle_list_key', 'handle_list_mouse', 'update_sort_headers',
                  'rebuild_list', 'sort_by_column', 'selection_status', 'render_results', 'window_proc')

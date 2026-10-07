@@ -24,7 +24,7 @@
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Переименование файлов деталей и сборок с обновлением ссылок компонентов. | [Все функции](docs/rename-assemblies.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Открытие папки текущего PRT в Проводнике. | [Все функции](docs/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Открытие папки карт наладки текущего проекта. | [Все функции](docs/open-setup-cards-folder.md) |
-| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.16 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
+| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.17 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 

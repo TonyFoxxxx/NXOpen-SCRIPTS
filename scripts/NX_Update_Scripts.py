@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # NX_Update_Scripts.py
-# SCRIPT_VERSION: V1.16
+# SCRIPT_VERSION: V1.17
 """
 Апдейтер NX / Designcenter для Windows: GitHub manifest или папка обновлений.
 
@@ -50,7 +50,7 @@ import urllib.request
 from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 
-SCRIPT_VERSION = "V1.16"
+SCRIPT_VERSION = "V1.17"
 SCRIPT_NAME = "Обновление скриптов NX"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode('utf-8')
@@ -69,6 +69,7 @@ MAX_CONFIG_SIZE = 256 * 1024
 SCRIPT_EXTENSIONS = {".py", ".cs", ".vb"}
 RESULT_COLUMNS = (("Скрипт", 145), ("Рабочий файл", 460), ("Установлено", 140),
                   ("Доступно", 115), ("Состояние", 285))
+UPDATE_CELL_COLOR = 0x86CD00  # Win32 COLORREF (BGR): RGB(0, 205, 134), #00CD86.
 MAX_SCRIPT_SIZE = 16 * 1024 * 1024
 MAX_BATCH_SIZE = 128 * 1024 * 1024
 VERSION_RE = re.compile(r"^(.*?)[ _.-]v(\d+(?:\.\d+)*)(?:\s*\(\d+\))?$", re.I)
@@ -103,6 +104,15 @@ def version_key(parts):
     while len(parts) > 1 and parts[-1] == 0:
         parts = parts[:-1]
     return parts
+
+
+def has_newer_version(row):
+    """Only a known newer release of an installed script gets a green cell."""
+    installed = row.get('identity', (None, None, None))[1]
+    available = row.get('available_version')
+    return (row.get('operation') == 'update' and installed is not None
+            and available is not None and version_key(available) > version_key(installed))
+
 
 def script_identity(path):
     stem, ext = ntpath.splitext(ntpath.basename(path))
@@ -1483,6 +1493,18 @@ def run_window():
     class NMHDR(ctypes.Structure):
         _fields_ = [("hwndFrom", W.HWND), ("idFrom", WPARAM), ("code", ctypes.c_int)]
 
+    class NMCUSTOMDRAW(ctypes.Structure):
+        _fields_ = [("hdr", NMHDR), ("dwDrawStage", W.DWORD), ("hdc", W.HDC),
+                    ("rc", W.RECT), ("dwItemSpec", WPARAM), ("uItemState", W.UINT),
+                    ("lItemlParam", LPARAM)]
+
+    class NMLVCUSTOMDRAW(ctypes.Structure):
+        _fields_ = [("nmcd", NMCUSTOMDRAW), ("clrText", W.DWORD), ("clrTextBk", W.DWORD),
+                    ("iSubItem", ctypes.c_int), ("dwItemType", W.DWORD), ("clrFace", W.DWORD),
+                    ("iIconEffect", ctypes.c_int), ("iIconPhase", ctypes.c_int),
+                    ("iPartId", ctypes.c_int), ("iStateId", ctypes.c_int),
+                    ("rcText", W.RECT), ("uAlign", W.UINT)]
+
     class NMLISTVIEW(ctypes.Structure):
         _fields_ = [("hdr", NMHDR), ("iItem", ctypes.c_int), ("iSubItem", ctypes.c_int),
                     ("uNewState", W.UINT), ("uOldState", W.UINT), ("uChanged", W.UINT), ("ptAction", W.POINT), ("lParam", LPARAM)]
@@ -1546,12 +1568,23 @@ def run_window():
               ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, W.UINT)
     signature(U, "RedrawWindow", W.BOOL, W.HWND, ctypes.POINTER(W.RECT), W.HANDLE, W.UINT)
     signature(U, "GetClientRect", W.BOOL, W.HWND, ctypes.POINTER(W.RECT))
+    signature(U, "FillRect", ctypes.c_int, W.HDC, ctypes.POINTER(W.RECT), W.HBRUSH)
+    signature(U, "DrawTextW", ctypes.c_int, W.HDC, W.LPCWSTR, ctypes.c_int,
+              ctypes.POINTER(W.RECT), W.UINT)
     signature(U, "GetWindowThreadProcessId", W.DWORD, W.HWND, ctypes.POINTER(W.DWORD))
     if hasattr(U, "GetDpiForWindow"):
         signature(U, "GetDpiForWindow", W.UINT, W.HWND)
     if hasattr(U, "GetDpiForSystem"):
         signature(U, "GetDpiForSystem", W.UINT)
     signature(G, "GetStockObject", W.HANDLE, ctypes.c_int)
+    signature(G, "SaveDC", ctypes.c_int, W.HDC)
+    signature(G, "RestoreDC", W.BOOL, W.HDC, ctypes.c_int)
+    signature(G, "IntersectClipRect", ctypes.c_int, W.HDC,
+              ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int)
+    signature(G, "SetDCBrushColor", W.DWORD, W.HDC, W.DWORD)
+    signature(G, "SetTextColor", W.DWORD, W.HDC, W.DWORD)
+    signature(G, "SetBkMode", ctypes.c_int, W.HDC, ctypes.c_int)
+    signature(G, "SelectObject", W.HANDLE, W.HDC, W.HANDLE)
     signature(C, "InitCommonControlsEx", W.BOOL, ctypes.POINTER(INITCOMMON))
     signature(S, "SHBrowseForFolderW", ctypes.c_void_p, ctypes.POINTER(BROWSEINFO))
     signature(S, "SHGetPathFromIDListEx", W.BOOL, ctypes.c_void_p, W.LPWSTR, W.DWORD, W.UINT)
@@ -1593,6 +1626,53 @@ def run_window():
 
     def checked(index):
         return bool(state['rows'][index].get('selected'))
+
+    def draw_update_cell(note, row):
+        # Paint only this subitem, including on a focused/selected native row.
+        # Native selection themes may otherwise override clrTextBk.
+        rect = W.RECT(0, 3, 0, 0)  # LVIR_BOUNDS, one-based subitem index.
+        if not U.SendMessageW(controls['list'], 0x1000 + 56, note.nmcd.dwItemSpec,
+                              ctypes.addressof(rect)):  # LVM_GETSUBITEMRECT
+            return 0
+        rect.right -= 1  # Keep the native grid lines between cells visible.
+        rect.bottom -= 1
+        if rect.right <= rect.left or rect.bottom <= rect.top:
+            return 0
+        hdc = note.nmcd.hdc
+        saved = G.SaveDC(hdc)
+        if not saved:
+            return 0
+        try:
+            if not G.IntersectClipRect(hdc, rect.left, rect.top, rect.right, rect.bottom):
+                return 0
+            G.SetDCBrushColor(hdc, UPDATE_CELL_COLOR)
+            if not U.FillRect(hdc, ctypes.byref(rect), G.GetStockObject(18)):  # DC_BRUSH
+                return 0
+            cell_font = U.SendMessageW(controls['list'], 0x31, 0, 0) or font  # WM_GETFONT
+            G.SelectObject(hdc, cell_font)
+            G.SetTextColor(hdc, 0)  # Readable black text on the emerald background.
+            G.SetBkMode(hdc, 1)  # TRANSPARENT
+            text_rect = W.RECT(rect.left + unit(6), rect.top, rect.right - unit(4), rect.bottom)
+            if text_rect.right > text_rect.left:
+                U.DrawTextW(hdc, row.get('available_label', '—'), -1, ctypes.byref(text_rect),
+                            0x4 | 0x20 | 0x800 | 0x8000)  # VCENTER | SINGLELINE | NOPREFIX | END_ELLIPSIS
+            return 4  # CDRF_SKIPDEFAULT: the rest of the row stays native.
+        finally:
+            G.RestoreDC(hdc, saved)
+
+    def handle_list_draw(lparam):
+        note = ctypes.cast(lparam, ctypes.POINTER(NMLVCUSTOMDRAW)).contents
+        stage = note.nmcd.dwDrawStage
+        if stage == 1:  # CDDS_PREPAINT
+            return 0x20  # CDRF_NOTIFYITEMDRAW
+        index = int(note.nmcd.dwItemSpec)
+        if not 0 <= index < len(state['rows']) or not has_newer_version(state['rows'][index]):
+            return 0
+        if stage == 0x10001:  # CDDS_ITEMPREPAINT
+            return 0x20  # CDRF_NOTIFYSUBITEMDRAW
+        if stage == 0x30001 and note.iSubItem == 3:  # CDDS_ITEMPREPAINT | CDDS_SUBITEM
+            return draw_update_cell(note, state['rows'][index])
+        return 0
 
     def paint_check(index):
         row = state['rows'][index]
@@ -2028,6 +2108,8 @@ def run_window():
                 header = ctypes.cast(lparam, ctypes.POINTER(NMHDR)).contents
                 if header.hwndFrom != controls["list"]:
                     return U.DefWindowProcW(hwnd, msg, wparam, lparam)
+                if header.code == -12:  # NM_CUSTOMDRAW, also during the final rebuild redraw.
+                    return handle_list_draw(lparam)
                 if state['populating']:
                     return 0
                 if header.code == -108:  # LVN_COLUMNCLICK
