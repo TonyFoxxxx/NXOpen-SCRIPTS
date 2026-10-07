@@ -45,6 +45,15 @@ internal static class DescriptionInlineChecks
             // clamps the scaled test form and consumes its entire tree area.
             ui.Window.MinimumSize = new Size((int)(800 * scale), (int)(544 * scale));
             ui.Window.Show(); Application.DoEvents();
+            // The runner has a 1024x768 desktop: Forms clamps even MinimumSize
+            // to its maximum tracking size. Use a native offscreen window size
+            // to exercise 200% geometry as on a suitably sized production screen.
+            if (scale > 1F)
+            {
+                Assert(SetWindowPos(ui.Window.Handle, IntPtr.Zero, 0, 0,
+                    (int)(840 * scale), (int)(700 * scale), 0x0416), "resize scaled test viewport");
+                Application.DoEvents();
+            }
             int header = ui.Header.Height, top = ui.Zmin.Top, treeHeight = ui.Tree.Height;
             Assert(!ui.UpdateDescriptions && !ui.IncludeToolNumbers && !ui.Choices.Visible, "initially disabled and hidden");
             Assert(ui.Diameter.Checked && !ui.Full.Checked, "diameter is default for each launch");
@@ -84,4 +93,6 @@ internal static class DescriptionInlineChecks
         }
         Console.WriteLine("PASS real Windows inline Description: " + checks + " checks; " + (themed ? "themed" : "classic"));
     }
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
 }
