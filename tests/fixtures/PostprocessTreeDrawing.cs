@@ -103,6 +103,7 @@ internal static class TreeDrawingChecks
             // Exercise a nonzero vertical scroll origin and a long horizontal label.
             setup.Nodes[3].Text = "O34_" + new string('W', 160);
             form.ClientSize = new Size(350, 210); setup.Nodes[3].EnsureVisible();
+            SendMessageW(tree.Handle, 0x0114, new IntPtr(6), IntPtr.Zero); // SB_LEFT after EnsureVisible
             tree.SelectedNode = null; tree.Refresh(); Application.DoEvents();
             using (Bitmap bitmap = Capture(tree)) CheckPixels(tree, bitmap, checkBoxes);
             SendMessageW(tree.Handle, 0x0114, new IntPtr(1), IntPtr.Zero); // SB_LINERIGHT
@@ -140,9 +141,11 @@ internal static class TreeDrawingChecks
             Rectangle window; GetWindowRect(tree.Handle, out window);
             int ox = border.X - window.X, oy = border.Y - window.Y;
             Rectangle label = node.Bounds;
+            if (label.Right <= 0 || label.Left >= tree.ClientSize.Width) continue;
             Rectangle textInk = Ink(bitmap, new Rectangle(label.X + ox, row.Top + oy,
                 Math.Min(label.Width, tree.ClientSize.Width - label.X), row.Bottom - row.Top), true);
-            Assert(!textInk.IsEmpty, "missing text: " + node.Text);
+            if (textInk.IsEmpty) Emit(bitmap, "missing");
+            Assert(!textInk.IsEmpty, "missing text: " + node.Text + " label=" + label + " row=" + row.Top + ":" + row.Bottom);
             double textCenter = (textInk.Top + textInk.Bottom - 1) / 2.0;
             if (checkBoxes)
             {
