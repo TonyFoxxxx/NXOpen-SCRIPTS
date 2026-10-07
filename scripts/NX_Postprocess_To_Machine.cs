@@ -1,5 +1,5 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.39
+// SCRIPT_VERSION: V1.40
 // Configure postprocessor paths and machine folders in the UI; optional operation numbering.
 // Preserve NC processing, modal validation, output paths and other INI settings.
 // Siemens NX / Designcenter, Windows. C# journal with an external INI.
@@ -732,6 +732,7 @@ internal sealed class OperationNumbering
             List<NXOpen.CAM.Operation> ordered = new List<NXOpen.CAM.Operation>();
             HashSet<Tag> groups = new HashSet<Tag>();
             foreach (CamObject obj in job.Objects) Collect(obj, ordered, groups);
+            string numberFormat = ordered.Count <= 99 ? "D2" : "D3";
             for (int i = 0; i < ordered.Count; i++)
             {
                 NXOpen.CAM.Operation operation = ordered[i];
@@ -743,7 +744,7 @@ internal sealed class OperationNumbering
                     Match numeric = Regex.Match(original, @"([0-9]+)_$");
                     body = numeric.Success ? numeric.Groups[1].Value : "\u041E\u043F\u0435\u0440\u0430\u0446\u0438\u044F";
                 }
-                string name = (i + 1).ToString(CultureInfo.InvariantCulture) + "_" + body;
+                string name = (i + 1).ToString(numberFormat, CultureInfo.InvariantCulture) + "_" + body;
                 if (name == original) continue;
                 result.operations.Add(operation); result.names.Add(name);
             }
@@ -1362,7 +1363,7 @@ internal sealed class ProgramFolderPicker : RouterDialog
         RuntimeForms.Set(numberOperations, "Text", "\u041D\u0443\u043C\u0435\u0440\u043E\u0432\u0430\u0442\u044C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438");
         RuntimeForms.Set(numberOperations, "Checked", false);
         RuntimeForms.SetEnum(numberOperations, "Anchor", "Top, Left, Right");
-        RuntimeForms.Call(Tips, "SetToolTip", numberOperations, "\u041F\u0435\u0440\u0435\u0434 \u0432\u044B\u0432\u043E\u0434\u043E\u043C \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C 1_, 2_, ... \u043A \u0438\u043C\u0435\u043D\u0430\u043C \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u0432 \u0434\u0435\u0440\u0435\u0432\u0435 NX. \u0412 \u043A\u0430\u0436\u0434\u043E\u0439 \u0423\u041F \u043D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u044F \u043D\u0430\u0447\u0438\u043D\u0430\u0435\u0442\u0441\u044F \u0441 1. \u0411\u0435\u0437 \u0433\u0430\u043B\u043E\u0447\u043A\u0438 \u0438\u043C\u0435\u043D\u0430 \u043D\u0435 \u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F.");
+        RuntimeForms.Call(Tips, "SetToolTip", numberOperations, "\u041F\u0435\u0440\u0435\u0434 \u0432\u044B\u0432\u043E\u0434\u043E\u043C \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C 01_, 02_, ... (\u0434\u043E 99 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439) \u0438\u043B\u0438 001_, 002_, ... (\u043E\u0442 100). \u0412 \u043A\u0430\u0436\u0434\u043E\u0439 \u0423\u041F \u2014 \u043D\u043E\u0432\u0430\u044F \u043D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u044F. \u0411\u0435\u0437 \u0433\u0430\u043B\u043E\u0447\u043A\u0438 \u0438\u043C\u0435\u043D\u0430 \u043D\u0435 \u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F.");
         RuntimeForms.Add(Header, numberOperations);
         // Replace the flat FlowLayoutPanel in the same docking position.
         object controls = RuntimeForms.Get(Window, "Controls");
@@ -3792,7 +3793,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.39";
+    internal const string SCRIPT_VERSION = "V1.40";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
 
     internal static string WindowTitle(string detail)
