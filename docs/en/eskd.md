@@ -6,6 +6,18 @@ Script: [NX_ESKD_Format_GOST_A.cs](../../scripts/NX_ESKD_Format_GOST_A.cs). [All
 
 Creates an ESKD border and title block on the current metric drawing sheet and updates annotation formatting. ESKD is the Unified System for Design Documentation used by GOST standards.
 
+## Latest release
+
+**V1.36 · 2026-10-09**
+
+- The upper duplicate-designation box is horizontal, 70 × 14 mm, for all supported sheet formats and both orientations. Its text stays rotated by 180°.
+- Long title-block text wraps first, then tries smaller font sizes if needed. Cell and table dimensions stay fixed.
+- Codes without spaces can wrap at existing separators or between text elements without deleting letters, digits or punctuation. Explicit line breaks and the full multiline height are taken into account.
+- Native NX cell fitting uses Wrap followed by AutoSizeText. A final check verifies fitting settings and detects evaluated cell text replaced with hashes.
+- If the measured text still cannot fit at 2.5 mm, additional NX fitting is enabled and a warning advises shortening the entry to retain a size of at least 2.5 mm.
+
+Checked C# syntax, upper-box dimensions for A4/A3/A2 in both orientations, catalog versions and hashes. Local full-suite run: 111 tests passed and 20 were skipped; one postprocessor test stopped because the validation environment lacks the .NET SDK. Table rendering and NXOpen execution in the target NX / Designcenter builds still need verification.
+
 ## Features
 
 - A4 and larger metric sheets, with portrait/landscape choices. Standard A4 is portrait; a custom landscape option is available.

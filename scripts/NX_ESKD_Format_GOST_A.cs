@@ -1,5 +1,7 @@
 // NX_ESKD_Format_GOST_A.cs — Оформление чертежа ЕСКД
-// SCRIPT_VERSION: V1.35
+// SCRIPT_VERSION: V1.36
+// Upper duplicate designation stays horizontal on every supported sheet.
+// Title cells wrap first, then reduce text size; native fitting prevents overflow hashes.
 // Public edition: external authorized font; font bytes are not distributed.
 // Working filename: NX_ESKD_Format_GOST_A.cs (constant across updates).
 // Designation and name start from the current part filename on every launch.
@@ -30,18 +32,18 @@
 // A rejected projection edit is rolled back locally, without undoing formatting.
 // v1.27: fix "Fit method is invalid" for both sheet orientations.
 // Compact active table fit methods and recalculate their count; None is padding
-// only. ESKD cells use Wrap only, with explicit measured GOST text sizes.
+// only. Explicit measured sizes precede native Wrap/AutoSizeText fitting.
 // v1.26: GOST type-A character spacing for existing and future annotations;
 // separate M-prefix gap=0.5 mm at h=3.5; live NX spacing measurements.
 // GOST 2.304-81: h=3.5, d=h/14, a=2d; type-A italic outlines are preserved.
 // GOST 2.303-68: explicit contour/thin line widths 0.50/0.25 or 0.70/0.35 mm.
 // GOST R 2.316-2023: view/section lettering 7 mm for dimension lettering 3.5 mm.
 // Main title block 185 x 55, with the earlier grid requested by the user; format designation,
-// 20/5/5/5 margins; column 26 orientation depends on portrait/landscape.
+// 20/5/5/5 margins; the chosen column 26 layout is horizontal (180-degree text).
 // User chooses horizontal/vertical sheet before any file/model changes.
 // Sheet dimensions swap; existing view scale and placement are retained.
 // New technical requirements replace the old block; existing INI migrates once.
-// Table text uses discrete GOST sizes, measured wrapping, no AutoSizeText.
+// Table text prefers discrete GOST sizes and measured wrapping, with native fitting as fallback.
 // GOST 2.307-2011: 3-mm/20-degree dimension arrows, 2-mm extension overruns,
 // 7-mm baseline/chain intervals. Actual dimension placement still needs review:
 // contour-to-first dimension >=10 mm; parallel dimension lines >=7 mm.
@@ -77,8 +79,9 @@ using NXOpen.UF;
 
 public class NX_ESKD_Format_GOST_A
 {
-    private const string SCRIPT_VERSION = "V1.35";
-    private const string Title = "ЕСКД: GOST type A Italic — " + SCRIPT_VERSION;
+    private const string SCRIPT_VERSION = "V1.36";
+    private static readonly string Title = "ЕСКД: GOST type A Italic — " + SCRIPT_VERSION +
+        " — " + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private const string FontName = "NX_ESKD_GOST_A_Italic_v110";
     private const string FontFaceName = "NX_ESKD_GOST_A_Italic_v110";
     private const string OwnerAttribute = "NX_ESKD_FORMAT_OWNER";
@@ -236,6 +239,8 @@ public class NX_ESKD_Format_GOST_A
 
             AuditFinalSectionLetters();
             AuditFinalSectionHatches();
+            step = "проверка текста основной надписи";
+            AuditCreatedTableText();
 
             // A persistence problem must not undo a successfully formatted drawing.
             // No LastUsed update is attempted on Cancel or an NX formatting failure.
@@ -3054,7 +3059,6 @@ public class NX_ESKD_Format_GOST_A
         int value = (int)method;
         return value >= (int)UFTabnot.FitMethod.FitMethodOverwriteBorder &&
             value <= (int)UFTabnot.FitMethod.FitMethodTruncate &&
-            method != UFTabnot.FitMethod.FitMethodAutoSizeText &&
             method != UFTabnot.FitMethod.FitMethodRemoveSpaces;
     }
 
@@ -3084,10 +3088,11 @@ public class NX_ESKD_Format_GOST_A
     {
         cp.fit_methods = new UFTabnot.FitMethod[TableFitMethodCapacity];
         cp.fit_methods[0] = UFTabnot.FitMethod.FitMethodWrap;
-        cp.nm_fit_methods = 1;
-        // Text is explicitly wrapped/measured in Merge. Wrap is a valid native
-        // fallback, with no font shrinking, truncation, space removal or change
-        // to the 185 x 55 grid. None is confined to the inactive array tail.
+        cp.fit_methods[1] = UFTabnot.FitMethod.FitMethodAutoSizeText;
+        cp.nm_fit_methods = 2;
+        // Keep this order: wrap first, then reduce text if NX's own cell
+        // layout still does not fit. Never resize rows/columns, truncate text
+        // or remove spaces. None occurs only in the inactive array tail.
     }
 
     private static void VerifyDefaultTableFitMethods()
@@ -3104,6 +3109,124 @@ public class NX_ESKD_Format_GOST_A
             throw new InvalidOperationException("NX не сохранил допустимые способы подгонки текста новых таблиц.");
     }
 
+    private static bool IsOverflowHashText(string text)
+    {
+        int count = 0;
+        foreach (char ch in text ?? "")
+        {
+            if (Char.IsWhiteSpace(ch)) continue;
+            if (ch != '#') return false;
+            count++;
+        }
+        return count >= 3;
+    }
+
+    private static void AuditCreatedTableText()
+    {
+        // Check the final evaluated cell text after the sheet refresh, not
+        // merely the stored input or the bounds of the separate measuring note.
+        foreach (Tag table in CreatedTables)
+        {
+            U.Tabnot.Update(table);
+            int rows, columns;
+            U.Tabnot.AskNmRows(table, out rows); U.Tabnot.AskNmColumns(table, out columns);
+            for (int r = 0; r < rows; r++)
+            {
+                Tag row; U.Tabnot.AskNthRow(table, r, out row);
+                for (int c = 0; c < columns; c++)
+                {
+                    Tag column, cell;
+                    U.Tabnot.AskNthColumn(table, c, out column);
+                    U.Tabnot.AskCellAtRowCol(row, column, out cell);
+                    string source; U.Tabnot.AskCellText(cell, out source);
+                    if (String.IsNullOrWhiteSpace(source)) continue;
+                    UFTabnot.CellPrefs cp; U.Tabnot.AskCellPrefs(cell, out cp);
+                    if (cp.fit_methods == null || cp.fit_methods.Length < 2 || cp.nm_fit_methods != 2 ||
+                        cp.fit_methods[0] != UFTabnot.FitMethod.FitMethodWrap ||
+                        cp.fit_methods[1] != UFTabnot.FitMethod.FitMethodAutoSizeText)
+                        throw new InvalidOperationException("NX не сохранил перенос и уменьшение текста ячейки: «" + source + "».");
+                    string evaluated; U.Tabnot.AskEvaluatedCellText(cell, out evaluated);
+                    if (IsOverflowHashText(evaluated) && !IsOverflowHashText(source))
+                        throw new InvalidOperationException("NX не смог разместить текст в графе после переноса и уменьшения: «" +
+                            source + "». Сократите эту запись в меню.");
+                }
+            }
+        }
+    }
+
+    private static double TableLinePitch(double height)
+    {
+        // Rounded minimum pitches from GOST 2.304-81 table 1.
+        return height <= 2.5 ? 4.0 : height <= 3.5 ? 5.5 : height <= 5.0 ? 8.0 :
+            height <= 7.0 ? 11.0 : height <= 10.0 ? 16.0 : height <= 14.0 ? 22.0 :
+            height <= 20.0 ? 31.0 : Math.Ceiling(height * 22.0 / 14.0);
+    }
+
+    private static double TableTextWidth(string text, double height, double lineFactor)
+    {
+        return MeasureCalibrationText(TableTextProbe, new string[] { text }, height,
+            CharacterSpacingFactor, lineFactor, TableTextMark)[0];
+    }
+
+    private static string[] WrapTableText(string text, double width, double height, double lineFactor)
+    {
+        List<string> lines = new List<string>();
+        foreach (string paragraph in text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            string line = "";
+            foreach (string word in paragraph.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string proposed = line.Length == 0 ? word : line + " " + word;
+                if (TableTextWidth(proposed, height, lineFactor) <= width + 0.01)
+                { line = proposed; continue; }
+                if (line.Length > 0) { lines.Add(line); line = ""; }
+                string remaining = word;
+                while (TableTextWidth(remaining, height, lineFactor) > width + 0.01)
+                {
+                    int length = TableWordBreak(remaining, width, height, lineFactor);
+                    // A single wide glyph or an NX control token is left
+                    // intact for the next font size/native fitting pass.
+                    if (length <= 0 || length >= remaining.Length) break;
+                    lines.Add(remaining.Substring(0, length));
+                    remaining = remaining.Substring(length);
+                }
+                line = remaining;
+            }
+            // Preserve explicit paragraph breaks, including intentional blank lines.
+            lines.Add(line);
+        }
+        return lines.ToArray();
+    }
+
+    private static int TableWordBreak(string word, double width, double height, double lineFactor)
+    {
+        // Do not cut NX embedded annotation codes or split Unicode text elements.
+        if (word.IndexOf('<') >= 0 && word.IndexOf('>') >= 0) return 0;
+        int[] starts = StringInfo.ParseCombiningCharacters(word);
+        int low = 1, high = starts.Length, best = 0;
+        while (low <= high)
+        {
+            int count = low + (high - low) / 2;
+            int end = count == starts.Length ? word.Length : starts[count];
+            if (TableTextWidth(word.Substring(0, end), height, lineFactor) <= width + 0.01)
+            { best = end; low = count + 1; }
+            else high = count - 1;
+        }
+        // Prefer an existing separator near the end of the fitting prefix.
+        // Never add a hyphen or discard punctuation from the designation.
+        for (int i = starts.Length - 1; i >= 0; i--)
+        {
+            int end = i + 1 < starts.Length ? starts[i + 1] : word.Length;
+            if (end > best) continue;
+            if (end < best / 2) break;
+            char ch = word[starts[i]];
+            if (ch == '-' || ch == '.' || ch == '/' || ch == '_' ||
+                Char.GetUnicodeCategory(ch) == UnicodeCategory.DashPunctuation)
+                return end;
+        }
+        return best;
+    }
+
     private static Tag Cell(Table t, int r, int c)
     { Tag cell; U.Tabnot.AskCellAtRowCol(t.Rows[r], t.Columns[c], out cell); return cell; }
 
@@ -3117,7 +3240,7 @@ public class NX_ESKD_Format_GOST_A
         for (int r = r1; r <= r2; r++) { U.Tabnot.AskRowHeight(t.Rows[r], out value); cellHeight += value; }
         if (Math.Abs(Math.Sin(angle * Math.PI / 180.0)) > 0.5)
         { double swap = width; width = cellHeight; cellHeight = swap; }
-        string fitted = FitTableText(NormalizeTitleText(text), height, width - 2.0, cellHeight - 1.0, out height);
+        string fitted = FitTableText(NormalizeTitleText(text), height, width - 2.0, cellHeight - 2.0, out height);
         cp.text_height = height; cp.text_angle = angle * Math.PI / 180.0;
         cp.line_space_factor = LineFactorForHeight(height);
         SetCellFit(ref cp);
@@ -3145,11 +3268,7 @@ public class NX_ESKD_Format_GOST_A
     private static double LineFactorForHeight(double height)
     {
         if (Math.Abs(LinePitchSlopeRatio) < 0.00001) return GeneralLineFactor;
-        // Rounded minimum pitches from GOST 2.304-81 table 1.
-        double pitch = height <= 2.5 ? 4.0 : height <= 3.5 ? 5.5 : height <= 5.0 ? 8.0 :
-            height <= 7.0 ? 11.0 : height <= 10.0 ? 16.0 : height <= 14.0 ? 22.0 :
-            height <= 20.0 ? 31.0 : Math.Ceiling(height * 22.0 / 14.0);
-        return Math.Max(0.0, (pitch / height - LinePitchBaseRatio) / LinePitchSlopeRatio);
+        return Math.Max(0.0, (TableLinePitch(height) / height - LinePitchBaseRatio) / LinePitchSlopeRatio);
     }
 
     private static string FitTableText(string text, double requestedHeight, double width,
@@ -3157,41 +3276,32 @@ public class NX_ESKD_Format_GOST_A
     {
         height = requestedHeight;
         if (String.IsNullOrWhiteSpace(text)) return "";
-        // Only permitted nominal sizes; never compress glyphs or reduce below
-        // 2.5 mm for type A. User text and designation characters are preserved.
+        // Try wrapping at each standard size before selecting a smaller one.
+        // The real native cell also has Wrap -> AutoSizeText as a final guard:
+        // measuring a separate NX note alone did not prevent hash overflow.
         double[] sizes = new double[] { 7.0, 5.0, 3.5, 2.5 };
+        string smallestWrapped = text;
         foreach (double candidate in sizes)
         {
             if (candidate > requestedHeight + 0.001) continue;
             double lineFactor = LineFactorForHeight(candidate);
-            List<string> lines = new List<string>();
-            bool tooWide = false;
-            foreach (string paragraph in text.Replace("\r", "").Split('\n'))
-            {
-                string line = "";
-                foreach (string word in paragraph.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries))
-                {
-                    string proposed = line.Length == 0 ? word : line + " " + word;
-                    double[] bounds = MeasureCalibrationText(TableTextProbe, new string[] { proposed }, candidate,
-                        CharacterSpacingFactor, lineFactor, TableTextMark);
-                    if (bounds[0] <= width + 0.01) { line = proposed; continue; }
-                    if (line.Length > 0) lines.Add(line);
-                    if (MeasureCalibrationText(TableTextProbe, new string[] { word }, candidate,
-                        CharacterSpacingFactor, lineFactor, TableTextMark)[0] > width + 0.01)
-                    { tooWide = true; break; }
-                    line = word;
-                }
-                if (tooWide) break;
-                if (line.Length > 0) lines.Add(line);
-            }
-            if (tooWide || lines.Count == 0) continue;
-            double[] measured = MeasureCalibrationText(TableTextProbe, lines.ToArray(), candidate,
+            string[] lines = WrapTableText(text, width, candidate, lineFactor);
+            smallestWrapped = String.Join("\n", lines);
+            double[] measured = MeasureCalibrationText(TableTextProbe, lines, candidate,
                 CharacterSpacingFactor, lineFactor, TableTextMark);
-            if (measured[0] <= width + 0.01 && measured[1] <= availableHeight + 0.01)
-            { height = candidate; return String.Join("\n", lines.ToArray()); }
+            // Include the full line pitch even when the note's ink bounds
+            // understate the height needed by a multiline table cell.
+            double blockHeight = Math.Max(measured[1], candidate + (lines.Length - 1) * TableLinePitch(candidate));
+            if (measured[0] <= width + 0.01 && blockHeight <= availableHeight + 0.01)
+            { height = candidate; return smallestWrapped; }
         }
-        throw new InvalidOperationException("Текст не помещается в графе основной надписи стандартным шрифтом от 2,5 мм: «" +
-            text + "». Сократите запись в окне ввода или в INI.");
+        // Preserve every character for exceptional text that cannot fit at
+        // 2.5 mm. Let NX reduce it instead of producing ######## or truncating.
+        // Report the concrete readability/standard-size exception once at end.
+        height = Math.Min(requestedHeight, 2.5);
+        Warnings.Add("Длинный текст не помещается в графе шрифтом 2,5 мм после переноса: «" + text +
+            "». Включено дополнительное уменьшение шрифта NX. Чтобы сохранить размер не менее 2,5 мм, сократите запись.");
+        return smallestWrapped;
     }
 
     private static void HeavyEdge(Table t, int r, int c, bool right, bool bottom)
@@ -3283,13 +3393,12 @@ public class NX_ESKD_Format_GOST_A
 
     private static void BuildAuxiliaryTables(Fields f)
     {
-        // Column 26: A4 always uses 180 degrees. Only a portrait sheet
-        // larger than A4 uses 90 degrees (GOST R 2.104-2023, table 1).
-        bool rotateReverse = Sheet.Height > Sheet.Length && BasicSheetFormat(Sheet.Length, Sheet.Height) != "А4";
-        double reverseWidth = rotateReverse ? 14 : 70, reverseHeight = rotateReverse ? 70 : 14;
-        Table reverse = NewTable(20, Sheet.Height - 5, new double[] { reverseWidth }, new double[] { reverseHeight });
-        Merge(reverse, 0, 0, 0, 0, f.Designation, 5, rotateReverse ? 90 : 180);
-        U.Tabnot.Update(reverse.Tag); CheckSize(reverse, reverseWidth, reverseHeight);
+        // Restore the horizontal 70 x 14 upper frame requested by the user,
+        // independently of the sheet format and its initial/final orientation.
+        // The duplicate designation remains upside down, as in the earlier layout.
+        Table reverse = NewTable(20, Sheet.Height - 5, new double[] { 70.0 }, new double[] { 14.0 });
+        Merge(reverse, 0, 0, 0, 0, f.Designation, 5, 180);
+        U.Tabnot.Update(reverse.Tag); CheckSize(reverse, 70, 14);
 
         Table bottom = NewTable(8, 150, new double[] { 5, 7 }, new double[] { 35, 25, 25, 35, 25 });
         string[] labels = new string[] { "Подп. и дата", "Инв. № дубл.", "Взам. инв. №", "Подп. и дата", "Инв. № подл." };

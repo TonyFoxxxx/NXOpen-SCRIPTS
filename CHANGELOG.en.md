@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-09 — ESKD V1.36
+
+- Restored the horizontal 70 × 14 mm upper box for all supported formats and both sheet orientations; duplicate-designation text remains rotated by 180°.
+- Long title-block text wraps before font reduction. Added wrapping for codes without spaces and full line-height checks while retaining the 185 × 55 mm title block.
+- Cells use native Wrap followed by AutoSizeText. After the sheet refresh, the script checks fitting settings and evaluated overflow hashes. It warns if measured text cannot fit even at 2.5 mm and needs further fitting.
+- Retained the public external-font workflow, INI handling, menus and section geometry. Updated the catalog and Russian/English documentation.
+- Checked C# syntax, box dimensions and catalog consistency. Local full-suite run: 111 tests passed and 20 were skipped; one postprocessor test stopped because the validation environment lacks the .NET SDK. Repository checks do not replace NX execution; rendering in the target NX / Designcenter builds remains unverified.
+
 ## 2026-10-07 — English documentation
 
 - Added an English repository overview, installation/configuration instructions and guides for all 13 scripts.
