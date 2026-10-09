@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "min_updater_version": "V1.13",
+  "min_updater_version": "V1.18",
   "scripts": [
     {
       "id": "NX_Setup_Prototype",
@@ -54,15 +54,15 @@
       "id": "NX_Number_Program_Folders",
       "name": "Нумерация папок программ",
       "file": "NX_Number_Program_Folders.cs",
-      "version": "V1.03",
+      "version": "V1.04",
       "path": "scripts/NX_Number_Program_Folders.cs",
-      "sha256": "ff1e04277a092109666bca8190afdd7485038ab9370cabccd7f37f997e8c9cee",
+      "sha256": "c1f8332f98bf97b8a271693c34a24d5e9ee5bc6debee6c30d47cb8ef48599b0c",
       "description": "Нумерация папок программ по порядку дерева с учётом XLSX-реестра.",
       "config": {
         "path": "config/NX_Numbering_Settings_v1.0.example.ini",
         "file": "NX_Numbering_Settings_v1.0.ini",
         "location": "numbering_data",
-        "sha256": "47ef932dd74f3e4eb628d2f09b2ea83a426960fe0d27ac504d7cb14941fbf01a"
+        "sha256": "c329d73687d42e68ab711ce0e2a5ff72cb5a2180dad99f7d0ad3d65841cdb052"
       },
       "install_files": [
         {
@@ -146,9 +146,9 @@
       "id": "NX_Update_Scripts",
       "name": "Апдейтер скриптов",
       "file": "NX_Update_Scripts.py",
-      "version": "V1.17",
+      "version": "V1.18",
       "path": "scripts/NX_Update_Scripts.py",
-      "sha256": "35b371893665ca7bd45eb29373773f34b9d4528816aa1ba9f1822b4066dc8d0a",
+      "sha256": "6f5bc19507800eb3e9bea57205595f713ddf35a1ff4b05bf34a92cefe2c788cb",
       "description": "Установка и обновление выбранных скриптов из GitHub или папки.",
       "config": {
         "path": "config/NX_Update_Scripts.example.ini",

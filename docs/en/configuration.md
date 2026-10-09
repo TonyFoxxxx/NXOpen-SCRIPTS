@@ -71,17 +71,21 @@ Without a compatible font, formatting stops instead of substituting a similar on
 
 ## Program-folder numbering
 
-Fixed settings path:
+Since V1.04, the INI is beside `NX_Number_Program_Folders.cs` in the selected working folder. For example:
 
 ```text
-C:\ProgramData\3_NX_DATA\NX_Numbering_Settings_v1.0.ini
+C:\ProgramData\2. NX_Scripts\NX_Numbering_Settings_v1.0.ini
 ```
 
 [Example INI](../../config/NX_Numbering_Settings_v1.0.example.ini). Configure your own `Prefix`, `StartNumber` and `EndNumber`. The example range 1–1000 is only an example; choose a range that does not overlap your other numbering systems.
 
 `RegistryFile` points to the XLSX history. It can be absolute or relative to the INI. Microsoft Excel is not required. The empty [template](../../templates) contains headers only and is for a first installation.
 
-The updater installs initial settings only when both the script and INI are missing. It supplies the empty register only if the INI and register are absent. An existing INI with a missing register is **not** a reason to start a blank history: restore the existing history. Updating an installed script does not recreate missing settings or a register.
+Updater V1.18 downloads the INI and empty XLSX into the installed numbering script's folder only for a first installation with no previous settings or history.
+
+Existing files beside the script take precedence. Otherwise, the updater migrates the working pair from the former `C:\ProgramData\3_NX_DATA` folder, preserving the range, comments and allocation history. It places the migrated workbook beside the script and changes only `RegistryFile` in the copied INI if needed. The old files remain untouched. Close Excel and other numbering runs before migration.
+
+Lost settings or history are never replaced with an empty register. Conflicting workbooks are not merged or overwritten. Restore the required INI and XLSX. If the current script version is installed but its data files are absent, manually select the missing-numbering-files row to retry migration of the old pair.
 
 `v1.0` is part of the stable INI/register filenames; keep it. See [numbering behavior and file changes](number-program-folders.md).
 

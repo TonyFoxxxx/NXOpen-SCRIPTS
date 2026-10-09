@@ -18,7 +18,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.45 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.02 | Add minimum toolpath Z to operation names. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
-| [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.03 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
+| [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.04 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Fill tool descriptions with diameter and T, H, D numbers. | [All features](docs/en/tool-description.md) |
 | [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.36 | ESKD drawing borders, title blocks and annotation formatting. | [All features](docs/en/eskd.md) |
 | [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.11 | Export the current sheet to PDF with adjustable line weights. | [All features](docs/en/export-pdf.md) |
@@ -26,17 +26,15 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Rename part and assembly files and update component references. | [All features](docs/en/rename-assemblies.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.17 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
+| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.18 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — ESKD V1.36 · 2026-10-09
+### Latest update — Updater V1.18 and numbering V1.04 · 2026-10-09
 
-- The upper duplicate-designation box is horizontal on all supported sheets.
-- Long title-block text wraps first, then uses a smaller font if needed, keeping the table dimensions fixed.
-- Added a final check for cell fitting settings and overflow hashes after the sheet refresh.
-
-[Changes in V1.36, checks and limits](docs/en/eskd.md#latest-release).
+- The numbering INI and Excel register are installed beside the script in the selected working folder.
+- Previous settings and issued numbers are migrated from `C:\ProgramData\3_NX_DATA`; existing destination files are retained.
+- Update and restart the updater first, then update the numbering script. [Upgrade steps](docs/en/updater.md#upgrading-to-v118).
 
 ## Installation
 
@@ -72,7 +70,7 @@ Files in `config/` ending in `.example.ini` are examples. On a new GitHub instal
 | Setup sheets | [Download](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Setup_Prototype.example.ini) | `NX_Setup_Prototype.ini` beside the script; `[SetupCard] programmer`. |
 | Postprocessing | [Download](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Postprocess_To_Machine.example.ini) | `NX_Postprocess_To_Machine.ini` beside the script; your posts and machine folders. |
 | ESKD | [Download](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_ESKD_Settings.example.ini) | `NX_ESKD_Settings.ini` beside the script; title-block text and formatting. |
-| Numbering | [Download](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Numbering_Settings_v1.0.example.ini) | `C:\ProgramData\3_NX_DATA\NX_Numbering_Settings_v1.0.ini` and the register specified by `RegistryFile`. |
+| Numbering | [Download](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Numbering_Settings_v1.0.example.ini) | `NX_Numbering_Settings_v1.0.ini` beside the script and the register specified by `RegistryFile`; the updater migrates the old pair when updating. |
 | Updater | [Download](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Update_Scripts.example.ini) | `NX_Update_Scripts.ini` beside the script; source and working folder. |
 
 For manual installation, remove `.example` from the filename and fill in your settings. Do not replace existing INI files or numbering history with examples. See [configuration](docs/en/configuration.md).

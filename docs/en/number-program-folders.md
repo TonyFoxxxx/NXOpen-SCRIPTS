@@ -20,7 +20,7 @@ Numbers program folders using an XLSX register to retain allocation history.
 ## Use
 
 1. Save the PRT.
-2. Configure your range and register in `C:\ProgramData\3_NX_DATA\NX_Numbering_Settings_v1.0.ini`. See [configuration](configuration.md#program-folder-numbering).
+2. Configure your range and register in `NX_Numbering_Settings_v1.0.ini` beside the script. See [configuration](configuration.md#program-folder-numbering).
 3. Run the script; no selection is needed.
 4. Review the result and save the PRT.
 
@@ -28,6 +28,8 @@ A failure rolls back NX changes and updates the register's status where possible
 
 ## Files and limitations
 
-`Prefix`, `StartNumber` and `EndNumber` define the numbering format and range. `RegistryFile` in the fixed INI points to the register. The current implementation creates a `.lock` lock file and a `.bak` previous version beside the register. Writing uses a `.tmp` file, which is removed after replacement. The script also writes CAM attributes; it does not save the PRT automatically.
+Since V1.04, the script locates its INI beside the running `.cs` journal, for example in `C:\ProgramData\2. NX_Scripts`. Updater V1.18 installs the initial INI/XLSX there and migrates the old pair from `C:\ProgramData\3_NX_DATA` when necessary. Existing settings and history are retained.
+
+`Prefix`, `StartNumber` and `EndNumber` define the numbering format and range. `RegistryFile` in the INI points to the register. The current implementation creates a `.lock` lock file and a `.bak` previous version beside the register. Writing uses a `.tmp` file, which is removed after replacement. The script also writes CAM attributes; it does not save the PRT automatically.
 
 A missing or incompatible existing register blocks numbering. Do not substitute an empty register for a used history: restore the original. The empty repository template is only for the first setup. Keep the stable `v1.0` filenames.

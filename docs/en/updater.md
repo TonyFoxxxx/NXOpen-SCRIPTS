@@ -1,4 +1,4 @@
-# Updater V1.17
+# Updater V1.18
 
 [Русский](../updater.md) | **English**
 
@@ -76,9 +76,9 @@ This mode copies scripts only: no initial INI examples or other companion files,
 
 After selection, only the required source files and initial examples are downloaded. Before modifying working files, every download is checked for SHA-256, size, internal version, header version comment and `SCRIPT_VERSION`. Python syntax is checked without executing the script.
 
-A new script uses its stable filename in the working folder. A missing INI is created from its example only when installing an absent script; existing INI files are retained. The empty numbering register is installed only when its INI and register are absent. An existing INI does not authorize the updater to recreate missing numbering history.
+A new script uses its stable filename in the working folder. A missing INI is created from its example when installing an absent script; existing INI files are retained. Numbering INI/XLSX files are also installed beside their script. On a numbering update, existing destination files take precedence; otherwise the old pair is migrated from `C:\ProgramData\3_NX_DATA`. An empty register is downloaded only for a first installation without previous history. Lost history and conflicting registers require recovery, not a reset.
 
-An ordinary update replaces only the selected script at its existing path. Other scripts' INI files, models, registers, logs and NX buttons are outside that replacement. Downloaded code is not executed during installation.
+An ordinary update replaces the selected script at its existing path. Numbering V1.04 also performs the missing-file migration described above. Existing user INI files, models, registers and NX buttons are retained. Downloaded code is not executed during installation.
 
 An `NX_UPDATER_INSTALLED_V1` comment at the end of an installed file records the source hash and helps detect local modifications.
 
@@ -92,6 +92,16 @@ The new version is written to a verified neighboring `.nxupdater-….pending` fi
 
 Atomic replacement applies to **one file, not the whole selection**. A crash or power loss may leave some files updated and others unchanged. Run Check again after restarting. Leftover pending files from completed processes are removed on the next launch. This does not replace backups of important user data.
 
+## Upgrading to V1.18
+
+1. Check for updates in the old updater, select updater V1.18 and apply. Other scripts are unavailable until this step is complete.
+2. After the window closes, restart the updater. Choose your working folder, for example `C:\ProgramData\2. NX_Scripts`, and check again.
+3. Select numbering V1.04 and apply. Close its Excel register and other numbering runs before migration.
+4. The working folder will contain the script, `NX_Numbering_Settings_v1.0.ini` and the workbook from `RegistryFile`. Existing settings/history are preserved. For a first setup, enter your own number range in the INI.
+5. If the script moved, update its NX button path once. Later updates keep the path.
+
+Files already moved to the destination take precedence. Missing old data or conflicting workbooks stop the migration with a path-specific message. Restore your data instead of substituting an empty template. If the script is current but its data files are missing, the recovery row remains available for manual selection.
+
 ## Self-update
 
 If the running updater is selected, its download is checked and held in memory. Other selected files update first. The window then closes, worker threads stop, and only then does the main thread replace its `.py` file. The new code runs on the next launch. If the old process exits before replacement, the old file remains.
@@ -103,7 +113,7 @@ Already running Python code stays in memory; new code is not imported over it. A
 ```json
 {
   "schema_version": 1,
-  "min_updater_version": "V1.13",
+  "min_updater_version": "V1.18",
   "scripts": [
     {
       "id": "NX_Setup_Prototype",
@@ -124,7 +134,7 @@ Already running Python code stays in memory; new code is not imported over it. A
 }
 ```
 
-This demonstrates fields, not a ready-to-publish manifest or current release. Real hashes are calculated by the publishing tool. `id` is the stable filename without its extension. Omit `config` for a script without an INI. `location=script` means the installed journal's folder. `numbering_data` is reserved for the numbering script's fixed `C:\ProgramData\3_NX_DATA` location and one `install_files` entry for the empty XLSX.
+This demonstrates fields, not a ready-to-publish manifest or current release. Real hashes are calculated by the publishing tool. `id` is the stable filename without its extension. Omit `config` for a script without an INI. `location=script` means the installed journal's folder. Since V1.18, `numbering_data` also refers to the installed journal's folder, with special preservation/migration handling and one `install_files` entry for the initial XLSX. The V1.18 minimum prevents older updaters from installing the new numbering script with data in the former fixed folder.
 
 New journals with ordinary INI settings can be added without changing the updater. New dependency types or installation directories require format/updater support. Unknown schemas are blocked. If `min_updater_version` increases, an old client may update itself first, while other entries remain blocked.
 

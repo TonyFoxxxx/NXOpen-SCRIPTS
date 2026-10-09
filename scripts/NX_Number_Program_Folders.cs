@@ -1,5 +1,5 @@
 // Нумерация папок программ — Siemens NX / Designcenter.
-// SCRIPT_VERSION: V1.03
+// SCRIPT_VERSION: V1.04
 // Рабочий файл: NX_Number_Program_Folders.cs
 // Номера следуют порядку дерева; вставка сдвигает последующие папки.
 // Обрабатываются только папки Program Order с латинской заглавной O.
@@ -19,9 +19,9 @@ using Path = System.IO.Path;
 
 public class NX_Number_Program_Folders
 {
-    public const string SCRIPT_VERSION = "V1.03";
-    private const string Title = "Нумерация папок программ — " + SCRIPT_VERSION;
-    private const string SettingsFile = @"C:\ProgramData\3_NX_DATA\NX_Numbering_Settings_v1.0.ini";
+    public const string SCRIPT_VERSION = "V1.04";
+    private static readonly string Title = "Нумерация папок программ — " + SCRIPT_VERSION + " — " + AuthorCaption();
+    private const string SettingsFileName = "NX_Numbering_Settings_v1.0.ini";
     private const string IdAttribute = "NX_NUM_V1_ID";
     private const string NameAttribute = "NX_NUM_V1_NAME";
     private const string OwnerAttribute = "NX_NUM_V1_OWNER";
@@ -34,13 +34,29 @@ public class NX_Number_Program_Folders
         try
         {
             Session session = Session.GetSession();
-            string result = Execute(session, session.Parts.Work, SettingsFile);
+            string result = Execute(session, session.Parts.Work, GetSettingsPath(session));
             UI.GetUI().NXMessageBox.Show(Title, NXMessageBox.DialogType.Information, result);
         }
         catch (Exception ex)
         {
             UI.GetUI().NXMessageBox.Show(Title, NXMessageBox.DialogType.Error, ErrorText(ex));
         }
+    }
+
+    private static string AuthorCaption()
+    {
+        byte[] data = { 63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10 };
+        for (int i = 0; i < data.Length; i++) data[i] = (byte)(data[i] ^ ((0x5D + i * 11) & 0xFF));
+        return Encoding.UTF8.GetString(data);
+    }
+
+    private static string GetSettingsPath(Session session)
+    {
+        // NX compiles journals into temporary DLLs; use the original journal path.
+        string journal = session.ExecutingJournal;
+        if (String.IsNullOrEmpty(journal) || !Path.IsPathRooted(journal))
+            throw new Exception("NX не сообщил полный путь к скрипту. Запустите файл .cs через Tools → Journal → Play.");
+        return Path.Combine(Path.GetDirectoryName(Path.GetFullPath(journal)), SettingsFileName);
     }
 
     // Отдельный метод позволяет проверить алгоритм вне установленного NX.

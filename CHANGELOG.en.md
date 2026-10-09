@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-09 — Updater V1.18 and numbering V1.04
+
+- Numbering INI/XLSX files are installed beside the script in the selected working folder. Numbering locates its INI using the running NX journal path instead of the former fixed data directory.
+- The updater migrates the old settings/history pair, preserving ranges, comments and records. Existing destination files are retained; lost history is never replaced with an empty template.
+- Migration sources are checked again and guarded against writes while copying. Ordinary write failures roll back changes; old source files remain untouched.
+- The catalog requires updater V1.18: update and restart it before installing the new numbering script. Missing companion files can be restored manually even when the script version is current.
+- Added scenarios for installation into a folder with spaces, history migration, custom paths, repeat runs, missing/conflicting history, source changes and write rollback. Execution inside NX / Designcenter remains to be checked in the target environment.
+
 ## 2026-10-09 — ESKD V1.36
 
 - Restored the horizontal 70 × 14 mm upper box for all supported formats and both sheet orientations; duplicate-designation text remains rotated by 180°.

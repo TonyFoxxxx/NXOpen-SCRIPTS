@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # NX_Update_Scripts.py
-# SCRIPT_VERSION: V1.17
+# SCRIPT_VERSION: V1.18
 """
 Апдейтер NX / Designcenter для Windows: GitHub manifest или папка обновлений.
 
@@ -13,8 +13,9 @@ GitHub: Проверить загружает только manifest.json; При
 [Options] читаются; новый [Source] задаёт github/folder и постоянный Raw URL.
 Рабочие пути, кнопки NX и пользовательские INI сохраняются. Новые INI создаются
 из примеров только при первоначальной установке; существующие не заменяются.
-Пустой реестр нумератора не устанавливается поверх истории или рядом с уже
-существующим INI. Новые кнопки и New User Command не создаются.
+INI и Excel нумератора находятся рядом с установленным скриптом. При переходе
+с прежней папки переносятся существующие настройки и история. Пустой реестр
+загружается только при первой установке. Новые кнопки не создаются.
 
 Запись использует проверенный промежуточный файл рядом с назначением и замену
 целого файла. При обычной ошибке выполняется откат из памяти. При аварийном
@@ -50,15 +51,15 @@ import urllib.request
 from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 
-SCRIPT_VERSION = "V1.17"
+SCRIPT_VERSION = "V1.18"
 SCRIPT_NAME = "Обновление скриптов NX"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
-                      for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode('utf-8')
+                      for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode('utf-8')
 DEFAULT_WORKING_FOLDER = r"C:\ProgramData\NX_SCRIPTS"
 DEFAULT_UPDATE_FOLDER = ''
 RAW_ROOT = 'https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/'
 DEFAULT_MANIFEST_URL = RAW_ROOT + 'manifest.json'
-NUMBERING_DATA_FOLDER = r'C:\ProgramData\3_NX_DATA'
+NUMBERING_DATA_FOLDER = r'C:\ProgramData\3_NX_DATA'  # Legacy source, never a new installation target.
 MAX_MANIFEST_SIZE = 1024 * 1024
 HTTP_TIMEOUT = 20
 UPDATER_ID = 'nx_update_scripts'
@@ -1149,6 +1150,10 @@ def scan_github(settings, cancelled, fetcher=None, self_path=None):
                 if installation_conflict(path):
                     raise ValueError('Имя занято файлом или папкой')
                 row['status'] = 'Новый скрипт — установка'
+            if (paths and entry['id'] == 'NX_Number_Program_Folders'
+                    and current == available and not row['eligible']
+                    and _numbering_files_missing(entry, path)):
+                row.update(status='Отсутствуют файлы нумерации — восстановление', eligible=True, checked=False)
             if need_updater and family[0] != UPDATER_ID:
                 row.update(status='Сначала обновите апдейтер до ' + manifest['min_updater_version'],
                            eligible=False, checked=False)
@@ -1176,8 +1181,114 @@ def _verified_download(record, limit, fetcher):
 
 
 def _companion_target(record, script_path):
-    folder = os.path.dirname(script_path) if record['location'] == 'script' else NUMBERING_DATA_FOLDER
-    return os.path.abspath(os.path.join(folder, record['file']))
+    return os.path.abspath(os.path.join(os.path.dirname(script_path), record['file']))
+
+
+def _numbering_registry(ini_path, raw):
+    values = config_section(config_parser(raw), 'Numbering')
+    name = values.get('registryfile', '').strip()
+    if not name or ntpath.splitext(name)[1].casefold() != '.xlsx':
+        raise ValueError('В INI нумерации нужен RegistryFile с именем Excel .xlsx: ' + ini_path)
+    return os.path.abspath(os.path.join(os.path.dirname(ini_path), name))
+
+
+def _data_snapshot(path, limit=MAX_SCRIPT_SIZE):
+    _reject_link(path)
+    with open_replace_guard(path) as stream:
+        raw = stream.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError('Файл нумерации слишком большой: ' + path)
+    return raw, dict(path=os.path.abspath(path), sha256=digest(raw))
+
+
+def _numbering_files_missing(entry, script_path):
+    config = entry.get('config')
+    if config is None:
+        return False
+    ini = _companion_target(config, script_path)
+    if not os.path.isfile(ini):
+        return True
+    raw, _ = _data_snapshot(ini, MAX_CONFIG_SIZE)
+    return not os.path.isfile(_numbering_registry(ini, raw))
+
+
+def _relocated_numbering_ini(raw, filename):
+    # Retain comments, encoding marker and all settings except the relocated path.
+    text = raw.decode('utf-8-sig')
+    section, result = '', []
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            section = stripped[1:-1].strip().casefold()
+        if section == 'numbering' and '=' in line and line.split('=', 1)[0].strip().casefold() == 'registryfile':
+            ending = line[len(line.rstrip('\r\n')):]
+            line = line.split('=', 1)[0] + '=' + filename + ending
+        result.append(line)
+    return ''.join(result).encode('utf-8-sig' if raw.startswith(b'\xef\xbb\xbf') else 'utf-8')
+
+
+def _numbering_jobs(row, fetcher):
+    config = row['remote'].get('config')
+    if config is None:
+        return []
+    ini = _companion_target(config, row['path'])
+    folder = os.path.dirname(ini)
+    old_ini = os.path.abspath(os.path.join(NUMBERING_DATA_FOLDER, config['file']))
+    local_raw, local_guard = _data_snapshot(ini, MAX_CONFIG_SIZE) if os.path.lexists(ini) else (None, None)
+    local_book = _numbering_registry(ini, local_raw) if local_raw is not None else None
+    if local_book and os.path.isfile(local_book):
+        return []  # Existing settings and history are never replaced or downloaded.
+
+    if path_key(old_ini) != path_key(ini) and os.path.lexists(old_ini):
+        old_raw, old_guard = _data_snapshot(old_ini, MAX_CONFIG_SIZE)
+        old_book = _numbering_registry(old_ini, old_raw)
+        # A running old journal holds this lock until both registry writes finish.
+        guards = [old_guard]
+        if os.path.lexists(old_book + '.lock'):
+            _, lock_guard = _data_snapshot(old_book + '.lock')
+            guards.append(lock_guard)
+        if not os.path.isfile(old_book):
+            raise ValueError('Не найден прежний Excel-реестр. Восстановите историю, пустой файл не будет скачан:\n' + old_book)
+        book_raw, book_guard = _data_snapshot(old_book)
+        guards.append(book_guard)
+        target_book = os.path.join(folder, os.path.basename(old_book))
+        if local_raw is not None:
+            local_values = config_section(config_parser(local_raw), 'Numbering')
+            old_values = config_section(config_parser(old_raw), 'Numbering')
+            if (path_key(local_book) != path_key(target_book)
+                    or any(local_values.get(key) != old_values.get(key) for key in ('prefix', 'startnumber', 'endnumber'))):
+                raise ValueError('Путь реестра или диапазон в новом INI отличается от прежнего. Восстановите свой реестр:\n' + local_book)
+            guards.append(local_guard)
+        jobs = []
+        if os.path.lexists(target_book):
+            target_raw, target_guard = _data_snapshot(target_book)
+            if target_raw != book_raw:
+                raise ValueError('В новой и прежней папках разные Excel-реестры. Укажите нужный реестр в INI:\n' + ini)
+            guards.append(target_guard)
+        else:
+            jobs.append(dict(path=target_book, data=book_raw, expected=None, create=True, is_self=False, read_guards=guards))
+        if local_raw is None:
+            ini_raw = old_raw if _numbering_registry(ini, old_raw) == target_book else _relocated_numbering_ini(old_raw, os.path.basename(target_book))
+            jobs.append(dict(path=ini, data=ini_raw, expected=None, create=True, is_self=False, read_guards=guards))
+        return jobs
+
+    if local_raw is not None:
+        raise ValueError('Не найден Excel-реестр из INI. Восстановите историю; пустой файл не будет скачан:\n' + local_book)
+    additions = row['remote'].get('install_files', [])
+    history_paths = [_companion_target(record, row['path']) for record in additions]
+    history_paths += [os.path.join(NUMBERING_DATA_FOLDER, record['file']) for record in additions]
+    if row['operation'] != 'install' or any(os.path.lexists(path + suffix) for path in history_paths for suffix in ('', '.bak', '.lock')):
+        raise ValueError('Не найдены настройки нумерации. Перенесите прежний INI и Excel-реестр в папку скрипта:\n' + folder)
+    jobs = []
+    for record in [config] + additions:
+        raw = _verified_download(record, MAX_CONFIG_SIZE if record is config else MAX_SCRIPT_SIZE, fetcher)
+        if record is config:
+            registry = _numbering_registry(ini, raw)
+            if len(additions) != 1 or path_key(registry) != path_key(_companion_target(additions[0], row['path'])):
+                raise ValueError('Имя Excel-реестра в шаблоне INI не соответствует каталогу')
+        jobs.append(dict(path=_companion_target(record, row['path']), data=raw, expected=None, create=True,
+                         is_self=False, root_identity=row.get('root_identity')))
+    return jobs
 
 
 def prepare_jobs(rows, fetcher=None):
@@ -1206,7 +1317,9 @@ def prepare_jobs(rows, fetcher=None):
         jobs.append(dict(path=row['path'], data=payload, expected=row.get('target_hash'),
                          create=row['operation'] == 'install', is_self=row.get('is_self', False),
                          root_identity=row.get('root_identity') if row['operation'] == 'install' else None))
-        if row.get('origin') == 'github' and row['operation'] == 'install':
+        if row.get('origin') == 'github' and row['remote']['id'] == 'NX_Number_Program_Folders':
+            jobs.extend(_numbering_jobs(row, fetcher))
+        elif row.get('origin') == 'github' and row['operation'] == 'install':
             config = row['remote'].get('config')
             config_existed = config is not None and os.path.lexists(_companion_target(config, row['path']))
             companions = [] if config is None or config_existed else [config]
@@ -1221,7 +1334,7 @@ def prepare_jobs(rows, fetcher=None):
                 if record['file'].endswith('.ini'):
                     config_parser(raw)
                 jobs.append(dict(path=target, data=raw, expected=None, create=True, is_self=False,
-                                 allow_directory=record['location'] == 'numbering_data'))
+                                 root_identity=row.get('root_identity')))
     for job in jobs:
         key = path_key(os.path.realpath(job['path']))
         if key in seen:
@@ -1293,6 +1406,19 @@ def commit_jobs(jobs, replace=None):
     guards = {}
     try:
         with ExitStack() as locks:
+            read_sources = {}
+            for job in jobs:
+                for dependency in job.get('read_guards', []):
+                    source = dependency['path']
+                    if source in read_sources:
+                        if read_sources[source] != dependency['sha256']:
+                            raise ValueError('Файлы нумерации изменились во время подготовки: ' + source)
+                        continue
+                    _reject_link(source)
+                    stream = locks.enter_context(open_replace_guard(source))
+                    if digest(stream.read(MAX_SCRIPT_SIZE + 1)) != dependency['sha256']:
+                        raise ValueError('Файлы нумерации изменились. Выполните проверку заново:\n' + source)
+                    read_sources[source] = dependency['sha256']
             for job in jobs:
                 path = os.path.abspath(job['path'])
                 if path != job['path']:

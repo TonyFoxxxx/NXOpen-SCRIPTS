@@ -65,7 +65,7 @@ Background references used by the Russian guide: [NX Open User Guide](https://ma
 
 Download the raw script files or the repository ZIP and put the required files from `scripts/` into your working folder. Keep their filenames unchanged.
 
-Copy the relevant examples from `config/`, remove `.example` from each name and enter your settings. Do not overwrite existing working INI files. The numbering script uses the fixed configuration path `C:\ProgramData\3_NX_DATA\NX_Numbering_Settings_v1.0.ini`; its empty XLSX template is for the initial setup only, not for replacing numbering history.
+Copy the relevant examples from `config/`, remove `.example` from each name and enter your settings. Do not overwrite existing working INI files. The numbering INI and XLSX belong beside its `.cs` in the selected working folder. Update the updater to V1.18 and restart it before installing numbering V1.04. It migrates the existing pair from `C:\ProgramData\3_NX_DATA` if the destination does not already have it. The empty XLSX template is only for a first setup; restore lost history instead of replacing it with a blank workbook.
 
 You do not need to copy `docs/`, `tools/`, `tests/` or `manifest.json` to the working folder. Run journals inside NX.
 

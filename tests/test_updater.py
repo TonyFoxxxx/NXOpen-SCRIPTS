@@ -45,7 +45,8 @@ class UpdaterTests(unittest.TestCase):
             filename = 'NX_Numbering_Settings_v1.0.ini' if numbering else Path(name).stem + '.ini'
             cfg = dict(file=filename, path='config/' + filename[:-4] + '.example.ini',
                        location='numbering_data' if numbering else 'script')
-            data = b'[Numbering]\nRegistryFile=NX_Numbering_Register_v1.0.xlsx\n' if numbering else b'[Example]\npath=\n'
+            data = (b'[Numbering]\nPrefix=O\nStartNumber=1659\nEndNumber=5000\n'
+                    b'RegistryFile=NX_Numbering_Register_v1.0.xlsx\n') if numbering else b'[Example]\npath=\n'
             cfg['sha256'] = u.digest(data)
             self.payloads[cfg['path']] = data
             record['config'] = cfg
@@ -195,8 +196,10 @@ class UpdaterTests(unittest.TestCase):
     def test_new_numbering_installs_empty_template_only_once(self):
         record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
         u.apply_updates(self.scan(), self.fetch)
-        register = self.data / 'NX_Numbering_Register_v1.0.xlsx'
+        register = self.root / 'NX_Numbering_Register_v1.0.xlsx'
         self.assertEqual(register.read_bytes(), self.payloads[record['install_files'][0]['path']])
+        self.assertTrue((self.root / 'NX_Numbering_Settings_v1.0.ini').is_file())
+        self.assertFalse(self.data.exists())
         register.write_bytes(b'precious numbering history')
         (self.root / record['file']).write_bytes(source('V1.09', '.cs'))
         u.apply_updates(self.scan(), self.fetch)
@@ -205,11 +208,194 @@ class UpdaterTests(unittest.TestCase):
     def test_existing_numbering_ini_never_recreates_lost_registry(self):
         self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
         self.data.mkdir()
-        ini = self.data / 'NX_Numbering_Settings_v1.0.ini'
+        ini = self.root / 'NX_Numbering_Settings_v1.0.ini'
         ini.write_bytes(b'[Numbering]\nRegistryFile=custom_history.xlsx\n')
-        u.apply_updates(self.scan(), self.fetch)
-        self.assertEqual([p.name for p in self.data.iterdir()], [ini.name])
+        with self.assertRaisesRegex(ValueError, 'Excel'):
+            u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual([p.name for p in self.root.iterdir() if p.is_file()], [ini.name])
         self.assertEqual(len(self.calls), 2)  # manifest + selected C# source
+
+    def legacy_numbering(self, record, filename='NX_Numbering_Register_v1.0.xlsx', absolute=False):
+        self.data.mkdir(exist_ok=True)
+        book = self.data / filename
+        book.write_bytes(b'issued numbers 1659,1660,1661; keep every byte')
+        ini = self.data / record['config']['file']
+        raw = ('; Settings and comments must survive\r\n[Numbering]\r\nPrefix=O\r\n'
+               'StartNumber=1659\r\nEndNumber=5000\r\nRegistryFile=' +
+               (str(book) if absolute else filename) + '\r\n').encode('utf-8-sig')
+        ini.write_bytes(raw)
+        return ini, book
+
+    def test_numbering_initial_files_follow_selected_folder_with_spaces(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        target = self.root / '2. NX_Scripts'
+        target.mkdir()
+        self.settings['working_folder'] = str(target)
+        u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual({p.name for p in target.iterdir()}, {
+            record['file'], record['config']['file'], record['install_files'][0]['file']})
+        self.assertFalse(self.data.exists())
+
+    def test_numbering_update_migrates_old_history_and_ini_without_downloading_templates(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record)
+        (self.root / record['file']).write_bytes(source('V1.03', '.cs'))
+        u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual((self.root / ini.name).read_bytes(), ini.read_bytes())
+        self.assertEqual((self.root / book.name).read_bytes(), book.read_bytes())
+        self.assertEqual(len(self.calls), 2)
+        self.assert_no_stages()
+
+    def test_numbering_migration_relocates_absolute_custom_registry_preserving_range(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record, filename='My history.xlsx', absolute=True)
+        before = ini.read_bytes()
+        u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual((self.root / book.name).read_bytes(), book.read_bytes())
+        self.assertEqual((self.root / ini.name).read_bytes(), before.replace(str(book).encode(), book.name.encode()))
+        self.assertEqual(ini.read_bytes(), before)
+
+    def test_numbering_can_complete_ini_only_move_from_legacy_folder(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record)
+        (self.root / ini.name).write_bytes(ini.read_bytes())
+        u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual((self.root / book.name).read_bytes(), book.read_bytes())
+        self.assertEqual((self.root / ini.name).read_bytes(), ini.read_bytes())
+
+    def test_numbering_existing_custom_history_takes_precedence_over_legacy_folder(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record)
+        current = self.root / 'other.xlsx'
+        current.write_bytes(b'current history')
+        config = b'[Numbering]\nPrefix=P\nStartNumber=6000\nEndNumber=7000\nRegistryFile=other.xlsx\n'
+        (self.root / ini.name).write_bytes(config)
+        u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual(current.read_bytes(), b'current history')
+        self.assertEqual((self.root / ini.name).read_bytes(), config)
+        self.assertFalse((self.root / book.name).exists())
+        self.assertEqual(len(self.calls), 2)
+
+    def test_numbering_lost_legacy_registry_blocks_installation_without_blank_history(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record)
+        book.unlink()
+        with self.assertRaisesRegex(ValueError, 'прежний Excel'):
+            u.apply_updates(self.scan(), self.fetch)
+        self.assertFalse((self.root / record['file']).exists())
+        self.assertFalse((self.root / ini.name).exists())
+
+    def test_numbering_existing_script_without_settings_does_not_reset_history(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        script = self.root / record['file']
+        before = source('V1.03', '.cs')
+        script.write_bytes(before)
+        with self.assertRaisesRegex(ValueError, 'прежний INI'):
+            u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual(script.read_bytes(), before)
+        self.assertFalse((self.root / record['install_files'][0]['file']).exists())
+
+    def test_numbering_orphaned_legacy_backup_prevents_blank_registry(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        self.data.mkdir()
+        backup = self.data / (record['install_files'][0]['file'] + '.bak')
+        backup.write_bytes(b'old history, lost ini')
+        with self.assertRaisesRegex(ValueError, 'прежний INI'):
+            u.apply_updates(self.scan(), self.fetch)
+        self.assertFalse((self.root / record['file']).exists())
+        self.assertEqual(backup.read_bytes(), b'old history, lost ini')
+
+    def test_numbering_conflicting_destination_registry_is_not_overwritten(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record)
+        target = self.root / book.name
+        target.write_bytes(b'different history')
+        with self.assertRaisesRegex(ValueError, 'разные Excel'):
+            u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual(target.read_bytes(), b'different history')
+        self.assertFalse((self.root / ini.name).exists())
+
+    def test_numbering_changed_source_after_preparation_aborts_before_writes(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record)
+        script = self.root / record['file']
+        before = source('V1.03', '.cs')
+        script.write_bytes(before)
+        jobs = u.prepare_jobs(self.scan(), self.fetch)
+        book.write_bytes(b'another number was just issued')
+        with self.assertRaisesRegex(ValueError, 'изменились'):
+            u.commit_jobs(jobs)
+        self.assertEqual(script.read_bytes(), before)
+        self.assertFalse((self.root / ini.name).exists())
+        self.assertFalse((self.root / book.name).exists())
+        self.assert_no_stages()
+
+    def test_numbering_active_legacy_lock_aborts_before_writes(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record)
+        lock = Path(str(book) + '.lock')
+        lock.write_bytes(b'')
+        original = u.open_replace_guard
+
+        def busy(path):
+            if path == str(lock):
+                raise PermissionError('legacy numbering is running')
+            return original(path)
+
+        with patch.object(u, 'open_replace_guard', side_effect=busy), self.assertRaises(PermissionError):
+            u.apply_updates(self.scan(), self.fetch)
+        self.assertFalse((self.root / record['file']).exists())
+        self.assertFalse((self.root / ini.name).exists())
+        self.assertFalse((self.root / book.name).exists())
+
+    def test_numbering_moved_ini_with_different_range_does_not_import_old_history(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record)
+        changed = ini.read_bytes().replace(b'StartNumber=1659', b'StartNumber=2000')
+        (self.root / ini.name).write_bytes(changed)
+        with self.assertRaisesRegex(ValueError, 'диапазон'):
+            u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual((self.root / ini.name).read_bytes(), changed)
+        self.assertFalse((self.root / book.name).exists())
+
+    def test_numbering_migration_failure_rolls_back_script_and_copied_registry(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record)
+        script = self.root / record['file']
+        before = source('V1.03', '.cs')
+        script.write_bytes(before)
+        install = u._install_staged
+
+        def fail_ini(stage, target):
+            if target.endswith('.ini'):
+                raise OSError('simulated disk error')
+            return install(stage, target)
+
+        with patch.object(u, '_install_staged', side_effect=fail_ini), self.assertRaises(RuntimeError):
+            u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual(script.read_bytes(), before)
+        self.assertFalse((self.root / ini.name).exists())
+        self.assertFalse((self.root / book.name).exists())
+        self.assertTrue(book.is_file())
+        self.assert_no_stages()
+
+    def test_numbering_same_version_missing_files_can_be_restored_manually(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        ini, book = self.legacy_numbering(record)
+        (self.root / record['file']).write_bytes(u.pack_script(self.payloads[record['path']], record['file']))
+        row = self.scan()[0]
+        self.assertTrue(row['eligible'])
+        self.assertFalse(row['checked'])
+        u.apply_updates([row], self.fetch)
+        self.assertEqual((self.root / book.name).read_bytes(), book.read_bytes())
+        self.assertFalse(self.scan()[0]['eligible'])
+
+    def test_numbering_template_checksum_failure_leaves_no_installed_files(self):
+        record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        self.payloads[record['install_files'][0]['path']] += b'broken download'
+        with self.assertRaisesRegex(ValueError, 'SHA-256'):
+            u.apply_updates(self.scan(), self.fetch)
+        self.assertEqual(list(self.root.iterdir()), [])
 
     def test_concurrent_local_edit_aborts_before_any_write(self):
         self.add_script()

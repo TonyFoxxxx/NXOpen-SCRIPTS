@@ -18,7 +18,7 @@
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.45 | Вывод управляющих программ и FANUC BIN в папку станка или на носитель. | [Все функции](docs/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.02 | Добавление минимального Z траектории к именам операций. | [Все функции](docs/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |
-| [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.03 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
+| [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.04 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Заполнение описаний инструментов диаметром и номерами T, H, D. | [Все функции](docs/tool-description.md) |
 | [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.36 | Оформление рамки, основной надписи и аннотаций чертежа по ЕСКД. | [Все функции](docs/eskd.md) |
 | [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.11 | Экспорт текущего листа в PDF с настройкой толщин линий. | [Все функции](docs/export-pdf.md) |
@@ -26,17 +26,15 @@
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Переименование файлов деталей и сборок с обновлением ссылок компонентов. | [Все функции](docs/rename-assemblies.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Открытие папки текущего PRT в Проводнике. | [Все функции](docs/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Открытие папки карт наладки текущего проекта. | [Все функции](docs/open-setup-cards-folder.md) |
-| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.17 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
+| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.18 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — ЕСКД V1.36 · 09.10.2026
+### Последнее обновление — Апдейтер V1.18 и нумератор V1.04 · 09.10.2026
 
-- Верхняя рамка дублирующего обозначения горизонтальная на всех поддерживаемых листах.
-- Длинный текст основной надписи переносится, затем при необходимости уменьшается шрифт. Размеры таблицы сохраняются.
-- Добавлена проверка подгонки и решёток в ячейках после обновления листа.
-
-[Изменения V1.36, проверки и ограничения](docs/eskd.md#изменения-последней-версии).
+- INI и Excel нумератора устанавливаются рядом со скриптом в выбранной рабочей папке.
+- Прежние настройки и выданные номера переносятся из `C:\ProgramData\3_NX_DATA`; существующие файлы не перезаписываются.
+- Сначала обновите апдейтер, перезапустите его, затем обновите нумератор. [Порядок перехода](docs/updater.md#переход-на-v118).
 
 ## Установка
 
@@ -74,7 +72,7 @@
 | Карта наладки | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Setup_Prototype.example.ini) | `NX_Setup_Prototype.ini` рядом со скриптом; `[SetupCard] programmer`. |
 | Постпроцессирование | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Postprocess_To_Machine.example.ini) | `NX_Postprocess_To_Machine.ini` рядом со скриптом; свои посты и папки станков. |
 | ЕСКД | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_ESKD_Settings.example.ini) | `NX_ESKD_Settings.ini` рядом со скриптом; надписи и оформление. |
-| Нумерация | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Numbering_Settings_v1.0.example.ini) | `C:\ProgramData\3_NX_DATA\NX_Numbering_Settings_v1.0.ini` и реестр из `RegistryFile`. |
+| Нумерация | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Numbering_Settings_v1.0.example.ini) | `NX_Numbering_Settings_v1.0.ini` рядом со скриптом и реестр из `RegistryFile`; апдейтер переносит прежнюю пару при обновлении. |
 | Апдейтер | [Скачать](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/config/NX_Update_Scripts.example.ini) | `NX_Update_Scripts.ini` рядом со скриптом; источник и рабочая папка. |
 
 При ручной установке удалите `.example` из имени файла и заполните параметры. Примеры не заменяют существующие рабочие INI или историю нумерации. Подробности — в [руководстве по настройкам](docs/configuration.md).
