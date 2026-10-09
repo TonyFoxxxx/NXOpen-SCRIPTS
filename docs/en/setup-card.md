@@ -8,15 +8,15 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.48 · 2026-10-07**
+**V2.49 · 2026-10-09**
 
-- Three initially unchecked preparation options in the setup-selection window: operation numbering, tool Description and Zmin in operation names.
-- Description reveals two mutually exclusive inline formats: diameter only (default) or diameter with T/H/D. Hiding and showing them retains the choice for the current window.
-- Preparation follows the postprocessing rules: numbering within each selected folder; descriptions for all supported tools in the work part; Zmin for operations selected before launch, or the whole project when selection was empty.
-- Preparation runs after setup/component confirmation and before generating the sheet. Cancellation or failure before writing HTML rolls it back in NX. Successful changes can be undone with Ctrl+Z; the PRT is not saved automatically.
-- Already calculated Zmin values are reused in the table. Output paths, INI and the browser editor are retained, without new service files.
+- The startup menu has an initially unchecked “Create a faceted 3D model on the first sheet” option. When it is off, NX fits visible geometry to the window without changing the current orientation and captures an image for the first sheet.
+- Enabling it reveals the accuracy coefficient (default 1) and maximum triangle count (default 500,000). Accuracy must be greater than 0 and no greater than 1; decimal commas and points are accepted. The triangle limit is a positive integer and may be increased.
+- A smaller coefficient reduces the detail of newly generated meshes and normally their data size. Part dimensions are unchanged. At 1 the tolerances are 0.01 mm and 3°; at 0.5 they are 0.02 mm and 6°. Tolerances are divided by the coefficient, with the angular tolerance capped at 180°.
+- The selected limit applies to the entire model and is also used by the browser. Exceeding it produces a short instruction to reduce accuracy or increase the triangle limit. The previous sheet is retained.
+- Re-export replaces the previous mesh with the new screenshot or the previous screenshot with the new mesh, including partial setup updates. The tool catalog remains.
 
-Checks cover repeated runs, the 99/100 numbering boundary, name conflicts, both description formats, missing D, write failures and cancellation using an NX API model. New controls and existing drawing are checked in real Windows dialogs. Repository tests run on Windows and Linux; execution in the target NX / Designcenter still needs separate validation. See the [changelog](../../CHANGELOG.en.md).
+30 portable checks passed, covering coefficient propagation, millimetres/inches, configurable limits, concise limit errors, fitting before capture and camera restoration after failures. Chromium checks covered mesh → screenshot → mesh through browser saving and partial re-export. Four native Windows dialog checks were skipped on Linux; execution in NX / Designcenter has not been verified. See the [changelog](../../CHANGELOG.en.md).
 
 ## Building the sheet in NX
 
@@ -26,8 +26,16 @@ Checks cover repeated runs, the 99/100 numbering boundary, name conflicts, both 
 - Top, side and isometric views are created relative to the MCS, each with matching-camera IPW and NO IPW variants.
 - X/Y/Z arrows are anchored at the MCS origin. Geometry is fitted with margins.
 - The document includes tools for each setup and a project-wide tool catalog. Duplicate T numbers trigger a warning and are marked.
-- The first sheet contains the project tool catalog and a rotatable 3D model of the initially visible project geometry in the original NX view. Images and model geometry are embedded in the HTML.
+- The first sheet contains the project tool catalog. Enabling the startup option adds a rotatable 3D model of the initially visible project geometry in the original NX view. Images and model geometry are embedded in the HTML.
 - Progress shows the current stage and percentage. If generation is incomplete, the previously completed HTML is retained.
+
+### First-sheet model
+
+“Create a faceted 3D model on the first sheet” resets to off on every launch. In this mode NX fits the current view without changing its orientation, captures it and embeds the image in the first sheet. The camera and display settings are restored after capture, including on failure. The PNG uses the existing sheet staging folder and is deleted immediately after embedding.
+
+Enabling the option reveals the coefficient on its right and the triangle limit below. Smaller coefficients produce coarser meshes and normally smaller HTML files. Triangle counts depend on the geometry and are not specified by multiplying the limit by the coefficient. The coefficient does not change part dimensions, IPW or setup views.
+
+The default is 500,000 triangles for the entire model, including repeated components. Enter any integer from 1 to 2,147,483,647, with or without spaces. Actual capacity depends on NX and browser resources. The coefficient controls solid/sheet body tessellation; existing NX facet bodies retain their existing mesh. Settings are not persisted on disk.
 
 ### Preparation options
 
@@ -127,3 +135,4 @@ Regenerated setups retain saved notes, their headings and heights, and X/Y/Z loc
 - Missing, unavailable, out-of-date or unsupported paths leave Zmin blank. An unavailable ToolAxis is never replaced with fixed MCS Z. Check values on a known control project; live execution in the target NX / Designcenter requires separate validation.
 
 [Configuration](configuration.md#setup-sheets).
+

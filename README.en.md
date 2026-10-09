@@ -14,7 +14,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 | File | Version | Purpose | Guide |
 | --- | --- | --- | --- |
-| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.48 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
+| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.49 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.45 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.02 | Add minimum toolpath Z to operation names. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
@@ -30,11 +30,11 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Updater V1.18 and numbering V1.04 · 2026-10-09
+### Latest update — Setup sheets V2.49 · 2026-10-09
 
-- The numbering INI and Excel register are installed beside the script in the selected working folder.
-- Previous settings and issued numbers are migrated from `C:\ProgramData\3_NX_DATA`; existing destination files are retained.
-- Update and restart the updater first, then update the numbering script. [Upgrade steps](docs/en/updater.md#upgrading-to-v118).
+- A fitted screenshot of the current NX view, or an optional rotatable 3D model.
+- Accuracy coefficient and configurable triangle limit, defaulting to 500,000.
+- Concise limit errors and screenshot/model replacement on re-export. [All changes](docs/en/setup-card.md#latest-release).
 
 ## Installation
 

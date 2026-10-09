@@ -301,7 +301,7 @@ class PreparationTests(unittest.TestCase):
         preparation.finish(False)
         self.assertEqual([tool.general for tool in self.m.tools], ['General old'] * 2)
 
-    def run_main(self, publish=True, cancel=False):
+    def run_main(self, publish=True, cancel=False, model_options=None, model_error=None):
         m = self.m
         self.m.selection = [1]
         m.part.ModelingViews = NS(WorkView=NS(GetAxis=lambda axis: NS(X=1, Y=0, Z=0)))
@@ -310,6 +310,7 @@ class PreparationTests(unittest.TestCase):
         components = NS(restore=lambda: [], apply=lambda keys: None, dirty=False)
         def jobs(nx, ui, part, state):
             state['_preparation_options'] = dict(number_operations=True, update_descriptions=True, add_zmin=True)
+            state['_preparation_options'].update(model_options or {})
             m.selection = [3]  # Startup modal changes navigator selection after snapshot.
             return m.jobs
         def confirm(nx, part, state):
@@ -328,7 +329,8 @@ class PreparationTests(unittest.TestCase):
                      ask_all_setup_components=Mock(side_effect=CARD.ExportCancelled() if cancel else None, return_value=[set()]),
                      read_existing_card=Mock(return_value=None), plan_setup_update=Mock(), ExportProgress=Mock(),
                      make_output_folder=Mock(return_value=Path('/project/output')), prepare_capture_folders=Mock(),
-                     collect_project_model=Mock(return_value={}), ensure_view_triad=Mock(return_value=[]),
+                     collect_project_model=Mock(return_value={}, side_effect=model_error), capture_project_view=Mock(return_value='data:image/png;base64,snapshot'),
+                     ensure_view_triad=Mock(return_value=[]),
                      activate_first_mcs=Mock(), run=Mock(side_effect=render), fit_final_view=Mock(side_effect=fit),
                      collect_document_assets=Mock(),
                      finalize_output=Mock(return_value=Path('/project/card.html'), side_effect=None if publish else RuntimeError('write failed')),
@@ -344,6 +346,38 @@ class PreparationTests(unittest.TestCase):
         mocks['finalize_output'].assert_called_once()
         self.assertFalse(self.m.undone)
         self.assertIn('Zmin:', self.m.ui.NXMessageBox.Show.call_args.args[2])
+
+    def test_main_omits_model_when_checkbox_is_off(self):
+        observed, mocks = self.run_main(model_options={'create_project_model': False, 'project_model_accuracy': .5})
+        self.assertTrue(observed)
+        mocks['collect_project_model'].assert_not_called()
+        mocks['ExportProgress'].return_value.mesh.assert_not_called()
+        mocks['capture_project_view'].assert_called_once()
+        self.assertEqual(mocks['prepare_capture_folders'].call_args.kwargs, {'project_view': True})
+        report = mocks['finalize_output'].call_args.args[1]
+        self.assertIsNone(report['project_model'])
+        self.assertEqual(report['project_view_image'], 'data:image/png;base64,snapshot')
+
+    def test_main_passes_selected_accuracy_to_model_builder(self):
+        observed, mocks = self.run_main(model_options={'create_project_model': True, 'project_model_accuracy': .5,
+                                                     'project_model_triangle_limit': 1000000})
+        self.assertTrue(observed)
+        mocks['collect_project_model'].assert_called_once()
+        self.assertEqual(mocks['collect_project_model'].call_args.kwargs, {'accuracy': .5, 'triangle_limit': 1000000})
+        mocks['ExportProgress'].return_value.mesh.assert_called_once()
+        mocks['capture_project_view'].assert_not_called()
+        self.assertEqual(mocks['prepare_capture_folders'].call_args.kwargs, {'project_view': False})
+
+    def test_main_model_limit_shows_only_the_short_actionable_error(self):
+        try:
+            CARD.check_project_triangle_budget(881450, 500000)
+        except CARD.ProjectModelLimitError as error:
+            failure = error
+        observed, mocks = self.run_main(model_options={'create_project_model': True}, model_error=failure)
+        self.assertFalse(observed)
+        mocks['finalize_output'].assert_not_called()
+        self.assertEqual(self.m.ui.NXMessageBox.Show.call_args.args[2], str(failure))
+        self.assertTrue(self.m.undone, 'Preparation is rolled back after a mesh limit failure')
 
     def test_main_html_write_failure_rolls_back_preparation(self):
         original = [op.Name for op in self.m.ops]
@@ -364,3 +398,4 @@ class PreparationTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

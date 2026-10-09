@@ -35,6 +35,9 @@ class NativeChoiceTests(unittest.TestCase):
                 (self.u, 'GetClientRect', w.BOOL, [w.HWND, c.POINTER(w.RECT)]),
                 (self.u, 'GetWindowRect', w.BOOL, [w.HWND, c.POINTER(w.RECT)]),
                 (self.u, 'IsWindowVisible', w.BOOL, [w.HWND]),
+                (self.u, 'IsWindowEnabled', w.BOOL, [w.HWND]),
+                (self.u, 'SetWindowTextW', w.BOOL, [w.HWND, w.LPCWSTR]),
+                (self.u, 'GetWindowTextW', c.c_int, [w.HWND, w.LPWSTR, c.c_int]),
                 (self.u, 'ShowWindow', w.BOOL, [w.HWND, c.c_int]),
                 (self.u, 'GetDC', w.HDC, [w.HWND]),
                 (self.u, 'ReleaseDC', c.c_int, [w.HWND, w.HDC]),
@@ -344,7 +347,11 @@ class NativeChoiceTests(unittest.TestCase):
                 box = w.RECT()
                 self.assertTrue(self.u.GetWindowRect(control(ident), c.byref(box)))
                 return box.left, box.top, box.right, box.bottom
-            self.assertEqual([checked(ident) for ident in (230, 231, 234)], [0, 0, 0])
+            self.assertEqual([checked(ident) for ident in (230, 231, 234, 235)], [0, 0, 0, 0])
+            self.assertFalse(self.u.IsWindowVisible(control(236)))
+            self.assertFalse(self.u.IsWindowVisible(control(237)))
+            self.assertFalse(self.u.IsWindowVisible(control(238)))
+            self.assertFalse(self.u.IsWindowVisible(control(239)))
             self.assertEqual((checked(232), checked(233)), (1, 0))
             self.assertFalse(self.u.IsWindowVisible(control(232)))
             self.assertFalse(self.u.IsWindowVisible(control(233)))
@@ -375,12 +382,38 @@ class NativeChoiceTests(unittest.TestCase):
             tree = control(101)
             root = self.u.SendMessageW(tree, 0x110A, 0, 0)
             self.click(tree, self.point(tree, root, True, 0x40))
+            click_label(235, True)
+            self.assertEqual(checked(235), 1, 'Model checkbox double click toggles once')
+            self.assertTrue(self.u.IsWindowVisible(control(236)))
+            self.assertTrue(self.u.IsWindowVisible(control(237)))
+            self.assertTrue(self.u.IsWindowVisible(control(238)))
+            self.assertTrue(self.u.IsWindowVisible(control(239)))
+            self.assertLessEqual(bounds(235)[2], bounds(236)[0])
+            self.assertLess(bounds(237)[3], bounds(101)[1])
+            self.assertLess(bounds(239)[3], bounds(101)[1])
+            self.u.SetWindowTextW(control(237), '1.1')
+            self.assertFalse(self.u.IsWindowEnabled(control(1)), 'Over-one accuracy cannot be confirmed')
+            self.u.SetWindowTextW(control(237), '0')
+            self.assertFalse(self.u.IsWindowEnabled(control(1)), 'Zero accuracy cannot be confirmed')
+            click_label(235)
+            self.assertFalse(self.u.IsWindowVisible(control(237)))
+            self.assertTrue(self.u.IsWindowEnabled(control(1)), 'Hidden accuracy does not block export')
+            click_label(235)
+            self.assertFalse(self.u.IsWindowEnabled(control(1)), 'Reopening retains the entered value')
+            self.u.SetWindowTextW(control(237), '0,5')
+            self.assertTrue(self.u.IsWindowEnabled(control(1)), 'Decimal comma is accepted')
+            self.u.SetWindowTextW(control(239), '0')
+            self.assertFalse(self.u.IsWindowEnabled(control(1)), 'Zero triangle limit cannot be confirmed')
+            self.u.SetWindowTextW(control(239), '1 000 000')
+            self.assertTrue(self.u.IsWindowEnabled(control(1)), 'Triangle limits above 500000 are accepted')
             self.emit(self.capture(parent, children=True), 'preparation')
             self.u.SendMessageW(parent, 0x111, 1, 0)  # Real OK handler must read all option states.
 
         self.assertEqual(self.dialog(lambda: CARD.show_setup_folders(rows, options), check), ['root'])
         self.assertEqual(options, dict(number_operations=True, update_descriptions=True,
-                                       include_tool_numbers=True, add_zmin=True))
+                                       include_tool_numbers=True, add_zmin=True,
+                                       create_project_model=True, project_model_accuracy=.5,
+                                       project_model_triangle_limit=1000000))
 
     def test_preparation_cancel_does_not_publish_option_changes(self):
         rows = [dict(key='root', name='NC_PROGRAM', parent=None, ancestors=(), operation_count=2)]
@@ -394,3 +427,4 @@ class NativeChoiceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

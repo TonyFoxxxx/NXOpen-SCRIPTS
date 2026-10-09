@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-09 — Setup sheets V2.49
+
+- Added an optional first-sheet faceted 3D model. With it off, NX fits the current orientation and captures a screenshot; camera and display settings are restored afterwards.
+- Enabling it reveals an accuracy coefficient (0 < k ≤ 1) and combined triangle limit (default 500,000). Lower coefficients reduce detail; higher triangle limits are supported by both export and the browser.
+- Exceeding the limit shows a concise instruction to reduce accuracy or increase the limit. The previous document is retained.
+- Re-export switches between screenshot and mesh, including partial setup updates. Updated the updater catalog and Russian/English documentation.
+- 30 portable checks and the browser mesh → screenshot → mesh scenario passed. Four native Windows checks were skipped on Linux; target NX / Designcenter execution still requires separate validation.
+
 ## 2026-10-09 — Updater V1.18 and numbering V1.04
 
 - Numbering INI/XLSX files are installed beside the script in the selected working folder. Numbering locates its INI using the running NX journal path instead of the former fixed data directory.

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.48
+# SCRIPT_VERSION: V2.49
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -42,10 +42,14 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 Остальные установы и сохранённые ручные правки переносятся без пересоздания.
 «Инструменты проекта» — всегда один первый лист, при необходимости в две колонки.
 Если двух колонок недостаточно, таблица равномерно уменьшается до размеров листа.
-Только на этом листе справа вверху — фасетная 3D-модель в текущем ракурсе NX.
+Фасетная 3D-модель первого листа включается галочкой в стартовом меню.
+По умолчанию галочка снята; после включения доступны коэффициент 0 < k ≤ 1 и лимит треугольников.
+Без галочки текущий ракурс вписывается в окно NX и снимается для первого листа.
+При повторном выводе снимок заменяет прежнюю модель, а модель — прежний снимок.
 Мышь вращает модель; Shift + мышь сдвигает; колесо меняет масштаб.
 Сетка, выбранный ракурс и изображение для печати хранятся в самом HTML.
-Криволинейные поверхности выгружаются с допуском 0.01 мм и 3°; нормали сглажены.
+При k=1 допуски равны 0.01 мм и 3°; при уменьшении k допуски делятся на k.
+Угловой допуск ограничен 180°; предел всей модели задаётся в меню, по умолчанию 500 000.
 Модель перемещается по первому листу; таблицы адаптируются к её габаритам.
 Масштаб 1–10000%; на печати границей остаётся формат A4.
 Порядок и сквозная нумерация сохраняются при сохранении и повторном экспорте.
@@ -68,7 +72,7 @@ import configparser
 from contextlib import contextmanager
 import copy
 import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 import html
 import http.client
@@ -92,10 +96,10 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.48"
+SCRIPT_VERSION = "V2.49"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
-                      for index, value in enumerate((63, 17, 83, 42, 230, 250, 230, 245, 243, 175, 179, 174, 153))).decode("utf-8")
+                      for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
 TITLE = SCRIPT_NAME + " — " + SCRIPT_VERSION + " — " + SCRIPT_AUTHOR
 DEFAULT_PROGRAMMER = ''
 SETTINGS_FILENAME = 'NX_Setup_Prototype.ini'
@@ -1844,7 +1848,30 @@ class NativeChoiceRows:
 
 def preparation_options():
     return dict(number_operations=False, update_descriptions=False,
-                include_tool_numbers=False, add_zmin=False)
+                include_tool_numbers=False, add_zmin=False,
+                create_project_model=False, project_model_accuracy=1.,
+                project_model_triangle_limit=PROJECT_MODEL_DEFAULT_TRIANGLES)
+
+
+def parse_project_model_accuracy(value):
+    message = 'Коэффициент точности должен быть больше 0 и не больше 1.'
+    try:
+        number = Decimal(str(value).strip().replace(',', '.'))
+    except (InvalidOperation, ValueError):
+        raise ValueError(message) from None
+    if not number.is_finite() or not 0 < number <= 1:
+        raise ValueError(message)
+    accuracy = float(number)
+    if accuracy <= 0 or not math.isfinite(.01 / accuracy):
+        raise ValueError(message)
+    return accuracy
+
+
+def parse_project_model_triangle_limit(value):
+    text = ''.join(str(value).split())
+    if not re.fullmatch(r'[0-9]+', text) or not 1 <= int(text) <= 2147483647:
+        raise ValueError('Лимит треугольников: целое число от 1 до 2 147 483 647.')
+    return int(text)
 
 
 def setup_folders_dialog_template():
@@ -1858,13 +1885,18 @@ def setup_folders_dialog_template():
         (0x80, 232, 'Только диаметр — ⌀6', 26, 83, 464, 14, 0x34009),
         (0x80, 233, 'Диаметр и параметры T, H, D — ⌀6_T2_H3_D4', 26, 104, 464, 14, 0x14009),
         (0x80, 234, 'Добавить Zmin к именам операций', 10, 83, 480, 14, 0x34003),
-        ('SysTreeView32', 101, '', 10, 105, 480, 196, 0x810127),
-        (0x82, 102, 'Выбрано установов: 0', 10, 308, 480, 14, 0),
-        (0x80, 222, 'Снять все', 10, 331, 74, 22, 0x10000),
-        (0x80, 1, 'Далее', 326, 331, 78, 22, 0x30001),
-        (0x80, 2, 'Отмена', 412, 331, 78, 22, 0x10000),
+        (0x80, 235, 'Создать фасетную 3D-модель на первом листе', 10, 104, 310, 14, 0x14003),
+        (0x82, 236, 'Коэффициент (до 1):', 326, 105, 108, 14, 0),
+        (0x81, 237, '1', 440, 102, 50, 18, 0x810081),
+        (0x82, 238, 'Максимальное количество треугольников:', 26, 126, 340, 14, 0),
+        (0x81, 239, format(PROJECT_MODEL_DEFAULT_TRIANGLES, ',').replace(',', ' '), 374, 123, 116, 18, 0x810081),
+        ('SysTreeView32', 101, '', 10, 126, 480, 196, 0x810127),
+        (0x82, 102, 'Выбрано установов: 0', 10, 329, 480, 14, 0),
+        (0x80, 222, 'Снять все', 10, 352, 74, 22, 0x10000),
+        (0x80, 1, 'Далее', 326, 352, 78, 22, 0x30001),
+        (0x80, 2, 'Отмена', 412, 352, 78, 22, 0x10000),
     ]
-    data = bytearray(struct.pack('<IIHhhhh', 0x80C808C0, 0, len(controls), 0, 0, 500, 364))
+    data = bytearray(struct.pack('<IIHhhhh', 0x80C808C0, 0, len(controls), 0, 0, 500, 385))
     data += struct.pack('<HH', 0, 0) + text(TITLE + ' — Выбор установов')
     data += struct.pack('<H', 9) + text('Segoe UI')
     for cls, ident, label, x, y, width, height, style in controls:
@@ -1912,6 +1944,7 @@ def show_setup_folders(rows, options=None):
         'GetDlgItem': ([w.HWND, ctypes.c_int], w.HWND), 'SetFocus': ([w.HWND], w.HWND),
         'EnableWindow': ([w.HWND, w.BOOL], w.BOOL), 'GetSysColor': ([ctypes.c_int], w.DWORD),
         'SetWindowTextW': ([w.HWND, w.LPCWSTR], w.BOOL),
+        'GetWindowTextW': ([w.HWND, w.LPWSTR, ctypes.c_int], ctypes.c_int),
         'ShowWindow': ([w.HWND, ctypes.c_int], w.BOOL),
         'MapDialogRect': ([w.HWND, ctypes.POINTER(w.RECT)], w.BOOL),
         'MoveWindow': ([w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.BOOL], w.BOOL),
@@ -1951,14 +1984,46 @@ def show_setup_folders(rows, options=None):
         shown = user.SendMessageW(user.GetDlgItem(state['window'], 231), 0xF0, 0, 0) == 1
         for ident in (232, 233):
             user.ShowWindow(user.GetDlgItem(state['window'], ident), 5 if shown else 0)
+        mesh_shown = user.SendMessageW(user.GetDlgItem(state['window'], 235), 0xF0, 0, 0) == 1
+        for ident in (236, 237, 238, 239):
+            user.ShowWindow(user.GetDlgItem(state['window'], ident), 5 if mesh_shown else 0)
         offset = 42 if shown else 0
         for ident, rect in ((234, (10, 83 + offset, 490, 97 + offset)),
-                            (101, (10, 105 + offset, 490, 301))):
+                            (235, (10, 104 + offset, 320, 118 + offset)),
+                            (236, (326, 105 + offset, 434, 119 + offset)),
+                            (237, (440, 102 + offset, 490, 120 + offset)),
+                            (238, (26, 126 + offset, 366, 140 + offset)),
+                            (239, (374, 123 + offset, 490, 141 + offset)),
+                            (101, (10, 126 + offset + (21 if mesh_shown else 0), 490, 322))):
             box = w.RECT(*rect)
             user.MapDialogRect(state['window'], ctypes.byref(box))
             user.MoveWindow(user.GetDlgItem(state['window'], ident), box.left, box.top,
                             box.right - box.left, box.bottom - box.top, True)
         user.InvalidateRect(state['window'], None, True)
+
+    def model_accuracy():
+        value = ctypes.create_unicode_buffer(64)
+        user.GetWindowTextW(user.GetDlgItem(state['window'], 237), value, len(value))
+        return parse_project_model_accuracy(value.value)
+
+    def model_triangle_limit():
+        value = ctypes.create_unicode_buffer(64)
+        user.GetWindowTextW(user.GetDlgItem(state['window'], 239), value, len(value))
+        return parse_project_model_triangle_limit(value.value)
+
+    def option_feedback():
+        enabled = user.SendMessageW(user.GetDlgItem(state['window'], 235), 0xF0, 0, 0) == 1
+        error = ''
+        if enabled:
+            try:
+                model_accuracy()
+                model_triangle_limit()
+            except ValueError as exc:
+                error = str(exc)
+        text = 'Выбрано установов: %d' % len(model.selected)
+        user.SetWindowTextW(user.GetDlgItem(state['window'], 102), text + (' · ' + error if error else ''))
+        user.EnableWindow(user.GetDlgItem(state['window'], 1), bool(model.selected) and not error)
+        return not error
 
     @subclass_type
     def option_proc(window, message, wparam, lparam, subclass_id, ref_data):
@@ -1985,9 +2050,7 @@ def show_setup_folders(rows, options=None):
                 item.state = (0x2000 if key in model.selected else 0x1000) | (4 if model.disabled(key) else 0)
                 if not user.SendMessageW(state['tree'], 0x113F, 0, ctypes.addressof(item)):
                     raise RuntimeError('Не удалось обновить папку: ' + row['name'])
-            user.SetWindowTextW(user.GetDlgItem(state['window'], 102),
-                               'Выбрано установов: %d' % len(model.selected))
-            user.EnableWindow(user.GetDlgItem(state['window'], 1), bool(model.selected))
+            option_feedback()
             user.InvalidateRect(state['tree'], None, False)
         finally:
             state['updating'] = False
@@ -2047,11 +2110,13 @@ def show_setup_folders(rows, options=None):
         try:
             if message == 0x0110:
                 state['window'], state['tree'] = window, user.GetDlgItem(window, 101)
-                for ident in (230, 231, 232, 233, 234):
+                for ident in (230, 231, 232, 233, 234, 235):
                     control = user.GetDlgItem(window, ident)
                     user.SendMessageW(control, 0xF1, int(ident == 232), 0)
                     if not common.SetWindowSubclass(control, option_proc, 2, 0):
                         raise RuntimeError('Не удалось подключить опции подготовки карты.')
+                user.SendMessageW(user.GetDlgItem(window, 237), 0x00C5, 24, 0)  # EM_SETLIMITTEXT
+                user.SendMessageW(user.GetDlgItem(window, 239), 0x00C5, 24, 0)
                 description_formats()
                 if not state['tree']:
                     raise RuntimeError('Не удалось создать дерево папок.')
@@ -2101,14 +2166,30 @@ def show_setup_folders(rows, options=None):
                 return 1
             if message == 0x0111:
                 ident = wparam & 0xFFFF
-                if ident == 231:
+                if ident in (231, 235):
                     description_formats()
+                    option_feedback()
+                    return 1
+                if ident in (237, 239) and wparam >> 16 == 0x0300 and state['window']:  # EN_CHANGE
+                    option_feedback()
                     return 1
                 if ident == 2 or (ident == 1 and model.selected):
                     if ident == 1:
+                        if not option_feedback():
+                            try:
+                                model_accuracy()
+                                invalid = 239
+                            except ValueError:
+                                invalid = 237
+                            user.SetFocus(user.GetDlgItem(window, invalid))
+                            return 1
                         for key, control in (('number_operations', 230), ('update_descriptions', 231),
-                                             ('include_tool_numbers', 233), ('add_zmin', 234)):
+                                             ('include_tool_numbers', 233), ('add_zmin', 234),
+                                             ('create_project_model', 235)):
                             state['options'][key] = user.SendMessageW(user.GetDlgItem(window, control), 0xF0, 0, 0) == 1
+                        if state['options']['create_project_model']:
+                            state['options']['project_model_accuracy'] = model_accuracy()
+                            state['options']['project_model_triangle_limit'] = model_triangle_limit()
                     user.EndDialog(window, ident)
                     return 1
                 if ident == 222:
@@ -4176,16 +4257,16 @@ def export_png(nx, part, path):
 
 
 def capture_project_view(nx, part, output, camera):
-    """Embed the startup camera once, before setup visibility/IPW/view changes."""
+    """Fit and capture the startup orientation; restore the camera and display."""
     view = part.ModelingViews.WorkView
-    def verify():
-        verify_capture_camera(view, camera)
-        actual, expected = read_view_projection(nx, view), camera['projection']
+    def verify(expected_camera):
+        verify_capture_camera(view, expected_camera)
+        actual, expected = read_view_projection(nx, view), expected_camera['projection']
         if actual['type'] != expected['type'] or not math.isclose(
                 actual['distance'], expected['distance'], rel_tol=1e-8, abs_tol=1e-8):
             raise RuntimeError('Изменилась проекция текущего вида.')
     try:
-        verify()
+        verify(camera)
     except Exception:
         errors = restore_view(nx, view, camera)
         if errors:
@@ -4200,18 +4281,28 @@ def capture_project_view(nx, part, output, camera):
             display.hide()
             view.Regenerate()
             display.hide_after_camera_change()
+            verify(camera)
+            fit_visible_view(nx, view)
+            fitted = snapshot_view(view)
+            fitted['projection'] = read_view_projection(nx, view)
+            if not axes_equal(fitted['matrix'], camera['matrix'], 1e-8):
+                raise RuntimeError('NX изменил текущий ракурс при вписывании первого листа.')
+            if fitted['projection']['type'] != camera['projection']['type']:
+                raise RuntimeError('NX изменил тип проекции при вписывании первого листа.')
+            display.hide_after_camera_change()
             if bool(view.TriadVisibility) or bool(part.WCS.Visibility):
                 raise RuntimeError('NX не скрыл системы координат перед снимком первого листа.')
-            verify()
+            verify(fitted)
             export_png(nx, part, path)
-            verify()
+            verify(fitted)
         except Exception as exc:
             capture_error = exc
             raise
         finally:
-            # Restore first, even after a partially completed hide/export. Crop
-            # only after NX has its original display settings back.
-            errors = display.restore()
+            # Fit must not change the camera inherited by later setup captures.
+            # Restore on success and on failures, before processing the PNG.
+            errors = restore_view(nx, view, camera)
+            errors.extend(display.restore())
             if errors:
                 message = 'Не удалось восстановить отображение NX после снимка первого листа: ' + '; '.join(errors)
                 if capture_error is not None:
@@ -4223,7 +4314,7 @@ def capture_project_view(nx, part, output, camera):
             path.unlink()
 
 
-PROJECT_MODEL_MAX_TRIANGLES = 500000
+PROJECT_MODEL_DEFAULT_TRIANGLES = 500000
 
 
 class ProjectModelLimitError(RuntimeError):
@@ -4231,20 +4322,18 @@ class ProjectModelLimitError(RuntimeError):
     pass
 
 
-def check_project_triangle_budget(count, limit=PROJECT_MODEL_MAX_TRIANGLES):
+def check_project_triangle_budget(count, limit=PROJECT_MODEL_DEFAULT_TRIANGLES):
     if count > limit:
         raise ProjectModelLimitError(
-            'Сетка первого листа слишком велика: требуется %d треугольников, '
-            'доступно ещё %d (общий предел — %d). '
-            'Сократите число отображаемых тел в NX и повторите запуск. '
-            'Существующая карта не изменена.' % (count, max(0, limit), PROJECT_MODEL_MAX_TRIANGLES))
+            'Превышен лимит треугольников. Уменьшите коэффициент точности или увеличьте лимит.')
 
 
 class ProjectFacetCleanupError(RuntimeError):
     pass
 
 
-def project_facet_triangles(nx, entity, normal_rows=None, triangle_limit=PROJECT_MODEL_MAX_TRIANGLES):
+def project_facet_triangles(nx, entity, normal_rows=None, triangle_limit=PROJECT_MODEL_DEFAULT_TRIANGLES,
+                            accuracy=1.):
     """Read a temporary UF facet model; roll back even a failed FacetSolid call.
 
     AskDefaultParameters supplies the wrapper's actual structure/version. Do
@@ -4252,6 +4341,7 @@ def project_facet_triangles(nx, entity, normal_rows=None, triangle_limit=PROJECT
     NXOpen Python has FacetSolid on the supported NX releases; TessellateFace
     is not present in all Python wrappers.
     """
+    accuracy = parse_project_model_accuracy(accuracy)
     uf = nx.UF.UFSession.GetUFSession()
     session = nx.Session.GetSession()
     mark = session.SetUndoMark(nx.Session.MarkVisibility.Invisible, 'Setup card mesh')
@@ -4264,14 +4354,16 @@ def project_facet_triangles(nx, entity, normal_rows=None, triangle_limit=PROJECT
                           getattr(getattr(nx, 'BasePart', None), 'Units', None),
                           ('Millimeters', 'Inches'))
         millimeter = 1. / 25.4 if units == 'Inches' else 1.
-        # UF angular tolerances are radians. Use a 3-degree bound on curved
-        # faces and edges, with a 0.01 mm chord tolerance in the part's units.
+        # Lower accuracy loosens geometry tolerances, not the triangle budget.
+        # Normals/tangents cannot differ by more than a half turn; UF uses radians.
+        distance = .01 / accuracy * millimeter
+        angle = math.radians(min(180., 3. / accuracy))
         parameters.SpecifySurfaceTolerance = True
-        parameters.SurfaceDistTolerance = .01 * millimeter
-        parameters.SurfaceAngularTolerance = math.radians(3.)
+        parameters.SurfaceDistTolerance = distance
+        parameters.SurfaceAngularTolerance = angle
         parameters.SpecifyCurveTolerance = True
-        parameters.CurveDistTolerance = .01 * millimeter
-        parameters.CurveAngularTolerance = math.radians(3.)
+        parameters.CurveDistTolerance = distance
+        parameters.CurveAngularTolerance = angle
         parameters.NumberStorageType = 1  # UF_FACET_TYPE_DOUBLE
         parameters.SpecifyMaxFacetSize = False
         parameters.SpecifyViewDirection = False
@@ -4310,12 +4402,12 @@ def project_facet_triangles(nx, entity, normal_rows=None, triangle_limit=PROJECT
             raise ProjectFacetCleanupError(message) from failure
 
 
-def read_project_facets(nx, model, normal_rows=None, triangle_limit=PROJECT_MODEL_MAX_TRIANGLES):
+def read_project_facets(nx, model, normal_rows=None, triangle_limit=PROJECT_MODEL_DEFAULT_TRIANGLES):
     facet = nx.UF.UFSession.GetUFSession().Facet
     diagnostic_event('UF.Facet.AskNFacetsInModel.begin', model=model)
     count = int(facet.AskNFacetsInModel(model))
     diagnostic_event('UF.Facet.AskNFacetsInModel.end', count=count, limit=triangle_limit)
-    check_project_triangle_budget(count, min(triangle_limit, PROJECT_MODEL_MAX_TRIANGLES))
+    check_project_triangle_budget(count, triangle_limit)
     if count < 1:
         raise RuntimeError('Недопустимый размер фасетной сетки: %d граней.' % count)
     triangles, visited, collected_normals = [], set(), []
@@ -4367,13 +4459,15 @@ def read_project_facets(nx, model, normal_rows=None, triangle_limit=PROJECT_MODE
     return triangles
 
 
-def collect_project_model(nx, part, camera):
+def collect_project_model(nx, part, camera, accuracy=1., triangle_limit=PROJECT_MODEL_DEFAULT_TRIANGLES):
     """Embed only displayed bodies, with the startup NX axes, entirely in memory.
 
     AskVisibleObjects honours hidden objects, layers, assembly reference sets
     and occurrence visibility. Curves, coordinate systems and toolpaths cannot
     enter the mesh. Occurrence coordinates are transformed exactly once.
     """
+    accuracy = parse_project_model_accuracy(accuracy)
+    triangle_limit = parse_project_model_triangle_limit(triangle_limit)
     uf = nx.UF.UFSession.GetUFSession()
     view = part.ModelingViews.WorkView
     bodies, seen = [], set()
@@ -4395,7 +4489,7 @@ def collect_project_model(nx, part, camera):
     diagnostic_event('mesh.bodies', count=len(bodies))
     for body_index, body in enumerate(bodies, 1):
         diagnostic_event('mesh.body.begin', index=body_index, total=len(bodies), entity=body)
-        remaining = PROJECT_MODEL_MAX_TRIANGLES - len(triangles)
+        remaining = triangle_limit - len(triangles)
         check_project_triangle_budget(1, remaining)
         prototype = body.Prototype if body.IsOccurrence else body
         key = object_key(prototype)
@@ -4405,7 +4499,7 @@ def collect_project_model(nx, part, camera):
                 source_triangles = read_project_facets(nx, prototype.Tag, source_normals, remaining)
             else:
                 try:
-                    source_triangles = project_facet_triangles(nx, prototype, source_normals, remaining)
+                    source_triangles = project_facet_triangles(nx, prototype, source_normals, remaining, accuracy)
                 except (ProjectFacetCleanupError, ProjectModelLimitError, MemoryError):
                     raise
                 except Exception as body_error:
@@ -4421,7 +4515,7 @@ def collect_project_model(nx, part, camera):
                         diagnostic_event('mesh.face.begin', index=index, count=len(faces))
                         try:
                             face_triangles.extend(project_facet_triangles(
-                                nx, face, source_normals, remaining - len(face_triangles)))
+                                nx, face, source_normals, remaining - len(face_triangles), accuracy))
                         except (ProjectFacetCleanupError, ProjectModelLimitError, MemoryError):
                             raise
                         except Exception as exc:
@@ -4488,7 +4582,7 @@ def collect_project_model(nx, part, camera):
         eye[2] = max(eye[2], 2.)
         projection = eye
     diagnostic_event('mesh.pack.end', vertices_bytes=len(packed), normals_bytes=len(packed_normals))
-    return {'schema': 1, 'id': uuid.uuid4().hex, 'triangles': len(triangles),
+    return {'schema': 1, 'id': uuid.uuid4().hex, 'triangles': len(triangles), 'triangle_limit': triangle_limit,
             'vertices': base64.b64encode(packed).decode('ascii'),
             'normals': base64.b64encode(packed_normals).decode('ascii'),
             'normal_format': 'snorm16',
@@ -5409,8 +5503,10 @@ def make_output_folder(project_folder, project_name, setup_name=None):
     return io_path(tempfile.mkdtemp(prefix='.nx_', dir=str(parent)))
 
 
-def prepare_capture_folders(staging, jobs):
+def prepare_capture_folders(staging, jobs, project_view=False):
     """Check every NX image path before costly meshing or changes to NX views."""
+    if project_view:
+        nx_image_file_name(io_path(staging) / 'project_view.png')
     for index, job in enumerate(jobs, 1):
         output = io_path(staging) / str(index)
         output.mkdir()
@@ -6082,8 +6178,10 @@ const ProjectModel=(()=>{
  function initialize(){
   if(!data||data.schema!==1||!data.vertices)return false;
   try{
+   const limit=data.triangle_limit??500000;
+   if(!Number.isSafeInteger(limit)||limit<1||!Number.isSafeInteger(data.triangles)||data.triangles<1||data.triangles>limit)throw Error('Некорректная сетка');
    const bytes=Uint8Array.from(atob(data.vertices),c=>c.charCodeAt(0));
-   if(bytes.length!==data.triangles*36||!bytes.length||data.triangles>500000)throw Error('Некорректная сетка');
+   if(bytes.length!==data.triangles*36||!bytes.length)throw Error('Некорректная сетка');
    const values=new DataView(bytes.buffer);positions=new Float32Array(bytes.length/4);
    for(let i=0;i<positions.length;i++){positions[i]=values.getFloat32(i*4,true);if(!Number.isFinite(positions[i]))throw Error('Некорректные координаты');}
    normals=new Float32Array(positions.length);radius=0;
@@ -7006,6 +7104,7 @@ const PageScale=(()=>{
  function control(bar,target,label,value){
   let input=bar.querySelector('input[data-scale-target="'+target+'"]');
   if(!input){const group=document.createElement('label');group.append(document.createTextNode(label));input=document.createElement('input');input.type='range';input.min='60';input.max='300';input.step='1';input.dataset.scaleTarget=target;input.setAttribute('aria-label',label);group.append(input,document.createElement('output'));bar.append(group);}
+  else{const caption=input.closest('label')?.firstChild;if(caption?.nodeType===3)caption.textContent=label;input.setAttribute('aria-label',label);}
   const logarithmic=target==='project-image'&&ProjectModel.active;input.dataset.logScale=String(logarithmic);
   if(logarithmic){input.min='0';input.max='400';input.step='1';}
   input.closest('label').title=SLIDER_RESET_HINT;input.closest('label').classList.add('slider-label');input.value=logarithmic?100*Math.log10(value):value;PercentInput.update(input,value);
@@ -7025,7 +7124,9 @@ const PageScale=(()=>{
   control(bar,'page',key==='cover'?'Операции: строки и текст':'Строки и текст этого листа',value(key));
   if(key==='cover'&&page.querySelector('table[data-fit-family="cover-tools"]'))control(bar,'tools','Инструменты: текст',toolScale);
   if(key==='catalog'){
-   control(bar,'project-image',ProjectModel.active?'Масштаб модели детали':'Масштаб изображения детали',ProjectImage.value());
+   if(page.querySelector('.project-isometry img,.project-model'))control(bar,'project-image',ProjectModel.active?'Масштаб модели детали':'Масштаб изображения детали',ProjectImage.value());
+   else bar.querySelector('input[data-scale-target="project-image"]')?.closest('label')?.remove();
+   if(!ProjectModel.active)bar.querySelectorAll('.project-model-actions').forEach(n=>n.remove());
    if(ProjectModel.active&&!bar.querySelector('.project-model-actions')){
     const actions=document.createElement('span');actions.className='project-model-actions';
     const b=document.createElement('button');b.type='button';b.dataset.projectModelAction='fit';b.textContent='Вписать';actions.append(b);bar.append(actions);
@@ -9322,6 +9423,23 @@ def normalize_project_catalog(sections, project_view_image=None, project_model=N
         elif page.has_class(node, 'catalog-first') or page.has_class(node, 'project-isometry'):
             removals[node['start']] = node
     edits = [(n['start'], n['end'], '') for n in removals.values()]
+    if not project_model:
+        # A browser-saved mesh page retains absolute layout coordinates. Remove
+        # those when the new export explicitly disables its model.
+        page_root = next(n for n in page.nodes if page.has_class(n, 'project-tools-page'))
+        attrs = dict(page_root['attrs'])
+        attrs['class'] = ' '.join(c for c in attrs.get('class', '').split() if c != 'project-model-page')
+        attrs.pop('data-project-tools-bottom', None)
+        attrs.pop('data-model-clipped', None)
+        style = ';'.join(p for p in attrs.get('style', '').split(';')
+                         if p.strip() and not p.strip().startswith('--project-'))
+        if style:
+            attrs['style'] = style
+        else:
+            attrs.pop('style', None)
+        opening = '<' + page_root['tag'] + ''.join(' ' + k + ('="%s"' % escaped(v) if v is not None else '')
+                                                  for k, v in attrs.items()) + '>'
+        edits.append((page_root['start'], page_root['open_end'], opening))
     for node in page.nodes:
         if page.has_class(node, 'catalog-title'):
             edits.append((node['open_end'], node['content_end'], 'Инструменты проекта'))
@@ -9510,7 +9628,9 @@ def write_preview(output, report):
             sections.append(retain_setup_annotations(markup, entry.get('annotations_markup')))
         options.append('<option value="%s">%s</option>' % (key, escaped(entry['label'])))
     sections = move_shared_catalog(sections, owner, first=True)
-    project_model = report.get('project_model') or (existing.get('project_model') if existing else None)
+    # Explicit None removes a previous mesh; absent means a legacy caller that
+    # did not request any change to the shared model.
+    project_model = report.get('project_model', existing.get('project_model') if existing else None)
     sections = normalize_project_catalog(sections, report.get('project_view_image'), project_model)
     body = ''.join(renumber_saved_sections(sections, len(entries)))
     context = {'filename': report['document_stem'] + '.html', 'id': report['card_id'], 'key': report['card_id'],
@@ -9783,10 +9903,20 @@ def main():
             preparation.apply()
             created_directories.extend(path for path in (destination.parent, destination) if not path.exists())
             staging = make_output_folder(project_file.parent, project_name)
-            prepare_capture_folders(staging, jobs)
+            model_enabled = state['_preparation_options'].get('create_project_model', False)
+            prepare_capture_folders(staging, jobs, project_view=not model_enabled)
             processing = True
-            progress.mesh()
-            state['project_model'] = collect_project_model(nx, display, project_camera)
+            state['project_model'], state['project_view_image'] = None, ''
+            if model_enabled:
+                progress.mesh()
+                state['project_model'] = collect_project_model(
+                    nx, display, project_camera,
+                    accuracy=state['_preparation_options'].get('project_model_accuracy', 1.),
+                    triangle_limit=state['_preparation_options'].get('project_model_triangle_limit', PROJECT_MODEL_DEFAULT_TRIANGLES))
+            else:
+                progress.update(2, 'Изображение первого листа', 'Вписывание текущего вида NX')
+                state['project_view_image'] = capture_project_view(nx, display, staging, project_camera)
+                progress.update(55, 'Изображение первого листа готово')
             ensure_view_triad(nx, display, state, 'start')
             for index, job in enumerate(jobs, 1):
                 report, context = job['report'], job['context']
@@ -9815,7 +9945,7 @@ def main():
         except ExportCancelled:
             cancelled = True
         except Exception as exc:
-            state.update(status='error', error=str(exc))
+            state.update(status='error', error=str(exc), model_limit_exceeded=isinstance(exc, ProjectModelLimitError))
         finally:
             if progress is not None:
                 progress.phase = 'finish'
@@ -9881,8 +10011,8 @@ def main():
     diagnostic_event('export.result', status=state['status'], error=state.get('error'),
                      setups=[{'name': setup_label(j['report']), 'status': j['report']['status'],
                               'error': j['report'].get('error')} for j in jobs])
-    message = TITLE + '\n\n'
-    if jobs:
+    message = '' if state.get('model_limit_exceeded') else TITLE + '\n\n'
+    if jobs and not state.get('model_limit_exceeded'):
         message += 'Создано установов: %d из %d.\n' % (state.get('setups_completed', 0), len(jobs))
         message += '\n'.join('%d. %s: %s' % (j['report']['setup_index'], setup_label(j['report']),
                               'готово' if export_is_complete(j['report']) else
@@ -9898,7 +10028,7 @@ def main():
             if merged.get('consolidated'):
                 message += '\nОбъединено прежних отдельных записей выбранных папок: %d.' % merged['consolidated']
     if state.get('error'):
-        message += '\n\n' + state['error']
+        message += ('\n\n' if message else '') + state['error']
         failures = ['Установ «%s»: %s' % (setup_label(j['report']), j['report']['error'])
                     for j in jobs if j['report'].get('error')]
         if failures:
@@ -10005,3 +10135,4 @@ if __name__ == '__main__':
         local_card_worker()
     else:
         main()
+
