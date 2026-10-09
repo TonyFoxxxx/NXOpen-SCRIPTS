@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-09 — ESKD V1.37
+
+- Previous current-sheet borders, title/auxiliary tables and their labels are deleted before the new format is built, including hidden Siemens elements and objects from earlier runs.
+- Cleanup respects sheet membership, cascading table/child deletion and the prohibition on cleanup after new formatting starts. A deletion failure rolls back this run.
+- Material text now has an explicit break before GOST/OST/TU, followed by wrapping of long entries and font reduction if the block is too tall. Final checks verify that line breaks survived the sheet refresh.
+- Retained table sizes, INI handling, the external font and section geometry. Updated the catalog and Russian/English documentation.
+- Added executable C# algorithm checks for text placement, border areas, deletion order and failure handling. Checks without NX do not replace object/rendering verification in the target application.
+
 ## 2026-10-09 — Setup sheets V2.49
 
 - Added an optional first-sheet faceted 3D model. With it off, NX fits the current orientation and captures a screenshot; camera and display settings are restored afterwards.
