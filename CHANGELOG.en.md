@@ -2,6 +2,15 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-14 — Zmin V1.03
+
+- Fixed false Z0 results for supported `HoleDrilling` machine cycles: a saved Cycle entrance point is no longer treated as the hole bottom.
+- Spot drilling uses operation-local FBM `DEPTH` to the tip. Through-hole drilling includes local depth, bottom offset and drill point length. Master-model depth and the old name suffix are not used as operation depth.
+- Holes are matched to path coordinates and axes regardless of order. Projection uses the actual ToolAxis, including rotary orientations.
+- Blind/stepped holes and unsupported cycle settings are skipped with reasons. Incomplete data preserves the operation name instead of writing a partial minimum or substituted Z0. See the [guide](docs/en/zmin.md#spot-drilling-and-drilling) for the exact supported scope.
+- Checked outside NX: diagnostic-data replay agrees with final reference NC Z values at NC output precision; regressions cover different depths, rotations, invalid data and unchanged ordinary CL results. Native V1.03 execution in NX / Designcenter is not yet confirmed.
+- Source, updater manifest, README and guides are updated in both languages. The cycle-depth correction is published in the standalone journal; setup-sheet V2.49 retains its earlier CL-point calculation.
+
 ## 2026-10-09 — ESKD V1.37
 
 - Previous current-sheet borders, title/auxiliary tables and their labels are deleted before the new format is built, including hidden Siemens elements and objects from earlier runs.

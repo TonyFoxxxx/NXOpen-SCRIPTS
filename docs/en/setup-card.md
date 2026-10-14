@@ -68,7 +68,7 @@ The operation table retains program-folder hierarchy.
 
 Available tool information includes overhang H, cutting length L and relieved length HL; the sheet explains these labels. Toolpath time does not include every machine overhead.
 
-Zmin uses the [standalone Zmin algorithm](zmin.md): `dot(P - O, unit(ToolAxis))` at saved CL points. Both Three and Five motions supply their actual tool vectors. Names change only when the startup Zmin option is enabled. For rotary machining, the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include internal extrema; varying-axis arcs without interpolation data and compound paths are unsupported. This is not a simulation of postprocessed machine movement.
+Zmin uses the CL-projection algorithm from the [standalone Zmin journal](zmin.md) V1.02: `dot(P - O, unit(ToolAxis))` at saved CL points. Both Three and Five motions supply their actual tool vectors. Names change only when the startup Zmin option is enabled. For rotary machining, the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include internal extrema; varying-axis arcs without interpolation data and compound paths are unsupported. This is not a simulation of postprocessed machine movement. The standalone V1.03 machine-cycle depth correction has not yet been ported to setup-sheet V2.49, which may report a cycle entrance coordinate instead of its final depth.
 
 ## Editing in the browser
 

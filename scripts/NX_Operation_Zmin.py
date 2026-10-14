@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 # Минимальный Z в именах операций
-# SCRIPT_VERSION: V1.02
+# SCRIPT_VERSION: V1.03
 # Рабочее имя файла: NX_Operation_Zmin.py
-SCRIPT_VERSION = "V1.02"
+SCRIPT_VERSION = "V1.03"
 SCRIPT_NAME = "Минимальный Z в именах операций"
 
 # Запуск: NX / Designcenter -> Журнал -> Воспроизвести.
 # Выделены операции: только они. Выделения нет: все операции рабочей детали.
-# V1.02: фактическая ось ToolAxis учитывается и в формате Three, и в Five.
+# V1.03: глубина циклов центрования и сквозного сверления по локальным FBM-данным.
+# Фактическая ось ToolAxis учитывается и в формате Three, и в Five.
 # Three может содержать постоянный наклон инструмента при повороте детали.
 # Начало СКС операции должно находиться на оси вращения детали.
 # При ToolAxis, совпадающей с Z СКС, результат обычной 3-осевой обработки прежний.
@@ -21,7 +22,7 @@ SCRIPT_NAME = "Минимальный Z в именах операций"
 import math
 import re
 
-_CREDIT = bytes((98, 121, 32, 64, 84, 111, 110, 121, 95, 70, 111, 120, 120, 120)).decode("ascii")
+_CREDIT = bytes((98, 121, 32, 64, 84, 111, 110, 121, 95, 70, 111, 120, 120, 120, 32, 40, 84, 71, 41)).decode("ascii")
 TITLE = SCRIPT_NAME + " — " + SCRIPT_VERSION + " | " + _CREDIT
 _Z_SUFFIX = re.compile(r"(?:_Z[+-]?(?:[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+))+$", re.IGNORECASE)
 
@@ -230,6 +231,157 @@ def motion_z_axis(motion):
         raise ValueError('Недоступно направление оси инструмента в траектории: ' + str(exc))
 
 
+def uf_named_value(uf, obj, index, expected_name, getter):
+    """Check UF descriptor names before using the indices verified in NX 2606."""
+    attributes = uf.Param.AskParamAttributes(index)
+    fields = attributes.keys() if isinstance(attributes, dict) else dir(attributes)
+    names = [n for n in fields if str(n).replace('_', '').casefold() == 'name']
+    if len(names) != 1:
+        raise ValueError('Недоступно описание параметра ' + expected_name)
+    name = attributes[names[0]] if isinstance(attributes, dict) else getattr(attributes, names[0])
+    if str(name).strip().casefold() != expected_name.casefold():
+        raise ValueError('Не совпало описание параметра ' + expected_name)
+    return getattr(uf.Param, getter)(obj.Tag, index)
+
+
+def feature_number(feature, name):
+    # Read the operation-local FBM feature, never substitute a master DEPTH.
+    return finite_number(feature.GetAttribute(name).GetDoubleValue())
+
+
+def feature_location(feature):
+    point = tuple(feature_number(feature, c + '_POSITION') for c in 'XYZ')
+    # NXHOLE/NXHOLECENTER D points into the hole; CL ToolAxis points out.
+    axis = unit(tuple(-feature_number(feature, c + '_ORIENTATION_D') for c in 'XYZ'))
+    return point, axis
+
+
+def same_hole(point, axis, other_point, other_axis):
+    # Absolute geometry and CL must agree: do not guess a path transformation.
+    tolerance = max(1e-6, max(abs(x) for x in point + other_point) * 1e-10)
+    delta = tuple(point[i] - other_point[i] for i in range(3))
+    axis_delta = tuple(axis[i] - other_axis[i] for i in range(3))
+    return dot(delta, delta) <= tolerance**2 and dot(axis_delta, axis_delta) <= 1e-12
+
+
+def read_cycle_holes(nx, operation):
+    """Resolve the two verified HoleDrilling profiles without modifying NX.
+
+    MachineCycle endpoints can be hole entrances, not the bottom of the tool.
+    Spot drilling uses local DEPTH to the tip. A standard through-hole drill
+    uses local DEPTH + BottomOffset + Tool Point Length. Other depth policies
+    are rejected until their saved-path semantics have been established.
+    """
+    if not isinstance(operation, nx.CAM.HoleDrilling):
+        raise ValueError('Глубина этого типа цикла пока не поддерживается; Z0 не подставляется.')
+    status_type = getattr(nx.CAM.CAMObject, 'Status', None)
+    status = enum_name(operation.GetStatus(), status_type, ('Complete', 'Approved', 'Repost', 'Regen'))
+    if status not in ('Complete', 'Approved', 'Repost'):
+        raise ValueError('Для глубины цикла нужна актуальная траектория; пересчитайте операцию в NX.')
+    uf = nx.UF.UFSession.GetUFSession()
+    subtype = str(uf_named_value(uf, operation, 154, 'System Template Subtype', 'AskStrValue'))
+    feature_type = str(uf_named_value(uf, operation, 8101, 'Feature Type Name', 'AskStrValue'))
+    spot = subtype == 'SPOT_DRILLING' and feature_type == 'NXHOLECENTER'
+    drill = subtype == 'DRILLING' and feature_type == 'NXHOLE'
+    if not (spot or drill):
+        raise ValueError('Не поддержана глубина цикла ' + subtype + ' / ' + feature_type)
+    part = operation.OwningPart
+    builder = part.CAMSetup.CAMOperationCollection.CreateHoleDrillingBuilder(operation)
+    try:
+        geometry = builder.GetFeatureGeometry()
+        if geometry.UseModelDepth or builder.PredefinedDepth.Status:
+            raise ValueError('Цикл с глубиной по модели или Predefined Depth пока не поддерживается.')
+        if builder.IgnoreToolTip or str(builder.GetToolDrivePoint()) != 'SYS_CL_TIP':
+            raise ValueError('Цикл использует другую точку инструмента; глубина вершины не определена.')
+        offset_type = getattr(nx.CAM.HoleDrillingBuilder, 'ControlPointOffsetType', None)
+        if enum_name(builder.ControlPointOffset, offset_type, ('NotSet', 'None')) not in ('NotSet', 'None'):
+            raise ValueError('Смещение контрольной точки цикла пока не поддерживается.')
+        depth_type = getattr(nx.CAM.OperationBuilder, 'HoleDepthTypes', None)
+        if enum_name(builder.HoleDepthType, depth_type, ('Point',)) != 'Point':
+            raise ValueError('Неподдерживаемый способ задания глубины цикла.')
+        cycle = builder.CycleTable
+        output_type = getattr(nx.CAM.Cycle, 'MotionOutputTypes', None)
+        if enum_name(cycle.MotionOutput, output_type, ('MachineCycle',)) != 'MachineCycle':
+            raise ValueError('Тип вывода цикла не соответствует точкам Cycle.')
+        allowed_cycles = ('Drill,Csink',) if spot else ('Drill,Deep', 'Drill')
+        if str(cycle.CycleType) not in allowed_cycles or str(cycle.CycleTrackingPoint) != 'None':
+            raise ValueError('Не поддержан цикл или его точка отслеживания: ' + str(cycle.CycleType))
+        if abs(finite_number(cycle.CsinkDiameter)) > 1e-10:
+            raise ValueError('Цикл с отдельным диаметром зенковки пока не поддерживается.')
+        cut = builder.CutParameters
+        if any(abs(finite_number(v)) > 1e-10 for v in (cut.BottomStock.Value, cut.PartStock.Value)):
+            raise ValueError('Цикл с припуском на дно или деталь пока не поддерживается.')
+        offset_types = getattr(nx.CAM.VerticalPosition, 'OffsetTypes', None)
+        if enum_name(cut.BottomOffset.OffsetType, offset_types, ('Distance',)) != 'Distance':
+            raise ValueError('Для цикла поддержано только смещение дна расстоянием.')
+        bottom_offset = finite_number(cut.BottomOffset.Distance)
+        if bottom_offset < 0 or (spot and abs(bottom_offset) > 1e-10):
+            raise ValueError('Такое смещение дна цикла пока не поддерживается.')
+
+        tool = operation.GetParent(nx.CAM.CAMSetup.View.MachineTool)
+        if tool is None:
+            raise ValueError('Не найден инструмент цикла.')
+        def tool_value(index, name):
+            return finite_number(uf_named_value(uf, tool, index, name, 'AskDoubleValue'))
+        diameter = tool_value(1000, 'Tool Diameter')
+        angle = tool_value(1016, 'Tool Point Angle')  # UF radians, FBM degrees.
+        tip_length = tool_value(1053, 'Tool Point Length')
+        if diameter <= 0 or not 0 < angle < math.pi or tip_length < 0:
+            raise ValueError('Некорректные размеры вершины сверла.')
+        if any(abs(tool_value(i, n)) > 1e-10 for i, n in (
+                (1176, 'Tool Tip Diameter'), (1177, 'Tool Tip Length'),
+                (1181, 'Tool Pilot Diameter'), (1182, 'Tool Pilot Length'))):
+            raise ValueError('Составная или пилотная вершина инструмента пока не поддерживается.')
+        if abs(tip_length - diameter / (2 * math.tan(angle / 2))) > max(1e-6, diameter * 1e-6):
+            raise ValueError('Длина вершины не соответствует стандартному коническому сверлу.')
+
+        masters = []
+        if drill:
+            # STEP1HOLE is NX's through-hole type; STEP1POCKET is blind.
+            # These links classify the feature only. Depth still comes from FBM.
+            for master in part.CAMFeatures:
+                if any(str(op.Tag) == str(operation.Tag) for op in master.GetOperations()):
+                    point, axis = feature_location(master)
+                    masters.append((master, point, axis))
+        count = int(geometry.GeometryList.Length)
+        if count <= 0:
+            raise ValueError('Не найдены локальные FBM-данные глубины цикла.')
+        holes = []
+        for index in range(count):
+            feature_set = geometry.GetFeatureSet(index)
+            if feature_set.CustomPartOffset or feature_set.CustomStock:
+                raise ValueError('Индивидуальное смещение или припуск отверстия пока не поддерживается.')
+            feature = feature_set.GetFeature()
+            point, axis = feature_location(feature)
+            depth = feature_number(feature, 'DEPTH')
+            if depth <= 0:
+                raise ValueError('Глубина отверстия не задана положительным числом.')
+            if abs(feature_number(feature, 'TIP_ANGLE') - math.degrees(angle)) > 1e-5:
+                raise ValueError('Угол вершины локального отверстия не совпадает с инструментом.')
+            if drill:
+                matches = [m for m, p, a in masters if same_hole(point, axis, p, a)]
+                if len(matches) != 1 or str(matches[0].Type) != 'STEP1HOLE':
+                    raise ValueError('Не подтверждено сквозное отверстие STEP1HOLE; '
+                                     'глухие и неоднозначные отверстия пока не поддерживаются.')
+                if feature.IsAttributeOverridden('SUBTYPE') or feature.GetAttribute('SUBTYPE').GetIntegerValue() != 0:
+                    raise ValueError('Изменён тип локального отверстия; сквозная глубина не подтверждена.')
+                if abs(feature_number(feature, 'DIAMETER_1') - diameter) > max(1e-6, diameter * 1e-6):
+                    raise ValueError('Диаметр сверла не совпадает с локальным отверстием.')
+                depth += bottom_offset + tip_length
+            holes.append((point, axis, finite_number(depth)))
+        return holes
+    finally:
+        builder.Destroy()  # No Commit, regeneration, postprocessing or file writes.
+
+
+def cycle_tip_zmin(holes, point, axis, origin):
+    matches = [depth for p, a, depth in holes if same_hole(point, axis, p, a)]
+    if len(matches) != 1:
+        raise ValueError('Точку Cycle не удалось однозначно сопоставить с входом и осью отверстия.')
+    # P_tip = P_entry - depth * ToolAxis. Projection keeps the actual rotary frame.
+    return finite_number(dot(tuple(point[i] - origin[i] for i in range(3)), axis) - matches[0])
+
+
 def toolpath_zmin(nx, operation, basis, origin, progress=None):
     """Read the existing CL path; never generate, post or modify it.
 
@@ -262,6 +414,8 @@ def toolpath_zmin(nx, operation, basis, origin, progress=None):
     if not all(math.isfinite(c) for c in origin):
         raise ValueError('Некорректное начало СКС операции.')
     minimum, previous, previous_axis, event = None, None, None, None
+    cycle_holes = None
+    motion_types = getattr(nx.CAM, 'CamPathMotionType', None)
     if progress is not None:
         progress(0, count)
     try:
@@ -286,7 +440,14 @@ def toolpath_zmin(nx, operation, basis, origin, progress=None):
                     end = path_point(motion.EndPoint)
                     z_axis = motion_z_axis(motion)
                     value = dot(tuple(end[i] - origin[i] for i in range(3)), z_axis)
-                    if shape != shapes.Linear:
+                    is_cycle = enum_name(motion_type, motion_types, ('Cycle',)) == 'Cycle'
+                    if is_cycle:
+                        if shape != shapes.Linear:
+                            raise ValueError('Неподдерживаемая форма движения цикла.')
+                        if cycle_holes is None:
+                            cycle_holes = read_cycle_holes(nx, operation)
+                        value = cycle_tip_zmin(cycle_holes, end, z_axis, origin)
+                    elif shape != shapes.Linear:
                         if previous_axis is not None:
                             difference = tuple(z_axis[i] - previous_axis[i] for i in range(3))
                             if dot(difference, difference) > 1e-16:

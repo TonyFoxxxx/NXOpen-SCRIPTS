@@ -1,4 +1,4 @@
-"""Zmin uses the standalone journal's tested ToolAxis algorithm, without rename."""
+"""The setup card and standalone journal retain the same ordinary CL results."""
 import ast
 import importlib.util
 import math
@@ -12,6 +12,9 @@ SOURCE = ROOT / 'scripts/NX_Setup_Prototype.py'
 SPEC = importlib.util.spec_from_file_location('setup_card_zmin_test', SOURCE)
 CARD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CARD)
+SPEC_ZMIN = importlib.util.spec_from_file_location('standalone_zmin_test', ROOT / 'scripts/NX_Operation_Zmin.py')
+ZMIN = importlib.util.module_from_spec(SPEC_ZMIN)
+SPEC_ZMIN.loader.exec_module(ZMIN)
 IDENTITY = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
 NX = NS(CAM=NS(CamPathToolAxisType=NS(Three=3, Five=5),
                CamPathMotionShapeType=NS(Linear=1, Circular=2, Helical=3, Nurbs=4),
@@ -88,18 +91,30 @@ def line(end, axis=(0, 0, 1), **extra):
 
 class ZminTests(unittest.TestCase):
     def read(self, items, mode=3, origin=(0, 0, 0), subpath=False):
-        path, updates = Path(items, mode, subpath), []
-        operation = NS(GetPath=lambda: path)
-        try:
-            result = CARD.toolpath_zmin(NX, operation, IDENTITY, origin, lambda a, b: updates.append((a, b)))
-            return result, updates
-        finally:
-            self.assertTrue(all(buffer.disposed for buffer in path.buffers))
+        results, errors = [], []
+        for script in (CARD, ZMIN):
+            path, updates = Path(items, mode, subpath), []
+            operation = NS(GetPath=lambda: path)
+            try:
+                result = script.toolpath_zmin(NX, operation, IDENTITY, origin, lambda a, b: updates.append((a, b)))
+                results.append((result, updates))
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                self.assertTrue(all(buffer.disposed for buffer in path.buffers))
+        if errors:
+            self.assertEqual(len(errors), 2, 'Only one implementation rejected the path')
+            self.assertEqual(type(errors[0]), type(errors[1]))
+            raise errors[0]
+        self.assertEqual(results[0], results[1])
+        return results[0]
 
-    def test_functions_match_latest_standalone_exactly(self):
+    def test_shared_projection_helpers_match_standalone_exactly(self):
+        # V1.03 adds cycle depth only to the standalone journal; ordinary CL
+        # behavior is compared through both full readers by read() above.
         names = ('dot', 'cross', 'unit', 'xyz', 'read_mcs', 'finite_number', 'enum_name',
                  'path_point', 'release_path_data', 'arc_path_zmin', 'path_axis_mode',
-                 'motion_z_axis', 'toolpath_zmin')
+                 'motion_z_axis')
         trees = [{node.name: ast.dump(node) for node in ast.parse(path.read_text(encoding='utf-8')).body
                   if isinstance(node, ast.FunctionDef)}
                  for path in (SOURCE, ROOT / 'scripts/NX_Operation_Zmin.py')]
