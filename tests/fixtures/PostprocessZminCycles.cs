@@ -260,6 +260,14 @@ internal static class CycleChecks
         catch (Exception ex) { rejected = ex.Message.Contains(fragment); if (!rejected) throw new Exception("wrong rejection: " + ex.Message); }
         Check(rejected, "unsupported cycle accepted: " + fragment); c.Released();
     }
+    private static void RejectMissingField(Case c)
+    {
+        bool rejected = false;
+        try { OperationZmin.ToolpathMinimum(c.Operation, c.Origin); }
+        // .NET Framework omits the key from this exception's message.
+        catch (KeyNotFoundException) { rejected = true; }
+        Check(rejected, "missing local depth accepted"); c.Released();
+    }
     private static void Location(NXOpen.CAM.FBM.Feature feature, double[] point, double[] axis)
     {
         for (int i = 0; i < 3; i++)
@@ -371,7 +379,7 @@ internal static class CycleChecks
         c = Make(false); c.Builder.Geometry.GeometryList.Items[0].CustomStock = true; Reject(c, "\u0418\u043d\u0434\u0438\u0432\u0438\u0434\u0443\u0430\u043b\u044c\u043d\u043e\u0435");
         c = Make(false); c.Builder.Geometry.GeometryList.Items[0].LocalFeature.Values["DEPTH"] = 0.0; Reject(c, "\u043f\u043e\u043b\u043e\u0436\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u043c");
         c = Make(false); c.Builder.Geometry.GeometryList.Items[0].LocalFeature.Values["DEPTH"] = Double.NaN; Reject(c, "\u043d\u0435\u0447\u0438\u0441\u043b\u043e\u0432\u043e\u0435");
-        c = Make(false); c.Builder.Geometry.GeometryList.Items[0].LocalFeature.Values.Remove("DEPTH"); Reject(c, "DEPTH");
+        c = Make(false); c.Builder.Geometry.GeometryList.Items[0].LocalFeature.Values.Remove("DEPTH"); RejectMissingField(c);
         c = Make(false); c.Builder.Geometry.GeometryList.Items[0].LocalFeature.Values["TIP_ANGLE"] = 90.0; Reject(c, "\u0423\u0433\u043e\u043b");
         c = Make(false); c.Operation.OwningPart.CAMFeatures[0].Type = "STEP1POCKET"; Reject(c, "STEP1HOLE");
         c = Make(false); c.Operation.OwningPart.CAMFeatures[0].Operations = new Operation[0]; Reject(c, "STEP1HOLE");
