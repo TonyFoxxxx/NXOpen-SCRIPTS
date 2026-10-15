@@ -61,7 +61,7 @@ This requires a current path, `MachineCycle` output, a standard conical tip and 
 
 Blind or stepped holes, other cycles, pilot/compound tips, other control points and unsupported depth policies are skipped with explanations. If even one Cycle point cannot be resolved, the entire operation is skipped; no partial minimum or substituted Z0 is written. A skipped operation retains its old name.
 
-Ordinary CL projection matches the [setup-sheet generator](setup-card.md) algorithm introduced in V2.38. The V1.03 cycle-depth correction applies to the standalone `NX_Operation_Zmin.py` journal; the published setup-sheet V2.49 does not yet include it.
+Ordinary CL projection matches the [setup-sheet generator](setup-card.md) algorithm introduced in V2.38. The standalone V1.03 cycle-depth correction is included in setup-sheet V2.51, for both its Zmin column and optional renaming. [Postprocessing V1.46](postprocess.md#zmin-in-operation-names) uses the same calculation when Zmin naming is enabled before NC output. All three scripts share the same machine-cycle limitations.
 
 ## Validation and file effects
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.49
+# SCRIPT_VERSION: V2.51
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -42,6 +42,8 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 Остальные установы и сохранённые ручные правки переносятся без пересоздания.
 «Инструменты проекта» — всегда один первый лист, при необходимости в две колонки.
 Если двух колонок недостаточно, таблица равномерно уменьшается до размеров листа.
+Таблицы используют единый максимально помещающийся шрифт для полного текста ячеек.
+В столбце «Операции» после самой длинной записи остаётся не менее двух пробелов.
 Фасетная 3D-модель первого листа включается галочкой в стартовом меню.
 По умолчанию галочка снята; после включения доступны коэффициент 0 < k ≤ 1 и лимит треугольников.
 Без галочки текущий ракурс вписывается в окно NX и снимается для первого листа.
@@ -96,7 +98,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.49"
+SCRIPT_VERSION = "V2.51"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -3136,6 +3138,157 @@ def motion_z_axis(motion):
         raise ValueError('Недоступно направление оси инструмента в траектории: ' + str(exc))
 
 
+def uf_named_value(uf, obj, index, expected_name, getter):
+    """Check UF descriptor names before using the indices verified in NX 2606."""
+    attributes = uf.Param.AskParamAttributes(index)
+    fields = attributes.keys() if isinstance(attributes, dict) else dir(attributes)
+    names = [n for n in fields if str(n).replace('_', '').casefold() == 'name']
+    if len(names) != 1:
+        raise ValueError('Недоступно описание параметра ' + expected_name)
+    name = attributes[names[0]] if isinstance(attributes, dict) else getattr(attributes, names[0])
+    if str(name).strip().casefold() != expected_name.casefold():
+        raise ValueError('Не совпало описание параметра ' + expected_name)
+    return getattr(uf.Param, getter)(obj.Tag, index)
+
+
+def feature_number(feature, name):
+    # Read the operation-local FBM feature, never substitute a master DEPTH.
+    return finite_number(feature.GetAttribute(name).GetDoubleValue())
+
+
+def feature_location(feature):
+    point = tuple(feature_number(feature, c + '_POSITION') for c in 'XYZ')
+    # NXHOLE/NXHOLECENTER D points into the hole; CL ToolAxis points out.
+    axis = unit(tuple(-feature_number(feature, c + '_ORIENTATION_D') for c in 'XYZ'))
+    return point, axis
+
+
+def same_hole(point, axis, other_point, other_axis):
+    # Absolute geometry and CL must agree: do not guess a path transformation.
+    tolerance = max(1e-6, max(abs(x) for x in point + other_point) * 1e-10)
+    delta = tuple(point[i] - other_point[i] for i in range(3))
+    axis_delta = tuple(axis[i] - other_axis[i] for i in range(3))
+    return dot(delta, delta) <= tolerance**2 and dot(axis_delta, axis_delta) <= 1e-12
+
+
+def read_cycle_holes(nx, operation):
+    """Resolve the two verified HoleDrilling profiles without modifying NX.
+
+    MachineCycle endpoints can be hole entrances, not the bottom of the tool.
+    Spot drilling uses local DEPTH to the tip. A standard through-hole drill
+    uses local DEPTH + BottomOffset + Tool Point Length. Other depth policies
+    are rejected until their saved-path semantics have been established.
+    """
+    if not isinstance(operation, nx.CAM.HoleDrilling):
+        raise ValueError('Глубина этого типа цикла пока не поддерживается; Z0 не подставляется.')
+    status_type = getattr(nx.CAM.CAMObject, 'Status', None)
+    status = enum_name(operation.GetStatus(), status_type, ('Complete', 'Approved', 'Repost', 'Regen'))
+    if status not in ('Complete', 'Approved', 'Repost'):
+        raise ValueError('Для глубины цикла нужна актуальная траектория; пересчитайте операцию в NX.')
+    uf = nx.UF.UFSession.GetUFSession()
+    subtype = str(uf_named_value(uf, operation, 154, 'System Template Subtype', 'AskStrValue'))
+    feature_type = str(uf_named_value(uf, operation, 8101, 'Feature Type Name', 'AskStrValue'))
+    spot = subtype == 'SPOT_DRILLING' and feature_type == 'NXHOLECENTER'
+    drill = subtype == 'DRILLING' and feature_type == 'NXHOLE'
+    if not (spot or drill):
+        raise ValueError('Не поддержана глубина цикла ' + subtype + ' / ' + feature_type)
+    part = operation.OwningPart
+    builder = part.CAMSetup.CAMOperationCollection.CreateHoleDrillingBuilder(operation)
+    try:
+        geometry = builder.GetFeatureGeometry()
+        if geometry.UseModelDepth or builder.PredefinedDepth.Status:
+            raise ValueError('Цикл с глубиной по модели или Predefined Depth пока не поддерживается.')
+        if builder.IgnoreToolTip or str(builder.GetToolDrivePoint()) != 'SYS_CL_TIP':
+            raise ValueError('Цикл использует другую точку инструмента; глубина вершины не определена.')
+        offset_type = getattr(nx.CAM.HoleDrillingBuilder, 'ControlPointOffsetType', None)
+        if enum_name(builder.ControlPointOffset, offset_type, ('NotSet', 'None')) not in ('NotSet', 'None'):
+            raise ValueError('Смещение контрольной точки цикла пока не поддерживается.')
+        depth_type = getattr(nx.CAM.OperationBuilder, 'HoleDepthTypes', None)
+        if enum_name(builder.HoleDepthType, depth_type, ('Point',)) != 'Point':
+            raise ValueError('Неподдерживаемый способ задания глубины цикла.')
+        cycle = builder.CycleTable
+        output_type = getattr(nx.CAM.Cycle, 'MotionOutputTypes', None)
+        if enum_name(cycle.MotionOutput, output_type, ('MachineCycle',)) != 'MachineCycle':
+            raise ValueError('Тип вывода цикла не соответствует точкам Cycle.')
+        allowed_cycles = ('Drill,Csink',) if spot else ('Drill,Deep', 'Drill')
+        if str(cycle.CycleType) not in allowed_cycles or str(cycle.CycleTrackingPoint) != 'None':
+            raise ValueError('Не поддержан цикл или его точка отслеживания: ' + str(cycle.CycleType))
+        if abs(finite_number(cycle.CsinkDiameter)) > 1e-10:
+            raise ValueError('Цикл с отдельным диаметром зенковки пока не поддерживается.')
+        cut = builder.CutParameters
+        if any(abs(finite_number(v)) > 1e-10 for v in (cut.BottomStock.Value, cut.PartStock.Value)):
+            raise ValueError('Цикл с припуском на дно или деталь пока не поддерживается.')
+        offset_types = getattr(nx.CAM.VerticalPosition, 'OffsetTypes', None)
+        if enum_name(cut.BottomOffset.OffsetType, offset_types, ('Distance',)) != 'Distance':
+            raise ValueError('Для цикла поддержано только смещение дна расстоянием.')
+        bottom_offset = finite_number(cut.BottomOffset.Distance)
+        if bottom_offset < 0 or (spot and abs(bottom_offset) > 1e-10):
+            raise ValueError('Такое смещение дна цикла пока не поддерживается.')
+
+        tool = operation.GetParent(nx.CAM.CAMSetup.View.MachineTool)
+        if tool is None:
+            raise ValueError('Не найден инструмент цикла.')
+        def tool_value(index, name):
+            return finite_number(uf_named_value(uf, tool, index, name, 'AskDoubleValue'))
+        diameter = tool_value(1000, 'Tool Diameter')
+        angle = tool_value(1016, 'Tool Point Angle')  # UF radians, FBM degrees.
+        tip_length = tool_value(1053, 'Tool Point Length')
+        if diameter <= 0 or not 0 < angle < math.pi or tip_length < 0:
+            raise ValueError('Некорректные размеры вершины сверла.')
+        if any(abs(tool_value(i, n)) > 1e-10 for i, n in (
+                (1176, 'Tool Tip Diameter'), (1177, 'Tool Tip Length'),
+                (1181, 'Tool Pilot Diameter'), (1182, 'Tool Pilot Length'))):
+            raise ValueError('Составная или пилотная вершина инструмента пока не поддерживается.')
+        if abs(tip_length - diameter / (2 * math.tan(angle / 2))) > max(1e-6, diameter * 1e-6):
+            raise ValueError('Длина вершины не соответствует стандартному коническому сверлу.')
+
+        masters = []
+        if drill:
+            # STEP1HOLE is NX's through-hole type; STEP1POCKET is blind.
+            # These links classify the feature only. Depth still comes from FBM.
+            for master in part.CAMFeatures:
+                if any(str(op.Tag) == str(operation.Tag) for op in master.GetOperations()):
+                    point, axis = feature_location(master)
+                    masters.append((master, point, axis))
+        count = int(geometry.GeometryList.Length)
+        if count <= 0:
+            raise ValueError('Не найдены локальные FBM-данные глубины цикла.')
+        holes = []
+        for index in range(count):
+            feature_set = geometry.GetFeatureSet(index)
+            if feature_set.CustomPartOffset or feature_set.CustomStock:
+                raise ValueError('Индивидуальное смещение или припуск отверстия пока не поддерживается.')
+            feature = feature_set.GetFeature()
+            point, axis = feature_location(feature)
+            depth = feature_number(feature, 'DEPTH')
+            if depth <= 0:
+                raise ValueError('Глубина отверстия не задана положительным числом.')
+            if abs(feature_number(feature, 'TIP_ANGLE') - math.degrees(angle)) > 1e-5:
+                raise ValueError('Угол вершины локального отверстия не совпадает с инструментом.')
+            if drill:
+                matches = [m for m, p, a in masters if same_hole(point, axis, p, a)]
+                if len(matches) != 1 or str(matches[0].Type) != 'STEP1HOLE':
+                    raise ValueError('Не подтверждено сквозное отверстие STEP1HOLE; '
+                                     'глухие и неоднозначные отверстия пока не поддерживаются.')
+                if feature.IsAttributeOverridden('SUBTYPE') or feature.GetAttribute('SUBTYPE').GetIntegerValue() != 0:
+                    raise ValueError('Изменён тип локального отверстия; сквозная глубина не подтверждена.')
+                if abs(feature_number(feature, 'DIAMETER_1') - diameter) > max(1e-6, diameter * 1e-6):
+                    raise ValueError('Диаметр сверла не совпадает с локальным отверстием.')
+                depth += bottom_offset + tip_length
+            holes.append((point, axis, finite_number(depth)))
+        return holes
+    finally:
+        builder.Destroy()
+
+
+def cycle_tip_zmin(holes, point, axis, origin):
+    matches = [depth for p, a, depth in holes if same_hole(point, axis, p, a)]
+    if len(matches) != 1:
+        raise ValueError('Точку Cycle не удалось однозначно сопоставить с входом и осью отверстия.')
+    # P_tip = P_entry - depth * ToolAxis. Projection keeps the actual rotary frame.
+    return finite_number(dot(tuple(point[i] - origin[i] for i in range(3)), axis) - matches[0])
+
+
 def toolpath_zmin(nx, operation, basis, origin, progress=None):
     """Read the existing CL path; never generate, post or modify it.
 
@@ -3168,6 +3321,8 @@ def toolpath_zmin(nx, operation, basis, origin, progress=None):
     if not all(math.isfinite(c) for c in origin):
         raise ValueError('Некорректное начало СКС операции.')
     minimum, previous, previous_axis, event = None, None, None, None
+    cycle_holes = None
+    motion_types = getattr(nx.CAM, 'CamPathMotionType', None)
     if progress is not None:
         progress(0, count)
     try:
@@ -3192,7 +3347,14 @@ def toolpath_zmin(nx, operation, basis, origin, progress=None):
                     end = path_point(motion.EndPoint)
                     z_axis = motion_z_axis(motion)
                     value = dot(tuple(end[i] - origin[i] for i in range(3)), z_axis)
-                    if shape != shapes.Linear:
+                    is_cycle = enum_name(motion_type, motion_types, ('Cycle',)) == 'Cycle'
+                    if is_cycle:
+                        if shape != shapes.Linear:
+                            raise ValueError('Неподдерживаемая форма движения цикла.')
+                        if cycle_holes is None:
+                            cycle_holes = read_cycle_holes(nx, operation)
+                        value = cycle_tip_zmin(cycle_holes, end, z_axis, origin)
+                    elif shape != shapes.Linear:
                         if previous_axis is not None:
                             difference = tuple(z_axis[i] - previous_axis[i] for i in range(3))
                             if dot(difference, difference) > 1e-16:
@@ -5606,11 +5768,11 @@ table[data-fit-family] td,table[data-fit-family] .numeric{font-size:inherit}
 table[data-fit-family] th{font-size:.85714286em;line-height:1.15}
 table[data-fit-family] .tree-name,table[data-fit-family] .name-cell{white-space:nowrap;overflow-wrap:normal;word-break:normal}
 
-/* A narrow column truncates only its presentation, including during printing. */
+/* Full cell contents are fitted with one font size for the whole table. */
 .rows-area{min-width:0;width:100%}
 table[data-fit-family] th,table[data-fit-family] td{max-width:0}
 table[data-fit-family] td{overflow:hidden}
-table[data-fit-family] .cell-text{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:normal;word-break:normal}
+table[data-fit-family] .cell-text{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:clip;white-space:nowrap;overflow-wrap:normal;word-break:normal}
 table[data-fit-family] .tree-cell{display:flex;min-width:0;max-width:100%}
 table[data-fit-family] .tree-indent{display:block;flex:0 0 auto;min-width:0}
 table[data-fit-family] .tree-cell>.tree-name{position:static;flex:1 1 0%;min-width:0}
@@ -5875,6 +6037,7 @@ table[data-fit-family] tbody>tr.operation-selected>td{background:#dcf2ff}
 .ops.wrap-operation-names tbody td[data-column-id="name"] .cell-text{height:auto;min-height:calc(3.4mm * var(--data-scale) - 1px);white-space:normal;overflow-wrap:anywhere;word-break:normal;line-height:1.2;text-overflow:clip}
 .ops.wrap-operation-names tbody td[data-column-id="name"] .tree-cell{align-items:center}
 .ops tbody td[data-column-id="name"] .tree-cell{width:100%}
+.ops tbody td[data-column-id="name"] .cell-text{padding-right:var(--operation-name-gap,0px)}
 .ops .operation-grip{position:absolute;left:.3mm;top:50%;transform:translateY(-50%);float:none}
 .ops tbody td[data-column-id="name"]{padding-left:calc(3.8mm * var(--data-scale))!important}
 .ops col[hidden],.ops td[hidden],.ops th[hidden]{display:none!important}
@@ -6971,7 +7134,7 @@ function applyColumnLayout(family,metrics,widths){
    table.style.transform='scale('+scale+')';
    plane.style.width=total*scale+'px';plane.style.height=(table.offsetHeight*scale+1)+'px';
   }
-  ensureColumnHandles(table);restoreCellText(table);alignNumericText(table);
+  ensureColumnHandles(table);restoreCellText(table);
   table.querySelectorAll('.column-grip').forEach(grip=>{
    const index=Number(grip.dataset.column),unit=25.4/96*metrics.layoutScale,mm=widths[index]*unit;
    grip.setAttribute('aria-valuenow',mm.toFixed(1));grip.setAttribute('aria-valuemin',(metrics.floor[index]*unit).toFixed(1));
@@ -6981,6 +7144,10 @@ function applyColumnLayout(family,metrics,widths){
   });
  };
  metrics.tables.forEach(apply);
+ fitTableText(metrics.tables,metrics.base);
+ if(family==='cover-tools'||family==='project-tools')metrics.tables.forEach(table=>{
+  const plane=table.parentElement;plane.style.height=(table.offsetHeight*metrics.layoutScale+1)+'px';
+ });
  syncColumnControls();
 }
 function moveColumnBoundary(table,index,initial,delta){
@@ -7045,21 +7212,31 @@ scope.addEventListener('keydown',event=>{
 });
 local('columns-auto').addEventListener('click',()=>resetColumnWidths());
 
-function autoColumnWidths(natural,floor,flex,target){
+function autoColumnWidths(natural,floor,flex,target,wrapped=false){
  const widths=natural.map((n,i)=>Math.max(n,floor[i]));
- // All other columns keep their measured content width. The flexible name
- // column receives the remainder and may use ellipsis; never squeeze values.
- flex.forEach(i=>widths[i]=floor[i]);
+ // Reserve complete text in every column. Only explicitly wrapped operation
+ // names may use the remaining width instead of their full one-line width.
+ if(wrapped)flex.forEach(i=>widths[i]=floor[i]);
  const slack=Math.max(0,target-widths.reduce((a,b)=>a+b,0)),recipients=flex.length?flex:widths.map((_,i)=>i).filter(i=>floor[i]>0||natural[i]>0);
  const weight=recipients.reduce((s,i)=>s+Math.max(natural[i],floor[i]),0);
  if(weight>0)recipients.forEach(i=>{widths[i]+=slack*Math.max(natural[i],floor[i])/weight;});
  return widths;
 }
 
-function fitAutoColumns(family,metrics,flex,hiddenWidths){
- const natural=metrics.natural.slice(),range=document.createRange();
+function fitAutoColumns(family,metrics,flex,hiddenWidths,measureNatural){
+ const wrapped=family==='operations'&&metrics.tables[0].classList.contains('wrap-operation-names');
+ const required=measureNatural,total=values=>values.reduce((sum,n,i)=>sum+(wrapped&&flex.includes(i)?metrics.floor[i]:Math.max(n,metrics.floor[i])),0);
+ // Choose column widths and text size together. Otherwise a long tool name
+ // would reserve its old large width while squeezing all operation names.
+ let low=0,high=metrics.base*2,natural=required(high);
+ if(total(natural)<=metrics.target)low=high;
+ else for(let pass=0;pass<13;pass++){
+  const mid=(low+high)/2;if(total(required(mid))<=metrics.target)low=mid;else high=mid;
+ }
+ natural=required(Math.max(.01,low));
+ const range=document.createRange();
  for(let pass=0;pass<4;pass++){
-  const widths=autoColumnWidths(natural,metrics.floor,flex,metrics.target).map((n,i)=>metrics.shown[i]?n:Math.max(1,hiddenWidths[i]));
+  const widths=autoColumnWidths(natural,metrics.floor,flex,metrics.target,wrapped).map((n,i)=>metrics.shown[i]?n:Math.max(1,hiddenWidths[i]));
   applyColumnLayout(family,metrics,widths);
   if(pass===3)break;
   // At very small screen zooms the browser still paints a border at least
@@ -7229,7 +7406,7 @@ function fitDataTables(only=null){
  const selected=only||[...scope.querySelectorAll('table[data-fit-family]')];
  selected.forEach(table=>{
   restoreCellText(table);const family=table.dataset.fitFamily;if(family==='operations'){ColumnOptions.apply(table);PageScale.applyWrap(table);}
-  const scale=PageScale.factor(table),key=family+':'+scale;
+  const scale=PageScale.factor(table),key=family+':'+scale+':'+table.classList.contains('wrap-operation-names');
   if(!families.has(key))families.set(key,[]);families.get(key).push(table);
  });
  for(const tables of families.values()){
@@ -7249,10 +7426,10 @@ function fitDataTables(only=null){
   if(family==='operations')ColumnOptions.apply(probe);probe.classList.remove('wrap-operation-names');
   probe.querySelectorAll('.column-grip,.operation-grip').forEach(grip=>grip.remove());holder.append(probe);scope.append(holder);
   const headerCells=[...probe.tHead.rows[0].cells];
-  if(family==='operations'&&ellipsisContext)headerCells.forEach((cell,i)=>{
+  if(family==='operations'&&textFitContext)headerCells.forEach((cell,i)=>{
    if(!shown[i]||OP_COLUMNS[i][0]==='change')return;
-   const style=getComputedStyle(cell);ellipsisContext.font=[style.fontStyle,style.fontWeight,style.fontSize,style.fontFamily].join(' ');
-   const word=Math.max(...OP_COLUMNS[i][1].split(' ').map(w=>ellipsisContext.measureText(w).width));
+   const style=getComputedStyle(cell);textFitContext.font=[style.fontStyle,style.fontWeight,style.fontSize,style.fontFamily].join(' ');
+   const word=Math.max(...OP_COLUMNS[i][1].split(' ').map(w=>textFitContext.measureText(w).width));
    floor[i]=Math.max(floor[i],word+(parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0)+3);
   });
   if(family==='operations'&&shown[0])for(const row of body.rows){
@@ -7262,32 +7439,89 @@ function fitDataTables(only=null){
    floor[0]=Math.max(floor[0],(indent?.getBoundingClientRect().width||0)+
     (parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0)+4*(parseFloat(style.fontSize)||base*96/72)+3);
   }
-  const natural=headerCells.map((cell,i)=>shown[i]?cell.getBoundingClientRect().width+2:0);holder.remove();
-  if(natural.some((x,i)=>shown[i]&&!(x>.35)))continue;
-  const metrics={target,base,natural,floor,renderScale,tables,shown};tables.forEach(t=>columnMetrics.set(t,metrics));
-  const manual=columnWidths[family]&&safeManualWidths(metrics,columnWidths[family]);
-  if(manual){applyColumnLayout(family,metrics,manual);continue;}
-  fitAutoColumns(family,metrics,flex,allFloor);
+  const measureNatural=font=>{
+   probe.style.fontSize=font+'pt';setOperationTextGap(probe,font*96/72);
+   return headerCells.map((cell,i)=>shown[i]?cell.getBoundingClientRect().width+2:0);
+  };
+  const natural=measureNatural(base);
+  try{
+   if(natural.some((x,i)=>shown[i]&&!(x>.35)))continue;
+   const metrics={target,base,natural,floor,renderScale,tables,shown};tables.forEach(t=>columnMetrics.set(t,metrics));
+   const manual=columnWidths[family]&&safeManualWidths(metrics,columnWidths[family]);
+   if(manual){applyColumnLayout(family,metrics,manual);continue;}
+   fitAutoColumns(family,metrics,flex,allFloor,measureNatural);
+  }finally{holder.remove();}
  }
 }
 
-// Center the visible text even when ellipsis is needed. Full values/markup stay
-// in the HTML, tooltips and source table; browser text-overflow cannot shift them.
-const ellipsisCanvas=document.createElement('canvas'),ellipsisContext=ellipsisCanvas.getContext('2d');
-function alignNumericText(table){
- // Auto width already reserves the complete rendered text. Canvas rounding
- // must not replace a value that actually fits with an artificial ellipsis.
- if(!ellipsisContext||table.dataset.widthMode==='auto')return;
- table.querySelectorAll('td.numeric:not([hidden]) .cell-text').forEach(node=>{
-  if(node.querySelector('svg'))return;
-  const full=node.textContent;if(!full)return;
-  const strong=node.querySelector('strong'),style=getComputedStyle(strong||node),width=node.clientWidth;
-  if(!(width>0))return;ellipsisContext.font=[style.fontStyle,style.fontWeight,style.fontSize,style.fontFamily].join(' ');
-  if(ellipsisContext.measureText(full).width<=width-.5)return;
-  node.dataset.fullHtml=node.innerHTML;const chars=Array.from(full);let lo=0,hi=chars.length;
-  while(lo<hi){const mid=Math.ceil((lo+hi)/2);if(ellipsisContext.measureText(chars.slice(0,mid).join('')+'…').width<=width-.5)lo=mid;else hi=mid-1;}
-  const short=chars.slice(0,lo).join('')+'…';if(strong){const copy=strong.cloneNode(false);copy.textContent=short;node.replaceChildren(copy);}else node.textContent=short;
- });
+// Measure rendered text, including mixed weights and tree icons. A single
+// font fits the complete logical table (both columns of the project catalog).
+const textFitCanvas=document.createElement('canvas'),textFitContext=textFitCanvas.getContext('2d');
+function setOperationTextGap(table,px){
+ if(table.dataset.fitFamily!=='operations')return;
+ let gap=px*.6;
+ if(textFitContext){
+  const family=getComputedStyle(table).fontFamily;
+  textFitContext.font=px+'px '+family;gap=textFitContext.measureText('  ').width;
+  textFitContext.font='bold '+px+'px '+family;gap=Math.max(gap,textFitContext.measureText('  ').width);
+ }
+ table.style.setProperty('--operation-name-gap',(gap+.25)+'px');
+}
+function fitTableText(tables,basePt){
+ const visible=tables.filter(t=>!t.hidden&&t.getBoundingClientRect().width>0);
+ if(!visible.length)return;
+ const range=document.createRange(),items=[],seen=new Set();
+ let ceiling=Infinity;
+ for(const table of visible){
+  const logical=parseFloat(getComputedStyle(table).width),render=table.getBoundingClientRect().width/logical;
+  if(!(render>0))continue;
+  for(const node of table.querySelectorAll('th:not([hidden]) .cell-text,td:not([hidden]) .cell-text')){
+   if(!node.textContent.trim())continue;
+   const cell=node.closest('th,td'),name=cell.dataset.columnId==='name'&&cell.tagName==='TD';
+   const multiline=table.dataset.fitFamily==='operations'&&(cell.tagName==='TH'||name&&table.classList.contains('wrap-operation-names'));
+   const bounds=node.getBoundingClientRect(),style=getComputedStyle(node);
+   // Repeated feeds, speeds and tool names share geometry. Measure each
+   // distinct case once per candidate font instead of once per operation.
+   const key=JSON.stringify([node.innerHTML,cell.tagName,cell.dataset.columnId,multiline,style.fontWeight,style.fontStyle,
+    bounds.width/render,bounds.height/render,render,node.previousElementSibling?.style.width||'']);
+   if(seen.has(key))continue;seen.add(key);
+   const runs=[],walker=document.createTreeWalker(node,NodeFilter.SHOW_TEXT);let run;
+   while(run=walker.nextNode())if(run.textContent.trim())runs.push(run);
+   items.push({node,table,multiline,render,runs});
+   // Row controls define the available line height. Text may grow up to that
+   // height, but it must not silently enlarge rows or change tool-list scale.
+   if(!multiline)ceiling=Math.min(ceiling,bounds.height/render*2);
+  }
+ }
+ if(!items.length)return;
+ if(!Number.isFinite(ceiling))ceiling=basePt*96/72;
+ function setFont(px){
+  for(const table of visible){
+   table.style.fontSize=px+'px';
+   setOperationTextGap(table,px);
+  }
+ }
+ function fits(px){
+  setFont(px);
+  for(const {node,multiline,render,runs} of items){
+   const box=node.getBoundingClientRect(),style=getComputedStyle(node);
+   const width=box.width-((parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0))*render;
+   range.selectNodeContents(node);const text=range.getBoundingClientRect();
+   if(text.width>width-.75*render)return false;
+   // Inline wrappers include their whole line box. Inspect text runs instead
+   // so a carrier icon cannot force the font to zero at a small screen zoom.
+   if(!multiline)for(const run of runs){range.selectNodeContents(run);const glyph=range.getBoundingClientRect();if(glyph.height>box.height+.01*render)return false;}
+  }
+  return true;
+ }
+ let low=0,high=Math.max(.01,ceiling);
+ if(fits(high))low=high;
+ else for(let n=0;n<16&&high-low>.005;n++){
+  const mid=(low+high)/2;if(fits(mid))low=mid;else high=mid;
+ }
+ // Round down: never lose the last glyph to browser subpixel quantization.
+ const font=Math.max(.001,Math.floor(low*1000)/1000);setFont(font);
+ visible.forEach(table=>table.dataset.fittedFont=String(font));
 }
 
 
@@ -8362,7 +8596,7 @@ scope.addEventListener('click',event=>{
  if(next){const after=next.getBoundingClientRect();window.scrollBy(after.left-rect.left,after.top-rect.top);next.querySelector('[data-page-reset]')?.focus({preventScroll:true});}
 });
 window.addEventListener('resize',()=>{fitDataTables();positionMcsAnchors();NoteLayout.queue();});
-window.addEventListener('afterprint',()=>{positionMcsAnchors();NoteLayout.queue();});
+window.addEventListener('afterprint',()=>{CardFlow.reflow();positionMcsAnchors();NoteLayout.queue();});
 if(window.ResizeObserver){const observer=new ResizeObserver(()=>positionMcsAnchors());scope.querySelectorAll('.photo-stage').forEach(stage=>observer.observe(stage));}
 function togglePhoto(photo){setVariant(photo,photo.dataset.variant!=='no-ipw',true);}
 function syncField(event){const field=event.target.closest('[data-field]');if(!field||(event.isComposing&&field.matches('.datum-input')))return;const value=fieldValue(field);scope.querySelectorAll('[data-field]').forEach(el=>{if(el.dataset.field===field.dataset.field&&(el!==field||el.matches('input,select')))setFieldValue(el,value);});const resized=fitFields();if(resized&&field.closest('.note-row'))NoteLayout.queue();markChanged();DatumEditor.position();}
@@ -8492,7 +8726,7 @@ def fitted_columns(samples, width_mm, base_pt, minima, flexible):
 
 
 def clipped_cell(content, full_text, indent_mm=None):
-    """Keep all markup/data; ellipsis is visual and the tooltip has the full value."""
+    """Keep full markup and tooltips; the browser fits a shared table font."""
     css = 'cell-text tree-name' if indent_mm is not None else 'cell-text'
     text = '<span class="%s" title="%s">%s</span>' % (css, escaped(full_text), content)
     if indent_mm is not None:

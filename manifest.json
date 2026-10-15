@@ -6,9 +6,9 @@
       "id": "NX_Setup_Prototype",
       "name": "Карта наладки",
       "file": "NX_Setup_Prototype.py",
-      "version": "V2.49",
+      "version": "V2.51",
       "path": "scripts/NX_Setup_Prototype.py",
-      "sha256": "ed0bbb41672b49409f68220d03b04d0c925d2463356382d2b77a77e426bb85ce",
+      "sha256": "3b67b8199c48dcfd78e1e9201b82e042362e93d6c58abd26466335e778efadf2",
       "description": "Создание редактируемой карты наладки с видами, инструментами и операциями.",
       "config": {
         "path": "config/NX_Setup_Prototype.example.ini",
@@ -21,9 +21,9 @@
       "id": "NX_Postprocess_To_Machine",
       "name": "Меню постпроцессирования",
       "file": "NX_Postprocess_To_Machine.cs",
-      "version": "V1.45",
+      "version": "V1.46",
       "path": "scripts/NX_Postprocess_To_Machine.cs",
-      "sha256": "a0bf8546c07450d48966979b691d36acf400cbdaced55c8d78ff400174d988b3",
+      "sha256": "09849b0377feb162d0e7e1d434b9829b8d0577e07c4c3aaf7c006198c105c48b",
       "description": "Вывод управляющих программ и FANUC BIN в папку станка или на носитель.",
       "config": {
         "path": "config/NX_Postprocess_To_Machine.example.ini",

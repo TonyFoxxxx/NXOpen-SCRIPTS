@@ -14,8 +14,8 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 | File | Version | Purpose | Guide |
 | --- | --- | --- | --- |
-| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.49 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
-| [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.45 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
+| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.51 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
+| [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.46 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.03 | Add minimum Z to operation names, including supported spot-drilling and through-hole drilling cycles. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.04 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
@@ -30,11 +30,12 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Zmin V1.03 · 2026-10-14
+### Latest update — Setup sheets V2.51 and Postprocessing V1.46 · 2026-10-15
 
-- Fixed false Z0 results for supported spot-drilling and through-hole drilling cycles.
-- Included local hole depth, bottom offset and drill point length while retaining projection along the actual tool axis.
-- Cross-checked with diagnostics and NC output; unsupported cycles are skipped with reasons. [All changes and limitations](docs/en/zmin.md#latest-release).
+- Ported the Zmin V1.03 cycle-depth correction to the sheet's Zmin column and optional operation renaming in both scripts.
+- Spot drilling uses local depth; through-hole drilling adds bottom offset and drill point length. Projection along the actual tool axis is retained for rotary orientations; unsupported cycles are skipped with reasons.
+- The sheet includes V2.50 table changes: a shared maximum fitting font and complete names without ellipses.
+- Details: [Setup sheets](docs/en/setup-card.md#latest-release), [Postprocessing](docs/en/postprocess.md#latest-release).
 
 ## Installation
 

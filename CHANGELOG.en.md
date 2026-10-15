@@ -2,6 +2,22 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-15 — Setup sheets V2.51
+
+- Ported the standalone Zmin V1.03 machine-cycle correction to the Zmin column and optional operation renaming. A Cycle entrance point is no longer treated as the hole bottom.
+- Supported spot drilling uses operation-local FBM `DEPTH` to the tip; through-hole drilling adds bottom offset and the verified length of a standard conical point. Holes are matched to path coordinates and axes independently of order.
+- Unsupported cycles and incomplete data leave Zmin blank and its suffix unchanged. With renaming enabled, the skip reason is shown in the NX result. Partial minima and substituted Z0 are excluded; [supported scope](docs/en/zmin.md#spot-drilling-and-drilling) matches the standalone journal.
+- Retained rotary calculation along actual Three/Five ToolAxis vectors relative to the MCS origin, including constant-axis arcs and helices. Selection scope, preparation rollback and reuse of calculated Zmin in the sheet are retained.
+- Based on V2.50: a shared maximum fitting font for each table, equal font sizes in both project tool-catalog columns, complete names without ellipses and room for two spaces after the longest operation name in Auto width. Existing layouts and manual widths are retained.
+- Updated source, updater catalog, README and guides in both languages. A control run of this revision inside the target NX / Designcenter environment remains necessary.
+
+## 2026-10-15 — Postprocessing V1.46
+
+- Ported the standalone Zmin V1.03 cycle correction to optional Zmin naming before NC output: local spot-drilling depth and through-hole drilling depth with bottom offset and standard conical point length.
+- Holes are matched by position and axis. Unsupported cycles or incomplete data skip Zmin for the whole operation with a reason in the result; neither false Z0 nor a partial minimum is written to the name.
+- Retained rotary calculation along actual ToolAxis vectors, selection scope, numbering, Description, preparation rollback, paths, INI and NC/BIN output. Zmin defaults are unchanged; its calculation adds no files.
+- Updated source, updater catalog, README and guides in both languages. A control run of this revision inside the target NX / Designcenter environment remains necessary.
+
 ## 2026-10-14 — Zmin V1.03
 
 - Fixed false Z0 results for supported `HoleDrilling` machine cycles: a saved Cycle entrance point is no longer treated as the hole bottom.

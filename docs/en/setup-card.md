@@ -8,15 +8,15 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.49 · 2026-10-09**
+**V2.51 · 2026-10-15**
 
-- The startup menu has an initially unchecked “Create a faceted 3D model on the first sheet” option. When it is off, NX fits visible geometry to the window without changing the current orientation and captures an image for the first sheet.
-- Enabling it reveals the accuracy coefficient (default 1) and maximum triangle count (default 500,000). Accuracy must be greater than 0 and no greater than 1; decimal commas and points are accepted. The triangle limit is a positive integer and may be increased.
-- A smaller coefficient reduces the detail of newly generated meshes and normally their data size. Part dimensions are unchanged. At 1 the tolerances are 0.01 mm and 3°; at 0.5 they are 0.02 mm and 6°. Tolerances are divided by the coefficient, with the angular tolerance capped at 180°.
-- The selected limit applies to the entire model and is also used by the browser. Exceeding it produces a short instruction to reduce accuracy or increase the triangle limit. The previous sheet is retained.
-- Re-export replaces the previous mesh with the new screenshot or the previous screenshot with the new mesh, including partial setup updates. The tool catalog remains.
+- The standalone Zmin V1.03 cycle correction now applies to both the Zmin column and optional operation-name suffixes. A saved machine-cycle entrance point is no longer treated as the hole bottom.
+- Supported spot drilling reads operation-local FBM `DEPTH` to the tip; through-hole drilling adds bottom offset and the verified length of a standard conical point. Holes are matched to path points by coordinates and axis.
+- Unsupported cycles or incomplete data leave the Zmin column blank and the Zmin suffix unchanged. With renaming enabled, the skip reason is included in the NX result. Partial minima and substituted Z0 are not used. [Exact settings and limitations](zmin.md#spot-drilling-and-drilling).
+- Retained rotary projection along actual Three/Five ToolAxis vectors relative to the MCS origin, including analytical minima for constant-axis arcs and helices.
+- Based on V2.50, retaining a shared maximum fitting font for each table, including both columns of the project tool catalog. Names are not shortened with ellipses; Auto width allows two spaces after the longest operation name. Existing layouts and manual width controls are retained.
 
-30 portable checks passed, covering coefficient propagation, millimetres/inches, configurable limits, concise limit errors, fitting before capture and camera restoration after failures. Chromium checks covered mesh → screenshot → mesh through browser saving and partial re-export. Four native Windows dialog checks were skipped on Linux; execution in NX / Designcenter has not been verified. See the [changelog](../../CHANGELOG.en.md).
+This revision still requires a control run inside the target NX / Designcenter environment. See the [changelog](../../CHANGELOG.en.md).
 
 ## Building the sheet in NX
 
@@ -68,7 +68,11 @@ The operation table retains program-folder hierarchy.
 
 Available tool information includes overhang H, cutting length L and relieved length HL; the sheet explains these labels. Toolpath time does not include every machine overhead.
 
-Zmin uses the CL-projection algorithm from the [standalone Zmin journal](zmin.md) V1.02: `dot(P - O, unit(ToolAxis))` at saved CL points. Both Three and Five motions supply their actual tool vectors. Names change only when the startup Zmin option is enabled. For rotary machining, the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include internal extrema; varying-axis arcs without interpolation data and compound paths are unsupported. This is not a simulation of postprocessed machine movement. The standalone V1.03 machine-cycle depth correction has not yet been ported to setup-sheet V2.49, which may report a cycle entrance coordinate instead of its final depth.
+The Zmin column and optional renaming share the [standalone Zmin journal](zmin.md) V1.03 algorithm. Ordinary motions use `dot(P - O, unit(ToolAxis))` at saved CL points; both Three and Five motions supply their actual tool vectors. For rotary machining, the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include internal extrema; varying-axis arcs without interpolation data and compound paths are unsupported. This is not a simulation of postprocessed machine movement.
+
+Supported spot drilling calculates final Z from operation-local FBM `DEPTH` to the tip. Through-hole drilling also includes bottom offset and standard conical point length. Each hole's position and axis are matched to the path; master-model depth and old operation names are not used as depth sources. The standard settings in the [machine-cycle limitations](zmin.md#spot-drilling-and-drilling) are required.
+
+If even one Cycle point has no resolved depth, Zmin stays blank for the whole operation; neither a partial minimum nor a substituted Z0 is displayed. With renaming enabled, that operation's Zmin suffix is left unchanged. Zmin suffixes are added or replaced only when the startup option is enabled; the NX result then shows reasons for skipped renames.
 
 ## Editing in the browser
 
@@ -77,7 +81,7 @@ Zmin uses the CL-projection algorithm from the [standalone Zmin journal](zmin.md
 - Notes grow without shrinking the font. Drag the lower boundary to set a height, which is saved.
 - Jump to a setup using the top-bar list.
 - Hide operation columns, wrap long names, scale tables and adjust column widths; return to **«Автоширина» (Auto width)** when needed.
-- Auto width shows full tool names and other values, allocating the remaining space to Operation. Operation names use ellipses or wrap when enabled for that sheet. If necessary, the whole table fits to the page without internal horizontal scrolling. Manual widths are saved.
+- Auto width shows complete operation/tool names and other values without ellipses, allowing two spaces after the longest operation name. Each table uses a shared maximum fitting font; both columns of the project tool catalog use the same size. Name wrapping is controlled by the sheet checkbox. If necessary, the whole table fits to the page without internal horizontal scrolling. Manual widths are saved.
 - Move selected operations onto the setup's first sheet or back using buttons or drag-and-drop. The optional limit is 25 operations on the first sheet; available space also limits placement.
 - Operations paginate automatically, with repeated group headings and continuous page numbers.
 - Click an image to switch IPW / NO IPW; pan, zoom and reset to 100% or center.

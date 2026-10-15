@@ -8,15 +8,14 @@ Outputs NC programs to machine folders, removable media or a manually selected f
 
 ## Latest release
 
-**V1.45 · 2026-10-07**
+**V1.46 · 2026-10-15**
 
-- Multiple-offset parsing inherits modal state from the header and previous blocks. Known G modes are restored only when necessary; coordinates, tool, spindle and coolant commands are never invented. Moves and final states are checked with optional-block skipping both on and off.
-- Supports separate X and Y blocks before a separate Z approach with G43/H, O headers with N numbers, and G80 together with G00/G01/G02/G03 in either order. An offset specified only in the header is inserted before each repeated section.
-- Explicit post entries can use `Auto`, `ISO_G28` or `ISO_G53` profiles. G53 requires a confirmed `WorkOffsetG53Z` matching the original retract, G49, G90/G00/G40 and fixed explicit G20/G21 units. The script does not choose a safe machine height or create retract moves.
-- Detailed errors show post, profile, offsets, the failed condition and nearby original NC lines. **«Скопировать данные ошибки» (Copy error details)** includes the version; Close and Escape dismiss the window. A native fallback is retained if Windows Forms cannot open. No report or backup files are added.
-- Existing paths, INI editors, program selection, Description, Zmin, numbering, subprogram calls and BIN behavior are retained.
+- Ported the standalone Zmin V1.03 cycle correction to optional Zmin naming before postprocessing. Supported spot-drilling and through-hole drilling cycles no longer receive a false Z0 from their entrance point.
+- Spot drilling uses operation-local FBM `DEPTH` to the tip; through-hole drilling adds bottom offset and the verified length of a standard conical point. Holes are matched to path coordinates and axes independently of order.
+- An unsupported cycle or incomplete data skips Zmin for the whole operation, with a reason in the output result. Neither a partial minimum nor a substituted Z0 is written to the name. [Exact settings and limitations](zmin.md#spot-drilling-and-drilling).
+- Retained rotary projection along actual Three/Five ToolAxis vectors, selection scope, numbering, Description, preparation rollback, paths, INI and NC/BIN output. Zmin still starts unchecked.
 
-Numeric ISO conversion and the Windows error window have automated checks. Original O1261/O5555 examples were checked separately without publishing their NC source. Testing inside the target NX / Designcenter and verification for the actual controller remain necessary. See the [changelog](../../CHANGELOG.en.md).
+This revision still requires a control run inside the target NX / Designcenter environment. See the [changelog](../../CHANGELOG.en.md).
 
 ## Program selection and posts
 
@@ -78,6 +77,8 @@ This option uses NX selection captured **before the first window opens**:
 - Work and displayed part must be the same.
 
 Existing, current toolpaths are evaluated using actual Three/Five ToolAxis vectors and `dot(P - O, unit(ToolAxis))`. Values are rounded to four decimal places without unnecessary zeros. For rotary machining the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include analytical internal minima; unsupported varying-axis or compound paths, missing data and out-of-date paths are skipped with reasons. This is a CL calculation, not controller simulation.
+
+Supported `HoleDrilling` machine cycles use the standalone Zmin V1.03 algorithm: spot drilling uses operation-local FBM `DEPTH` to the tip; through-hole drilling uses local `DEPTH` + bottom offset + the verified length of a standard conical point. Each hole is matched to the path point and axis. Unsupported cycles/settings or even one unresolved Cycle depth leave the whole operation's Zmin suffix unchanged, with a reason in the output result. No partial minimum or substituted Z0 is written. See [spot-drilling and drilling limitations](zmin.md#spot-drilling-and-drilling) for the exact supported profiles.
 
 Repeated terminal numeric Z suffixes are replaced by one: `01_Milling_Z-5_Z-8` becomes `01_Milling_Z-12`. A Z fragment in the middle of a name and other prefixes/suffixes are retained. Already correct names and conflicts are skipped; extra counters are not added.
 

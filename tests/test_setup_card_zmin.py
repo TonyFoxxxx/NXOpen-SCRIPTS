@@ -1,4 +1,4 @@
-"""The setup card and standalone journal retain the same ordinary CL results."""
+"""The setup card and standalone journal share CL projection and cycle readers."""
 import ast
 import importlib.util
 import math
@@ -110,11 +110,11 @@ class ZminTests(unittest.TestCase):
         return results[0]
 
     def test_shared_projection_helpers_match_standalone_exactly(self):
-        # V1.03 adds cycle depth only to the standalone journal; ordinary CL
-        # behavior is compared through both full readers by read() above.
+        # Keep the proven rotary calculation and cycle guards identical in both scripts.
         names = ('dot', 'cross', 'unit', 'xyz', 'read_mcs', 'finite_number', 'enum_name',
                  'path_point', 'release_path_data', 'arc_path_zmin', 'path_axis_mode',
-                 'motion_z_axis')
+                 'motion_z_axis', 'uf_named_value', 'feature_number', 'feature_location',
+                 'same_hole', 'read_cycle_holes', 'cycle_tip_zmin', 'toolpath_zmin')
         trees = [{node.name: ast.dump(node) for node in ast.parse(path.read_text(encoding='utf-8')).body
                   if isinstance(node, ast.FunctionDef)}
                  for path in (SOURCE, ROOT / 'scripts/NX_Operation_Zmin.py')]

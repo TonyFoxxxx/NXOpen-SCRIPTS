@@ -1,6 +1,7 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.45
+// SCRIPT_VERSION: V1.46
 // Optional numbering, tool descriptions and operation Zmin.
+// Cycle Zmin uses verified local FBM depths; actual CL rotary axes are preserved.
 // Modal-aware work-offset repeats; per-post retract profiles and copyable errors.
 // Description behavior: NX_Tool_D_To_Description; Zmin behavior: NX_Operation_Zmin.
 // Preserve NC processing, modal validation, output paths and other INI settings.
@@ -1045,6 +1046,7 @@ internal sealed class OperationZmin
             throw new InvalidOperationException("\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u044B\u0439 \u0444\u043E\u0440\u043C\u0430\u0442 \u043E\u0441\u0438 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430: " + mode);
         foreach (double coordinate in origin) ZminGeometry.Finite(coordinate);
         double? minimum = null; double[] previous = null, previousAxis = null;
+        List<ZminCycleDepth.Hole> cycleHoles = null;
         NXOpen.CAM.PathEvent current = null;
         try
         {
@@ -1068,7 +1070,14 @@ internal sealed class OperationZmin
                         try { axis = ZminGeometry.Unit(Xyz(motion.ToolAxis)); }
                         catch (Exception ex) { throw new InvalidOperationException("\u041D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u043E \u043D\u0430\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435 \u043E\u0441\u0438 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430 \u0432 \u0442\u0440\u0430\u0435\u043A\u0442\u043E\u0440\u0438\u0438: " + ex.Message, ex); }
                         double value = ZminGeometry.Dot(ZminGeometry.Subtract(end, origin), axis);
-                        if (shape != NXOpen.CAM.CamPathMotionShapeType.Linear)
+                        if (type == NXOpen.CAM.CamPathMotionType.Cycle)
+                        {
+                            if (shape != NXOpen.CAM.CamPathMotionShapeType.Linear)
+                                throw new InvalidOperationException("\u041d\u0435\u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043c\u0430\u044f \u0444\u043e\u0440\u043c\u0430 \u0434\u0432\u0438\u0436\u0435\u043d\u0438\u044f \u0446\u0438\u043a\u043b\u0430.");
+                            if (cycleHoles == null) cycleHoles = ZminCycleDepth.Read(operation);
+                            value = ZminCycleDepth.TipMinimum(cycleHoles, end, axis, origin);
+                        }
+                        else if (shape != NXOpen.CAM.CamPathMotionShapeType.Linear)
                         {
                             if (previousAxis != null)
                             {
@@ -1176,6 +1185,188 @@ internal sealed class OperationZmin
             if (skipped.Count > 8) text.Append("\n\u0418 \u0435\u0449\u0451 " + (skipped.Count - 8) + " \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439.");
         }
         return text.ToString();
+    }
+}
+
+// Same supported profiles and guards as NX_Operation_Zmin V1.03.
+// Read-only builders are destroyed without committing or regenerating the path.
+internal static class ZminCycleDepth
+{
+    internal sealed class Hole
+    {
+        internal double[] Point, Axis;
+        internal double Depth;
+        internal string FeatureType;
+    }
+
+    private static void CheckParameter(UFSession uf, int index, string expectedName)
+    {
+        UFParam.IndexAttribute attributes;
+        uf.Param.AskParamAttributes(index, out attributes);
+        if (!String.Equals((attributes.name ?? "").Trim(), expectedName, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("\u041d\u0435 \u0441\u043e\u0432\u043f\u0430\u043b\u043e \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u0430 " + expectedName);
+    }
+
+    private static string ParameterText(UFSession uf, Tag tag, int index, string name)
+    {
+        CheckParameter(uf, index, name);
+        string value; uf.Param.AskStrValue(tag, index, out value);
+        return value;
+    }
+
+    private static double ParameterNumber(UFSession uf, Tag tag, int index, string name)
+    {
+        CheckParameter(uf, index, name);
+        double value; uf.Param.AskDoubleValue(tag, index, out value);
+        return ZminGeometry.Finite(value);
+    }
+
+    private static double FeatureNumber(NXOpen.CAM.FBM.Feature feature, string name)
+    {
+        // The operation-local feature is authoritative for DEPTH.
+        return ZminGeometry.Finite(feature.GetAttribute(name).GetDoubleValue());
+    }
+
+    private static Hole FeatureLocation(NXOpen.CAM.FBM.Feature feature)
+    {
+        Hole result = new Hole();
+        result.Point = new double[3]; result.Axis = new double[3];
+        string[] coordinates = new string[] { "X", "Y", "Z" };
+        for (int i = 0; i < 3; i++)
+        {
+            result.Point[i] = FeatureNumber(feature, coordinates[i] + "_POSITION");
+            // NXHOLE D points into the hole; CL ToolAxis points out.
+            result.Axis[i] = -FeatureNumber(feature, coordinates[i] + "_ORIENTATION_D");
+        }
+        result.Axis = ZminGeometry.Unit(result.Axis);
+        return result;
+    }
+
+    internal static bool SameHole(double[] point, double[] axis, double[] otherPoint, double[] otherAxis)
+    {
+        double scale = 0;
+        for (int i = 0; i < 3; i++) scale = Math.Max(scale, Math.Max(Math.Abs(point[i]), Math.Abs(otherPoint[i])));
+        double tolerance = Math.Max(1e-6, scale * 1e-10);
+        double[] delta = ZminGeometry.Subtract(point, otherPoint), axisDelta = ZminGeometry.Subtract(axis, otherAxis);
+        return ZminGeometry.Dot(delta, delta) <= tolerance * tolerance && ZminGeometry.Dot(axisDelta, axisDelta) <= 1e-12;
+    }
+
+    internal static List<Hole> Read(NXOpen.CAM.Operation operation)
+    {
+        if (!(operation is NXOpen.CAM.HoleDrilling))
+            throw new InvalidOperationException("\u0413\u043b\u0443\u0431\u0438\u043d\u0430 \u044d\u0442\u043e\u0433\u043e \u0442\u0438\u043f\u0430 \u0446\u0438\u043a\u043b\u0430 \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f; Z0 \u043d\u0435 \u043f\u043e\u0434\u0441\u0442\u0430\u0432\u043b\u044f\u0435\u0442\u0441\u044f.");
+        string status = operation.GetStatus().ToString();
+        if (status != "Complete" && status != "Approved" && status != "Repost")
+            throw new InvalidOperationException("\u0414\u043b\u044f \u0433\u043b\u0443\u0431\u0438\u043d\u044b \u0446\u0438\u043a\u043b\u0430 \u043d\u0443\u0436\u043d\u0430 \u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430\u044f \u0442\u0440\u0430\u0435\u043a\u0442\u043e\u0440\u0438\u044f; \u043f\u0435\u0440\u0435\u0441\u0447\u0438\u0442\u0430\u0439\u0442\u0435 \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044e \u0432 NX.");
+        UFSession uf = UFSession.GetUFSession();
+        string subtype = ParameterText(uf, operation.Tag, 154, "System Template Subtype");
+        string featureType = ParameterText(uf, operation.Tag, 8101, "Feature Type Name");
+        bool spot = subtype == "SPOT_DRILLING" && featureType == "NXHOLECENTER";
+        bool drill = subtype == "DRILLING" && featureType == "NXHOLE";
+        if (!spot && !drill)
+            throw new InvalidOperationException("\u041d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0430\u043d\u0430 \u0433\u043b\u0443\u0431\u0438\u043d\u0430 \u0446\u0438\u043a\u043b\u0430 " + subtype + " / " + featureType);
+        Part part = operation.OwningPart as Part;
+        if (part == null) throw new InvalidOperationException("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430 \u0434\u0435\u0442\u0430\u043b\u044c \u0446\u0438\u043a\u043b\u0430.");
+        NXOpen.CAM.HoleDrillingBuilder builder = part.CAMSetup.CAMOperationCollection.CreateHoleDrillingBuilder(operation);
+        try
+        {
+            var geometry = builder.GetFeatureGeometry();
+            if (geometry.UseModelDepth || builder.PredefinedDepth.Status)
+                throw new InvalidOperationException("\u0426\u0438\u043a\u043b \u0441 \u0433\u043b\u0443\u0431\u0438\u043d\u043e\u0439 \u043f\u043e \u043c\u043e\u0434\u0435\u043b\u0438 \u0438\u043b\u0438 Predefined Depth \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f.");
+            if (builder.IgnoreToolTip || builder.GetToolDrivePoint() != "SYS_CL_TIP")
+                throw new InvalidOperationException("\u0426\u0438\u043a\u043b \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u0442 \u0434\u0440\u0443\u0433\u0443\u044e \u0442\u043e\u0447\u043a\u0443 \u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u0430; \u0433\u043b\u0443\u0431\u0438\u043d\u0430 \u0432\u0435\u0440\u0448\u0438\u043d\u044b \u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u0430.");
+            string controlOffset = builder.ControlPointOffset.ToString();
+            if (controlOffset != "NotSet" && controlOffset != "None")
+                throw new InvalidOperationException("\u0421\u043c\u0435\u0449\u0435\u043d\u0438\u0435 \u043a\u043e\u043d\u0442\u0440\u043e\u043b\u044c\u043d\u043e\u0439 \u0442\u043e\u0447\u043a\u0438 \u0446\u0438\u043a\u043b\u0430 \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f.");
+            if (builder.HoleDepthType.ToString() != "Point")
+                throw new InvalidOperationException("\u041d\u0435\u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043c\u044b\u0439 \u0441\u043f\u043e\u0441\u043e\u0431 \u0437\u0430\u0434\u0430\u043d\u0438\u044f \u0433\u043b\u0443\u0431\u0438\u043d\u044b \u0446\u0438\u043a\u043b\u0430.");
+            var cycle = builder.CycleTable;
+            if (cycle.MotionOutput.ToString() != "MachineCycle")
+                throw new InvalidOperationException("\u0422\u0438\u043f \u0432\u044b\u0432\u043e\u0434\u0430 \u0446\u0438\u043a\u043b\u0430 \u043d\u0435 \u0441\u043e\u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u0435\u0442 \u0442\u043e\u0447\u043a\u0430\u043c Cycle.");
+            string cycleType = cycle.CycleType;
+            if ((spot ? cycleType != "Drill,Csink" : cycleType != "Drill,Deep" && cycleType != "Drill") ||
+                cycle.CycleTrackingPoint != "None")
+                throw new InvalidOperationException("\u041d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0430\u043d \u0446\u0438\u043a\u043b \u0438\u043b\u0438 \u0435\u0433\u043e \u0442\u043e\u0447\u043a\u0430 \u043e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u043d\u0438\u044f: " + cycleType);
+            if (Math.Abs(ZminGeometry.Finite(cycle.CsinkDiameter)) > 1e-10)
+                throw new InvalidOperationException("\u0426\u0438\u043a\u043b \u0441 \u043e\u0442\u0434\u0435\u043b\u044c\u043d\u044b\u043c \u0434\u0438\u0430\u043c\u0435\u0442\u0440\u043e\u043c \u0437\u0435\u043d\u043a\u043e\u0432\u043a\u0438 \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f.");
+            var cut = builder.CutParameters;
+            if (Math.Abs(ZminGeometry.Finite(cut.BottomStock.Value)) > 1e-10 ||
+                Math.Abs(ZminGeometry.Finite(cut.PartStock.Value)) > 1e-10)
+                throw new InvalidOperationException("\u0426\u0438\u043a\u043b \u0441 \u043f\u0440\u0438\u043f\u0443\u0441\u043a\u043e\u043c \u043d\u0430 \u0434\u043d\u043e \u0438\u043b\u0438 \u0434\u0435\u0442\u0430\u043b\u044c \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f.");
+            if (cut.BottomOffset.OffsetType.ToString() != "Distance")
+                throw new InvalidOperationException("\u0414\u043b\u044f \u0446\u0438\u043a\u043b\u0430 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0430\u043d\u043e \u0442\u043e\u043b\u044c\u043a\u043e \u0441\u043c\u0435\u0449\u0435\u043d\u0438\u0435 \u0434\u043d\u0430 \u0440\u0430\u0441\u0441\u0442\u043e\u044f\u043d\u0438\u0435\u043c.");
+            double bottomOffset = ZminGeometry.Finite(cut.BottomOffset.Distance);
+            if (bottomOffset < 0 || (spot && Math.Abs(bottomOffset) > 1e-10))
+                throw new InvalidOperationException("\u0422\u0430\u043a\u043e\u0435 \u0441\u043c\u0435\u0449\u0435\u043d\u0438\u0435 \u0434\u043d\u0430 \u0446\u0438\u043a\u043b\u0430 \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f.");
+
+            NCGroup tool = operation.GetParent(NXOpen.CAM.CAMSetup.View.MachineTool);
+            if (tool == null) throw new InvalidOperationException("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d \u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442 \u0446\u0438\u043a\u043b\u0430.");
+            double diameter = ParameterNumber(uf, tool.Tag, 1000, "Tool Diameter");
+            double angle = ParameterNumber(uf, tool.Tag, 1016, "Tool Point Angle"); // UF radians; FBM degrees.
+            double tipLength = ParameterNumber(uf, tool.Tag, 1053, "Tool Point Length");
+            if (diameter <= 0 || angle <= 0 || angle >= Math.PI || tipLength < 0)
+                throw new InvalidOperationException("\u041d\u0435\u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u0435 \u0440\u0430\u0437\u043c\u0435\u0440\u044b \u0432\u0435\u0440\u0448\u0438\u043d\u044b \u0441\u0432\u0435\u0440\u043b\u0430.");
+            int[] tipIndices = new int[] { 1176, 1177, 1181, 1182 };
+            string[] tipNames = new string[] { "Tool Tip Diameter", "Tool Tip Length", "Tool Pilot Diameter", "Tool Pilot Length" };
+            for (int i = 0; i < tipIndices.Length; i++)
+                if (Math.Abs(ParameterNumber(uf, tool.Tag, tipIndices[i], tipNames[i])) > 1e-10)
+                    throw new InvalidOperationException("\u0421\u043e\u0441\u0442\u0430\u0432\u043d\u0430\u044f \u0438\u043b\u0438 \u043f\u0438\u043b\u043e\u0442\u043d\u0430\u044f \u0432\u0435\u0440\u0448\u0438\u043d\u0430 \u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u0430 \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f.");
+            if (Math.Abs(tipLength - diameter / (2 * Math.Tan(angle / 2))) > Math.Max(1e-6, diameter * 1e-6))
+                throw new InvalidOperationException("\u0414\u043b\u0438\u043d\u0430 \u0432\u0435\u0440\u0448\u0438\u043d\u044b \u043d\u0435 \u0441\u043e\u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u0435\u0442 \u0441\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u043e\u043c\u0443 \u043a\u043e\u043d\u0438\u0447\u0435\u0441\u043a\u043e\u043c\u0443 \u0441\u0432\u0435\u0440\u043b\u0443.");
+
+            List<Hole> masters = new List<Hole>();
+            if (drill)
+            {
+                // Master links classify through/blind only; their DEPTH is never used.
+                foreach (NXOpen.CAM.CAMFeature master in part.CAMFeatures)
+                {
+                    bool linked = false;
+                    foreach (NXOpen.CAM.Operation linkedOperation in master.GetOperations())
+                        if (linkedOperation.Tag == operation.Tag) { linked = true; break; }
+                    if (!linked) continue;
+                    Hole location = FeatureLocation(master); location.FeatureType = master.Type;
+                    masters.Add(location);
+                }
+            }
+            int count = geometry.GeometryList.Length;
+            if (count <= 0) throw new InvalidOperationException("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u044b \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 FBM-\u0434\u0430\u043d\u043d\u044b\u0435 \u0433\u043b\u0443\u0431\u0438\u043d\u044b \u0446\u0438\u043a\u043b\u0430.");
+            List<Hole> holes = new List<Hole>();
+            for (int i = 0; i < count; i++)
+            {
+                var featureSet = geometry.GetFeatureSet(i);
+                if (featureSet.CustomPartOffset || featureSet.CustomStock)
+                    throw new InvalidOperationException("\u0418\u043d\u0434\u0438\u0432\u0438\u0434\u0443\u0430\u043b\u044c\u043d\u043e\u0435 \u0441\u043c\u0435\u0449\u0435\u043d\u0438\u0435 \u0438\u043b\u0438 \u043f\u0440\u0438\u043f\u0443\u0441\u043a \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u044f \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f.");
+                NXOpen.CAM.FBM.Feature feature = featureSet.GetFeature();
+                Hole hole = FeatureLocation(feature);
+                double depth = FeatureNumber(feature, "DEPTH");
+                if (depth <= 0) throw new InvalidOperationException("\u0413\u043b\u0443\u0431\u0438\u043d\u0430 \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u044f \u043d\u0435 \u0437\u0430\u0434\u0430\u043d\u0430 \u043f\u043e\u043b\u043e\u0436\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u043c \u0447\u0438\u0441\u043b\u043e\u043c.");
+                if (Math.Abs(FeatureNumber(feature, "TIP_ANGLE") - angle * 180.0 / Math.PI) > 1e-5)
+                    throw new InvalidOperationException("\u0423\u0433\u043e\u043b \u0432\u0435\u0440\u0448\u0438\u043d\u044b \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e\u0433\u043e \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u044f \u043d\u0435 \u0441\u043e\u0432\u043f\u0430\u0434\u0430\u0435\u0442 \u0441 \u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u043e\u043c.");
+                if (drill)
+                {
+                    List<Hole> matches = masters.FindAll(delegate(Hole candidate) { return SameHole(hole.Point, hole.Axis, candidate.Point, candidate.Axis); });
+                    if (matches.Count != 1 || matches[0].FeatureType != "STEP1HOLE")
+                        throw new InvalidOperationException("\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e \u0441\u043a\u0432\u043e\u0437\u043d\u043e\u0435 \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u0435 STEP1HOLE; \u0433\u043b\u0443\u0445\u0438\u0435 \u0438 \u043d\u0435\u043e\u0434\u043d\u043e\u0437\u043d\u0430\u0447\u043d\u044b\u0435 \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u044f \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u044e\u0442\u0441\u044f.");
+                    if (feature.IsAttributeOverridden("SUBTYPE") || feature.GetAttribute("SUBTYPE").GetIntegerValue() != 0)
+                        throw new InvalidOperationException("\u0418\u0437\u043c\u0435\u043d\u0451\u043d \u0442\u0438\u043f \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e\u0433\u043e \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u044f; \u0441\u043a\u0432\u043e\u0437\u043d\u0430\u044f \u0433\u043b\u0443\u0431\u0438\u043d\u0430 \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0430.");
+                    if (Math.Abs(FeatureNumber(feature, "DIAMETER_1") - diameter) > Math.Max(1e-6, diameter * 1e-6))
+                        throw new InvalidOperationException("\u0414\u0438\u0430\u043c\u0435\u0442\u0440 \u0441\u0432\u0435\u0440\u043b\u0430 \u043d\u0435 \u0441\u043e\u0432\u043f\u0430\u0434\u0430\u0435\u0442 \u0441 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u043c \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u0435\u043c.");
+                    depth += bottomOffset + tipLength;
+                }
+                hole.Depth = ZminGeometry.Finite(depth); holes.Add(hole);
+            }
+            return holes;
+        }
+        finally { builder.Destroy(); }
+    }
+
+    internal static double TipMinimum(List<Hole> holes, double[] point, double[] axis, double[] origin)
+    {
+        List<Hole> matches = holes.FindAll(delegate(Hole hole) { return SameHole(point, axis, hole.Point, hole.Axis); });
+        if (matches.Count != 1)
+            throw new InvalidOperationException("\u0422\u043e\u0447\u043a\u0443 Cycle \u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0434\u043d\u043e\u0437\u043d\u0430\u0447\u043d\u043e \u0441\u043e\u043f\u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u0441 \u0432\u0445\u043e\u0434\u043e\u043c \u0438 \u043e\u0441\u044c\u044e \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u044f.");
+        // P_tip = P_entry - depth * ToolAxis. Preserve the existing rotary projection.
+        return ZminGeometry.Finite(ZminGeometry.Dot(ZminGeometry.Subtract(point, origin), axis) - matches[0].Depth);
     }
 }
 
@@ -5020,12 +5211,20 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.45";
+    internal const string SCRIPT_VERSION = "V1.46";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
+    private static readonly string WindowStamp = DecodeWindowStamp();
+
+    private static string DecodeWindowStamp()
+    {
+        byte[] data = new byte[] { 63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10 };
+        for (int i = 0; i < data.Length; i++) data[i] = (byte)(data[i] ^ ((0x5D + i * 11) & 0xFF));
+        return Encoding.UTF8.GetString(data);
+    }
 
     internal static string WindowTitle(string detail)
     {
-        string title = SCRIPT_NAME + " \u2014 " + SCRIPT_VERSION;
+        string title = SCRIPT_NAME + " \u2014 " + SCRIPT_VERSION + " \u2014 " + WindowStamp;
         return String.IsNullOrEmpty(detail) ? title : title + " \u2014 " + detail;
     }
 }
