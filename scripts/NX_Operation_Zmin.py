@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # Минимальный Z в именах операций
-# SCRIPT_VERSION: V1.03
+# SCRIPT_VERSION: V1.04
 # Рабочее имя файла: NX_Operation_Zmin.py
-SCRIPT_VERSION = "V1.03"
+SCRIPT_VERSION = "V1.04"
 SCRIPT_NAME = "Минимальный Z в именах операций"
 
 # Запуск: NX / Designcenter -> Журнал -> Воспроизвести.
 # Выделены операции: только они. Выделения нет: все операции рабочей детали.
-# V1.03: глубина циклов центрования и сквозного сверления по локальным FBM-данным.
+# V1.04: центрование Drill, сверление по плечу и ступенчатые сквозные отверстия.
 # Фактическая ось ToolAxis учитывается и в формате Three, и в Five.
 # Three может содержать постоянный наклон инструмента при повороте детали.
 # Начало СКС операции должно находиться на оси вращения детали.
@@ -257,19 +257,22 @@ def feature_location(feature):
 
 
 def same_hole(point, axis, other_point, other_axis):
-    # Absolute geometry and CL must agree: do not guess a path transformation.
-    tolerance = max(1e-6, max(abs(x) for x in point + other_point) * 1e-10)
+    # Allow native FBM/CL coordinate roundoff; still require a unique entry/axis.
+    # This is a geometric tolerance, never a guessed path transformation.
+    tolerance = max(1e-5, max(abs(x) for x in point + other_point) * 1e-10)
     delta = tuple(point[i] - other_point[i] for i in range(3))
     axis_delta = tuple(axis[i] - other_axis[i] for i in range(3))
     return dot(delta, delta) <= tolerance**2 and dot(axis_delta, axis_delta) <= 1e-12
 
 
 def read_cycle_holes(nx, operation):
-    """Resolve the two verified HoleDrilling profiles without modifying NX.
+    """Resolve the verified HoleDrilling profiles without modifying NX.
 
     MachineCycle endpoints can be hole entrances, not the bottom of the tool.
     Spot drilling uses local DEPTH to the tip. A standard through-hole drill
-    uses local DEPTH + BottomOffset + Tool Point Length. Other depth policies
+    uses local DEPTH + BottomOffset + Tool Point Length for the verified tip
+    and shoulder modes. IgnoreToolTip in shoulder mode does not remove the
+    physical tip length from the final tip coordinate. Other depth policies
     are rejected until their saved-path semantics have been established.
     """
     if not isinstance(operation, nx.CAM.HoleDrilling):
@@ -291,7 +294,10 @@ def read_cycle_holes(nx, operation):
         geometry = builder.GetFeatureGeometry()
         if geometry.UseModelDepth or builder.PredefinedDepth.Status:
             raise ValueError('Цикл с глубиной по модели или Predefined Depth пока не поддерживается.')
-        if builder.IgnoreToolTip or str(builder.GetToolDrivePoint()) != 'SYS_CL_TIP':
+        drive_point = str(builder.GetToolDrivePoint())
+        tip_mode = drive_point == 'SYS_CL_TIP' and not builder.IgnoreToolTip
+        shoulder_mode = drill and drive_point == 'SYS_CL_SHOULDER' and builder.IgnoreToolTip
+        if not (tip_mode or shoulder_mode):
             raise ValueError('Цикл использует другую точку инструмента; глубина вершины не определена.')
         offset_type = getattr(nx.CAM.HoleDrillingBuilder, 'ControlPointOffsetType', None)
         if enum_name(builder.ControlPointOffset, offset_type, ('NotSet', 'None')) not in ('NotSet', 'None'):
@@ -303,7 +309,7 @@ def read_cycle_holes(nx, operation):
         output_type = getattr(nx.CAM.Cycle, 'MotionOutputTypes', None)
         if enum_name(cycle.MotionOutput, output_type, ('MachineCycle',)) != 'MachineCycle':
             raise ValueError('Тип вывода цикла не соответствует точкам Cycle.')
-        allowed_cycles = ('Drill,Csink',) if spot else ('Drill,Deep', 'Drill')
+        allowed_cycles = ('Drill,Csink', 'Drill') if spot else ('Drill,Deep', 'Drill')
         if str(cycle.CycleType) not in allowed_cycles or str(cycle.CycleTrackingPoint) != 'None':
             raise ValueError('Не поддержан цикл или его точка отслеживания: ' + str(cycle.CycleType))
         if abs(finite_number(cycle.CsinkDiameter)) > 1e-10:
@@ -337,7 +343,7 @@ def read_cycle_holes(nx, operation):
 
         masters = []
         if drill:
-            # STEP1HOLE is NX's through-hole type; STEP1POCKET is blind.
+            # STEP1HOLE/STEP2HOLE are the verified through-hole profiles.
             # These links classify the feature only. Depth still comes from FBM.
             for master in part.CAMFeatures:
                 if any(str(op.Tag) == str(operation.Tag) for op in master.GetOperations()):
@@ -360,8 +366,8 @@ def read_cycle_holes(nx, operation):
                 raise ValueError('Угол вершины локального отверстия не совпадает с инструментом.')
             if drill:
                 matches = [m for m, p, a in masters if same_hole(point, axis, p, a)]
-                if len(matches) != 1 or str(matches[0].Type) != 'STEP1HOLE':
-                    raise ValueError('Не подтверждено сквозное отверстие STEP1HOLE; '
+                if len(matches) != 1 or str(matches[0].Type) not in ('STEP1HOLE', 'STEP2HOLE'):
+                    raise ValueError('Не подтверждено сквозное отверстие STEP1HOLE/STEP2HOLE; '
                                      'глухие и неоднозначные отверстия пока не поддерживаются.')
                 if feature.IsAttributeOverridden('SUBTYPE') or feature.GetAttribute('SUBTYPE').GetIntegerValue() != 0:
                     raise ValueError('Изменён тип локального отверстия; сквозная глубина не подтверждена.')

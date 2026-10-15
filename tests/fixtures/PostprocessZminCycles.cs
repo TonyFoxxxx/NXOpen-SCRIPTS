@@ -350,6 +350,100 @@ internal static class CycleChecks
         noneAlias.Operation.CurrentStatus = CAMObject.Status.Repost;
         Near(OperationZmin.ToolpathMinimum(noneAlias.Operation, noneAlias.Origin).Value, -1.25, "NX enum alias and repost status"); noneAlias.Released();
     }
+    private static void SetSyntheticDepth(Case c, bool spot)
+    {
+        foreach (var f in c.Builder.Geometry.GeometryList.Items)
+        {
+            f.LocalFeature.Values["DEPTH"] = spot ? 2.0 : 7.0;
+            f.LocalFeature.Values["DEPTH_1"] = 700.0;
+        }
+        foreach (CAMFeature master in c.Operation.OwningPart.CAMFeatures)
+        {
+            master.Values["DEPTH"] = 900.0;
+            master.Values["DEPTH_1"] = 1200.0;
+        }
+    }
+    private static void ExpandedProfiles()
+    {
+        double drillTip = 5.0 / (2 * Math.Tan(Math.PI / 3));
+        foreach (bool spot in new bool[] { true, false })
+        {
+            string[] cycles = spot ? new string[] { "Drill", "Drill,Csink" } : new string[] { "Drill", "Drill,Deep" };
+            foreach (string cycle in cycles)
+            foreach (string drive in new string[] { "SYS_CL_TIP", "SYS_CL_SHOULDER", "CUSTOM_POINT" })
+            foreach (bool ignore in new bool[] { false, true })
+            {
+                Case c = Make(spot); SetSyntheticDepth(c, spot);
+                c.Builder.CycleTable.CycleType = cycle;
+                c.Builder.DrivePoint = drive; c.Builder.IgnoreToolTip = ignore;
+                bool supported = (drive == "SYS_CL_TIP" && !ignore) || (!spot && drive == "SYS_CL_SHOULDER" && ignore);
+                if (!supported) { Reject(c, "\u0442\u043e\u0447\u043a\u0443 \u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u0430"); continue; }
+                Near(OperationZmin.ToolpathMinimum(c.Operation, c.Origin).Value, spot ? -2 : -(7 + 2 + drillTip), "paired drive points: " + cycle + "/" + drive);
+                c.Released();
+            }
+        }
+        foreach (string masterType in new string[] { "STEP1HOLE", "STEP2HOLE" })
+        foreach (string cycle in new string[] { "Drill", "Drill,Deep" })
+        foreach (bool shoulder in new bool[] { false, true })
+        {
+            Case c = Make(false); SetSyntheticDepth(c, false);
+            c.Builder.CycleTable.CycleType = cycle;
+            c.Builder.DrivePoint = shoulder ? "SYS_CL_SHOULDER" : "SYS_CL_TIP"; c.Builder.IgnoreToolTip = shoulder;
+            foreach (CAMFeature master in c.Operation.OwningPart.CAMFeatures) master.Type = masterType;
+            Near(OperationZmin.ToolpathMinimum(c.Operation, c.Origin).Value, -(7 + 2 + drillTip), "local DEPTH for " + masterType);
+            c.Released();
+        }
+        foreach (CamPathToolAxisType mode in new CamPathToolAxisType[] { CamPathToolAxisType.Three, CamPathToolAxisType.Five })
+        foreach (int degrees in new int[] { -130, 80 })
+        {
+            Case c = Make(false); SetSyntheticDepth(c, false);
+            c.Builder.CycleTable.CycleType = "Drill"; c.Builder.DrivePoint = "SYS_CL_SHOULDER"; c.Builder.IgnoreToolTip = true;
+            c.Operation.SavedPath.ToolAxisType = mode; c.Origin = new double[] { 20, -50, 8 };
+            double angle = degrees * Math.PI / 180;
+            foreach (var f in c.Builder.Geometry.GeometryList.Items) TransformFeature(f.LocalFeature, angle, c.Origin);
+            foreach (CAMFeature master in c.Operation.OwningPart.CAMFeatures) { master.Type = "STEP2HOLE"; TransformFeature(master, angle, c.Origin); }
+            foreach (PathRecord record in c.Operation.SavedPath.Records)
+                if (record.IsMotion) { record.Point = Shift(Rotate(record.Point, angle), c.Origin); record.Axis = Rotate(record.Axis, angle); }
+            Near(OperationZmin.ToolpathMinimum(c.Operation, c.Origin).Value, -(7 + 2 + drillTip), "rotated STEP2 shoulder " + mode);
+            c.Released();
+        }
+        foreach (string unsupported in new string[] { "STEP1POCKET", "STEP2POCKET", "STEP3HOLE" })
+        {
+            Case c = Make(false); SetSyntheticDepth(c, false);
+            c.Operation.OwningPart.CAMFeatures[0].Type = unsupported;
+            Reject(c, "STEP1HOLE/STEP2HOLE");
+        }
+    }
+    private static void CoordinateTolerance()
+    {
+        double[] zero = new double[] { 0, 0, 0 }, axis = new double[] { 0, 0, 1 };
+        Check(ZminCycleDepth.SameHole(zero, axis, new double[] { 1e-5, 0, 0 }, axis), "coordinate tolerance inclusive boundary");
+        Check(!ZminCycleDepth.SameHole(zero, axis, new double[] { 1.0001e-5, 0, 0 }, axis), "coordinate tolerance outside boundary");
+        Check(!ZminCycleDepth.SameHole(zero, axis, zero, new double[] { 2e-6, 0, 1 }), "axis tolerance must not increase");
+        Case c = Make(false); SetSyntheticDepth(c, false);
+        foreach (CAMFeature master in c.Operation.OwningPart.CAMFeatures)
+            master.Values["Y_POSITION"] = (double)master.Values["Y_POSITION"] + 4e-6;
+        foreach (PathRecord record in c.Operation.SavedPath.Records)
+            if (record.Type == CamPathMotionType.Cycle) record.Point = Shift(record.Point, new double[] { 0, -3e-6, 0 });
+        Near(OperationZmin.ToolpathMinimum(c.Operation, c.Origin).Value, -(7 + 2 + 5.0 / (2 * Math.Tan(Math.PI / 3))), "native coordinate rounding");
+        c.Released();
+        c = Make(false); c.Operation.OwningPart.CAMFeatures[0].Values["Y_POSITION"] = 20.0 + 1.1e-5;
+        Reject(c, "STEP1HOLE/STEP2HOLE");
+        c = Make(false); c.Operation.SavedPath.Records[2].Point = new double[] { 0, 20 + 1.1e-5, 10 };
+        Reject(c, "\u0441\u043e\u043f\u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c");
+        c = Make(false);
+        CAMFeature duplicate = new CAMFeature { Operations = new Operation[] { c.Operation } };
+        foreach (var pair in c.Operation.OwningPart.CAMFeatures[0].Values) duplicate.Values[pair.Key] = pair.Value;
+        duplicate.Values["Y_POSITION"] = 20.0 + 6e-6;
+        c.Operation.OwningPart.CAMFeatures.Add(duplicate);
+        Reject(c, "STEP1HOLE/STEP2HOLE");
+        c = Make(false);
+        var localDuplicate = new NXOpen.CAM.FBM.Feature();
+        foreach (var pair in c.Builder.Geometry.GeometryList.Items[0].LocalFeature.Values) localDuplicate.Values[pair.Key] = pair.Value;
+        localDuplicate.Values["Y_POSITION"] = 20.0 + 6e-6;
+        c.Builder.Geometry.GeometryList.Items.Add(new NXOpen.CAM.FBM.FeatureSet { LocalFeature = localDuplicate });
+        Reject(c, "\u0441\u043e\u043f\u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c");
+    }
     private static void Unsupported()
     {
         Case c = Make(false); c.Operation.CurrentStatus = CAMObject.Status.Regen; Reject(c, "\u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430\u044f");
@@ -420,7 +514,7 @@ internal static class CycleChecks
     }
     public static int Main()
     {
-        try { Profiles(); Unsupported(); OrdinaryPaths(); Console.WriteLine("Production C# Zmin cycle checks: " + count + " passed."); return 0; }
+        try { Profiles(); ExpandedProfiles(); CoordinateTolerance(); Unsupported(); OrdinaryPaths(); Console.WriteLine("Production C# Zmin cycle checks: " + count + " passed."); return 0; }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
 }

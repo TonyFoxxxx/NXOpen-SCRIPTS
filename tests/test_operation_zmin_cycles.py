@@ -140,21 +140,25 @@ class UFParameters:
 
 class CycleCase:
     def __init__(self, spot=False, positions=((10., 20., 0.), (30., 20., 0.)),
-                 axes=None, depths=None, origin=(0., 0., 0.)):
+                 axes=None, depths=None, origin=(0., 0., 0.), shoulder=False,
+                 master_type='STEP1HOLE', cycle_type=None):
         self.origin = origin
         axes = axes or [(0., 0., 1.)] * len(positions)
         depths = depths or ([1.25] if spot else [9.5]) * len(positions)
         diameter, angle = (6., 90.) if spot else (5., 120.)
         self.locals = [Feature(p, a, d, angle, diameter) for p, a, d in zip(positions, axes, depths)]
         self.masters = [Feature(p, a, 22., 120., 5.) for p, a in zip(positions, axes)]
+        for master in self.masters:
+            master.Type = master_type
         self.sets = [NS(CustomPartOffset=False, CustomStock=False, GetFeature=lambda f=f: f)
                      for f in self.locals]
         geometry = NS(UseModelDepth=False, GeometryList=NS(Length=len(self.sets)),
                       GetFeatureSet=lambda i: self.sets[i])
         self.builder = Builder(geometry=geometry, PredefinedDepth=NS(Status=False, Value=500.),
-            HoleDepth=NS(Value=0.), IgnoreToolTip=False, drive='SYS_CL_TIP',
+            HoleDepth=NS(Value=0.), IgnoreToolTip=shoulder,
+            drive='SYS_CL_SHOULDER' if shoulder else 'SYS_CL_TIP',
             ControlPointOffset=0, HoleDepthType=0, destroyed=0,
-            CycleTable=NS(MotionOutput=0, CycleType='Drill,Csink' if spot else 'Drill,Deep',
+            CycleTable=NS(MotionOutput=0, CycleType=cycle_type or ('Drill,Csink' if spot else 'Drill,Deep'),
                           CycleTrackingPoint='None', CsinkDiameter=0.),
             CutParameters=NS(BottomStock=NS(Value=0.), PartStock=NS(Value=0.),
                              BottomOffset=NS(OffsetType=0, Distance=0. if spot else 2.)))
@@ -194,9 +198,22 @@ class CycleCase:
 
 class CycleDepthTests(unittest.TestCase):
     def test_spot_uses_local_tip_depth_not_master_depth_or_tool_cone(self):
-        case = CycleCase(spot=True)
-        self.assertAlmostEqual(case.read(), -1.25)
-        self.assertEqual(case.builder.destroyed, 1)
+        for cycle_type in ('Drill,Csink', 'Drill'):
+            with self.subTest(cycle_type=cycle_type):
+                case = CycleCase(spot=True, cycle_type=cycle_type)
+                self.assertAlmostEqual(case.read(), -1.25)
+                self.assertEqual(case.builder.destroyed, 1)
+
+    def test_supported_drill_profiles_use_local_depth_for_both_through_master_types(self):
+        for shoulder in (False, True):
+            for master_type in ('STEP1HOLE', 'STEP2HOLE'):
+                for cycle_type in ('Drill', 'Drill,Deep'):
+                    with self.subTest(shoulder=shoulder, master_type=master_type, cycle_type=cycle_type):
+                        case = CycleCase(shoulder=shoulder, master_type=master_type, cycle_type=cycle_type)
+                        for master in case.masters:
+                            master.values.update(DEPTH=777., DEPTH_1=333.)
+                        self.assertAlmostEqual(case.read(), -12.943375672974064)
+                        self.assertEqual(case.builder.destroyed, 1)
 
     def test_drill_matches_nc_rounding_and_replaces_stale_suffix(self):
         case = CycleCase()
@@ -212,17 +229,19 @@ class CycleDepthTests(unittest.TestCase):
 
     def test_rotary_projection_is_invariant_for_both_storage_modes(self):
         origin = (45., 10., -7.)
-        for spot in (True, False):
+        profiles = (dict(spot=True), dict(spot=True, cycle_type='Drill'), dict(),
+                    dict(shoulder=True, master_type='STEP2HOLE'))
+        for profile in profiles:
             for mode in (3, 5):
                 for angle in (-150, -90, -35, 0, 35, 90, 150, 180):
-                    with self.subTest(spot=spot, mode=mode, angle=angle):
+                    with self.subTest(profile=profile, mode=mode, angle=angle):
                         sine, cosine = math.sin(math.radians(angle)), math.cos(math.radians(angle))
                         axis = (sine, 0., cosine)
                         point = (origin[0] + 80*cosine + 6*sine, origin[1],
                                  origin[2] - 80*sine + 6*cosine)
-                        case = CycleCase(spot, [point], [axis], origin=origin)
+                        case = CycleCase(positions=[point], axes=[axis], origin=origin, **profile)
                         case.op.path.ToolAxisType = mode
-                        self.assertAlmostEqual(case.read(), 4.75 if spot else -6.943375672974064)
+                        self.assertAlmostEqual(case.read(), 4.75 if profile.get('spot') else -6.943375672974064)
 
     def test_missing_or_nonfinite_depth_rejects_whole_operation(self):
         for value in (None, float('nan'), float('inf'), 0., -1.):
@@ -247,7 +266,7 @@ class CycleDepthTests(unittest.TestCase):
             case.read()
 
     def test_blind_or_unlinked_master_cannot_use_through_formula(self):
-        for kind in ('STEP1POCKET', 'SIMPLE_HOLE', 'STEP2HOLE'):
+        for kind in ('STEP1POCKET', 'SIMPLE_HOLE', 'STEP2POCKET', 'STEP3HOLE'):
             case = CycleCase()
             case.masters[0].Type = kind
             with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'сквозное'):
@@ -255,6 +274,53 @@ class CycleDepthTests(unittest.TestCase):
         case = CycleCase()
         case.masters[0].operations = []
         with self.assertRaisesRegex(ValueError, 'сквозное'):
+            case.read()
+
+    def test_drive_point_and_ignore_tip_must_be_a_supported_pair(self):
+        for spot, shoulder, ignore_tip in ((False, False, True), (False, True, False),
+                                           (True, False, True), (True, True, False),
+                                           (True, True, True)):
+            with self.subTest(spot=spot, shoulder=shoulder, ignore_tip=ignore_tip):
+                case = CycleCase(spot=spot, shoulder=shoulder)
+                case.builder.IgnoreToolTip = ignore_tip
+                with self.assertRaises(ValueError):
+                    case.read()
+                self.assertEqual(case.builder.destroyed, 1)
+
+    def test_small_position_roundoff_matches_but_larger_offset_does_not(self):
+        profiles = (dict(spot=True, cycle_type='Drill'), dict(),
+                    dict(shoulder=True, master_type='STEP2HOLE'))
+        for profile in profiles:
+            for delta in (2e-6, 2e-5):
+                with self.subTest(profile=profile, delta=delta):
+                    case = CycleCase(positions=((10., 20., 0.),), **profile)
+                    point, axis, kind = case.op.path.points[-1]
+                    case.op.path.points[-1] = ((point[0] + delta, point[1], point[2]), axis, kind)
+                    if delta < 1e-5:
+                        expected = -1.25 if profile.get('spot') else -12.943375672974064
+                        self.assertAlmostEqual(case.read(), expected)
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'сопоставить'):
+                            case.read()
+                    self.assertEqual(case.builder.destroyed, 1)
+        for delta in (2e-6, 2e-5):
+            with self.subTest(master_position_delta=delta):
+                case = CycleCase(positions=((10., 20., 0.),), shoulder=True, master_type='STEP2HOLE')
+                case.masters[0].values['X_POSITION'] += delta
+                if delta < 1e-5:
+                    self.assertAlmostEqual(case.read(), -12.943375672974064)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'сквозное'):
+                        case.read()
+
+    def test_position_roundoff_tolerance_does_not_relax_axis_or_ambiguity_checks(self):
+        case = CycleCase(spot=True, positions=((10., 0., 0.), (10. + 4e-6, 0., 0.)))
+        with self.assertRaisesRegex(ValueError, 'однозначно'):
+            case.read()
+        case = CycleCase(spot=True, positions=((10., 20., 0.),))
+        point, _, kind = case.op.path.points[-1]
+        case.op.path.points[-1] = (point, (2e-6, 0., 1.), kind)
+        with self.assertRaisesRegex(ValueError, 'сопоставить'):
             case.read()
 
     def test_unsupported_depth_modes_destroy_builder_and_do_not_return_zero(self):

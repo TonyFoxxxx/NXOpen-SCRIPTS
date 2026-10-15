@@ -13,6 +13,10 @@ SOURCE = Path(__file__).resolve().parents[1] / 'scripts/NX_Setup_Prototype.py'
 SPEC = importlib.util.spec_from_file_location('setup_card_cycles_test', SOURCE)
 CARD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CARD)
+PROFILES = ((dict(spot=True), -1.25),
+            (dict(spot=True, cycle_type='Drill'), -1.25),
+            (dict(), -12.943375672974064),
+            (dict(shoulder=True, master_type='STEP2HOLE'), -12.943375672974064))
 
 
 class SetupCardCycleTests(unittest.TestCase):
@@ -60,14 +64,14 @@ class SetupCardCycleTests(unittest.TestCase):
         self.assertTrue(all(buffer.disposed for buffer in case.op.path.buffers))
 
     def test_rename_plan_gets_tip_depth_and_caches_it_for_both_cycles(self):
-        for spot, suffix, expected in ((True, '-1.25', -1.25),
-                                       (False, '-12.9434', -12.943375672974064)):
-            with self.subTest(spot=spot):
-                case = CycleCase(spot=spot)
+        for profile, expected in PROFILES:
+            with self.subTest(profile=profile):
+                case = CycleCase(**profile)
                 old = case.op.Name
                 plan, skipped, unchanged, values = self.rename_plan(case)
                 self.assertEqual((skipped, unchanged), ([], 0))
                 self.assertEqual(len(plan), 1)
+                suffix = '-1.25' if profile.get('spot') else '-12.9434'
                 self.assertEqual((plan[0]['old'], plan[0]['new']), (old, 'HOLES_Z' + suffix))
                 self.assertAlmostEqual(values[CARD.object_key(case.op)], expected)
                 self.assertEqual(case.op.Name, old)
@@ -86,14 +90,14 @@ class SetupCardCycleTests(unittest.TestCase):
         self.assert_released(case)
 
     def test_table_uses_cycle_bottom_without_enabling_renaming(self):
-        for spot, expected in ((True, -1.25), (False, -12.943375672974064)):
+        for profile, expected in PROFILES:
             for rotated in (False, True):
-                with self.subTest(spot=spot, rotated=rotated):
+                with self.subTest(profile=profile, rotated=rotated):
                     if rotated:
-                        case = CycleCase(spot=spot, positions=((45., 30., 10.),),
-                                         axes=((-1., 0., 0.),), origin=(45., 0., 0.))
+                        case = CycleCase(positions=((45., 30., 10.),),
+                                         axes=((-1., 0., 0.),), origin=(45., 0., 0.), **profile)
                     else:
-                        case = CycleCase(spot=spot)
+                        case = CycleCase(**profile)
                     old = case.op.Name
                     case.op.SetName = Mock(side_effect=AssertionError('Read-only table renamed operation'))
                     row, report = self.table(case)
@@ -107,16 +111,35 @@ class SetupCardCycleTests(unittest.TestCase):
                     self.assert_released(case)
 
     def test_table_reuses_the_same_successful_preparation_value(self):
-        case = CycleCase()
-        plan, skipped, _, values = self.rename_plan(case)
-        self.assertFalse(skipped)
-        with patch.object(CARD, 'toolpath_zmin', side_effect=AssertionError('Cached path reread')) as reader:
-            row, report = self.table(case, prepared=values)
-        reader.assert_not_called()
-        self.assertEqual(row['zmin'], values[CARD.object_key(case.op)])
-        self.assertEqual(CARD.zmin_operation_name(row['name'], row['zmin']), plan[0]['new'])
-        self.assertEqual(report['data_issues'], [])
-        self.assert_released(case)
+        for profile, expected in PROFILES:
+            with self.subTest(profile=profile):
+                case = CycleCase(**profile)
+                plan, skipped, _, values = self.rename_plan(case)
+                self.assertFalse(skipped)
+                with patch.object(CARD, 'toolpath_zmin', side_effect=AssertionError('Cached path reread')) as reader:
+                    row, report = self.table(case, prepared=values)
+                reader.assert_not_called()
+                self.assertEqual(row['zmin'], values[CARD.object_key(case.op)])
+                self.assertAlmostEqual(row['zmin'], expected)
+                self.assertEqual(CARD.zmin_operation_name(row['name'], row['zmin']), plan[0]['new'])
+                self.assertEqual(report['data_issues'], [])
+                self.assert_released(case)
+
+    def test_unsupported_drive_point_pair_is_skipped_in_both_consumers(self):
+        for profile in (dict(), dict(spot=True, shoulder=True)):
+            with self.subTest(profile=profile):
+                case = CycleCase(**profile)
+                case.builder.IgnoreToolTip = True
+                old = case.op.Name
+                plan, skipped, unchanged, values = self.rename_plan(case)
+                self.assertEqual((plan, unchanged, values), ([], 0, {}))
+                self.assertEqual(len(skipped), 1)
+                row, report = self.table(case)
+                self.assertIsNone(row['zmin'])
+                self.assertEqual(CARD.operation_cells(row, report)[-1], '')
+                self.assertEqual(case.op.Name, old)
+                self.assertTrue(any(issue['field'] == 'Zmin' for issue in report['data_issues']))
+                self.assert_released(case, builders=2)
 
     def test_unsupported_table_depth_is_blank_and_has_a_diagnostic(self):
         case = CycleCase(spot=True)

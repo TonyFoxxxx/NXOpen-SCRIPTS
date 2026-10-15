@@ -2,6 +2,16 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-15 — Zmin V1.04, Setup sheets V2.52 and Postprocessing V1.47
+
+- Extended machine-cycle support in all three scripts. `SPOT_DRILLING` / `NXHOLECENTER` spot drilling accepts `Drill` and `Drill,Csink`; depth to the tip is operation-local FBM `DEPTH`.
+- Through-hole drilling now supports `SYS_CL_SHOULDER` with `IgnoreToolTip` enabled and retains `SYS_CL_TIP` with it disabled. Both use full local `DEPTH` + bottom offset + verified standard conical point length. Enabling `IgnoreToolTip` does not exclude point length from Zmin.
+- A linked `STEP1HOLE` or `STEP2HOLE` feature confirms the through-hole type. The master feature's first-step `DEPTH_1` does not replace the full operation-local depth.
+- Increased the base FBM coordinate matching tolerance to `0.00001` model units to allow small roundoff. Entrance-point and axis matching must still be unique; ambiguous holes are not selected by order.
+- The sheet applies the correction to its Zmin column and optional renaming; postprocessing applies it to optional renaming before NC output. Rotary CL projection is retained. HTML, table formatting, layout, preparation, rollback and NC/BIN output are unchanged.
+- Blind holes, unsupported depth policies, custom tracking points and pilot/compound tips remain unsupported. Incomplete data does not produce partial minima or substituted Z0. [Full limitations](docs/en/zmin.md#spot-drilling-and-drilling).
+- Outside NX, new and previous diagnostic data agreed with all five reference NC Z values at NC output precision. Target NX / Designcenter checks remain necessary. Updated sources, updater catalog, README and guides in both languages.
+
 ## 2026-10-15 — Setup sheets V2.51
 
 - Ported the standalone Zmin V1.03 machine-cycle correction to the Zmin column and optional operation renaming. A Cycle entrance point is no longer treated as the hole bottom.

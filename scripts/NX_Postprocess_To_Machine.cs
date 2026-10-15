@@ -1,5 +1,5 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.46
+// SCRIPT_VERSION: V1.47
 // Optional numbering, tool descriptions and operation Zmin.
 // Cycle Zmin uses verified local FBM depths; actual CL rotary axes are preserved.
 // Modal-aware work-offset repeats; per-post retract profiles and copyable errors.
@@ -1188,7 +1188,7 @@ internal sealed class OperationZmin
     }
 }
 
-// Same supported profiles and guards as NX_Operation_Zmin V1.03.
+// Same supported cycle profiles and guards as NX_Operation_Zmin.
 // Read-only builders are destroyed without committing or regenerating the path.
 internal static class ZminCycleDepth
 {
@@ -1246,7 +1246,8 @@ internal static class ZminCycleDepth
     {
         double scale = 0;
         for (int i = 0; i < 3; i++) scale = Math.Max(scale, Math.Max(Math.Abs(point[i]), Math.Abs(otherPoint[i])));
-        double tolerance = Math.Max(1e-6, scale * 1e-10);
+        // Allow native FBM/CL coordinate rounding while requiring a unique match.
+        double tolerance = Math.Max(1e-5, scale * 1e-10);
         double[] delta = ZminGeometry.Subtract(point, otherPoint), axisDelta = ZminGeometry.Subtract(axis, otherAxis);
         return ZminGeometry.Dot(delta, delta) <= tolerance * tolerance && ZminGeometry.Dot(axisDelta, axisDelta) <= 1e-12;
     }
@@ -1273,7 +1274,10 @@ internal static class ZminCycleDepth
             var geometry = builder.GetFeatureGeometry();
             if (geometry.UseModelDepth || builder.PredefinedDepth.Status)
                 throw new InvalidOperationException("\u0426\u0438\u043a\u043b \u0441 \u0433\u043b\u0443\u0431\u0438\u043d\u043e\u0439 \u043f\u043e \u043c\u043e\u0434\u0435\u043b\u0438 \u0438\u043b\u0438 Predefined Depth \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f.");
-            if (builder.IgnoreToolTip || builder.GetToolDrivePoint() != "SYS_CL_TIP")
+            string drivePoint = builder.GetToolDrivePoint();
+            bool tipDrive = drivePoint == "SYS_CL_TIP" && !builder.IgnoreToolTip;
+            bool shoulderDrive = drill && drivePoint == "SYS_CL_SHOULDER" && builder.IgnoreToolTip;
+            if (!tipDrive && !shoulderDrive)
                 throw new InvalidOperationException("\u0426\u0438\u043a\u043b \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u0442 \u0434\u0440\u0443\u0433\u0443\u044e \u0442\u043e\u0447\u043a\u0443 \u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u0430; \u0433\u043b\u0443\u0431\u0438\u043d\u0430 \u0432\u0435\u0440\u0448\u0438\u043d\u044b \u043d\u0435 \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u0430.");
             string controlOffset = builder.ControlPointOffset.ToString();
             if (controlOffset != "NotSet" && controlOffset != "None")
@@ -1284,7 +1288,7 @@ internal static class ZminCycleDepth
             if (cycle.MotionOutput.ToString() != "MachineCycle")
                 throw new InvalidOperationException("\u0422\u0438\u043f \u0432\u044b\u0432\u043e\u0434\u0430 \u0446\u0438\u043a\u043b\u0430 \u043d\u0435 \u0441\u043e\u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u0435\u0442 \u0442\u043e\u0447\u043a\u0430\u043c Cycle.");
             string cycleType = cycle.CycleType;
-            if ((spot ? cycleType != "Drill,Csink" : cycleType != "Drill,Deep" && cycleType != "Drill") ||
+            if ((spot ? cycleType != "Drill,Csink" && cycleType != "Drill" : cycleType != "Drill,Deep" && cycleType != "Drill") ||
                 cycle.CycleTrackingPoint != "None")
                 throw new InvalidOperationException("\u041d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0430\u043d \u0446\u0438\u043a\u043b \u0438\u043b\u0438 \u0435\u0433\u043e \u0442\u043e\u0447\u043a\u0430 \u043e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u043d\u0438\u044f: " + cycleType);
             if (Math.Abs(ZminGeometry.Finite(cycle.CsinkDiameter)) > 1e-10)
@@ -1345,12 +1349,13 @@ internal static class ZminCycleDepth
                 if (drill)
                 {
                     List<Hole> matches = masters.FindAll(delegate(Hole candidate) { return SameHole(hole.Point, hole.Axis, candidate.Point, candidate.Axis); });
-                    if (matches.Count != 1 || matches[0].FeatureType != "STEP1HOLE")
-                        throw new InvalidOperationException("\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e \u0441\u043a\u0432\u043e\u0437\u043d\u043e\u0435 \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u0435 STEP1HOLE; \u0433\u043b\u0443\u0445\u0438\u0435 \u0438 \u043d\u0435\u043e\u0434\u043d\u043e\u0437\u043d\u0430\u0447\u043d\u044b\u0435 \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u044f \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u044e\u0442\u0441\u044f.");
+                    if (matches.Count != 1 || (matches[0].FeatureType != "STEP1HOLE" && matches[0].FeatureType != "STEP2HOLE"))
+                        throw new InvalidOperationException("\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e \u0441\u043a\u0432\u043e\u0437\u043d\u043e\u0435 \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u0435 STEP1HOLE/STEP2HOLE; \u0433\u043b\u0443\u0445\u0438\u0435 \u0438 \u043d\u0435\u043e\u0434\u043d\u043e\u0437\u043d\u0430\u0447\u043d\u044b\u0435 \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u044f \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u044e\u0442\u0441\u044f.");
                     if (feature.IsAttributeOverridden("SUBTYPE") || feature.GetAttribute("SUBTYPE").GetIntegerValue() != 0)
                         throw new InvalidOperationException("\u0418\u0437\u043c\u0435\u043d\u0451\u043d \u0442\u0438\u043f \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e\u0433\u043e \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u044f; \u0441\u043a\u0432\u043e\u0437\u043d\u0430\u044f \u0433\u043b\u0443\u0431\u0438\u043d\u0430 \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0430.");
                     if (Math.Abs(FeatureNumber(feature, "DIAMETER_1") - diameter) > Math.Max(1e-6, diameter * 1e-6))
                         throw new InvalidOperationException("\u0414\u0438\u0430\u043c\u0435\u0442\u0440 \u0441\u0432\u0435\u0440\u043b\u0430 \u043d\u0435 \u0441\u043e\u0432\u043f\u0430\u0434\u0430\u0435\u0442 \u0441 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u043c \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u0435\u043c.");
+                    // Both verified drive-point modes report the physical tool tip.
                     depth += bottomOffset + tipLength;
                 }
                 hole.Depth = ZminGeometry.Finite(depth); holes.Add(hole);
@@ -5211,7 +5216,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.46";
+    internal const string SCRIPT_VERSION = "V1.47";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
     private static readonly string WindowStamp = DecodeWindowStamp();
 

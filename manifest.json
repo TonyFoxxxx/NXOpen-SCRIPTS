@@ -6,9 +6,9 @@
       "id": "NX_Setup_Prototype",
       "name": "Карта наладки",
       "file": "NX_Setup_Prototype.py",
-      "version": "V2.51",
+      "version": "V2.52",
       "path": "scripts/NX_Setup_Prototype.py",
-      "sha256": "3b67b8199c48dcfd78e1e9201b82e042362e93d6c58abd26466335e778efadf2",
+      "sha256": "555935b175a357ad37c65c8fad444e98828d2f4de8421eb70740f07127072e32",
       "description": "Создание редактируемой карты наладки с видами, инструментами и операциями.",
       "config": {
         "path": "config/NX_Setup_Prototype.example.ini",
@@ -21,9 +21,9 @@
       "id": "NX_Postprocess_To_Machine",
       "name": "Меню постпроцессирования",
       "file": "NX_Postprocess_To_Machine.cs",
-      "version": "V1.46",
+      "version": "V1.47",
       "path": "scripts/NX_Postprocess_To_Machine.cs",
-      "sha256": "09849b0377feb162d0e7e1d434b9829b8d0577e07c4c3aaf7c006198c105c48b",
+      "sha256": "6f16418fe96112dec3fed31cb2d113e8491ccca10ec7653cc247775e7890f038",
       "description": "Вывод управляющих программ и FANUC BIN в папку станка или на носитель.",
       "config": {
         "path": "config/NX_Postprocess_To_Machine.example.ini",
@@ -36,9 +36,9 @@
       "id": "NX_Operation_Zmin",
       "name": "Минимальный Z в именах операций",
       "file": "NX_Operation_Zmin.py",
-      "version": "V1.03",
+      "version": "V1.04",
       "path": "scripts/NX_Operation_Zmin.py",
-      "sha256": "e696c38d572a3110d1e57442592741022e915d48b1ebc32ecfe91eb781c2622e",
+      "sha256": "a76f87bc6d2a47550ca039907f2626ead193f89c3a921b08b307b4611899e4cf",
       "description": "Добавление минимального Z к именам операций по текущей оси инструмента, включая поддерживаемые циклы центрования и сквозного сверления. Начало MCS должно лежать на оси вращения детали."
     },
     {
