@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.52
+# SCRIPT_VERSION: V2.54
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -44,6 +44,8 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 Если двух колонок недостаточно, таблица равномерно уменьшается до размеров листа.
 Таблицы используют единый максимально помещающийся шрифт для полного текста ячеек.
 В столбце «Операции» после самой длинной записи остаётся не менее двух пробелов.
+В списках инструмента D содержит используемые корректоры Cutcom: D5 / D12.
+Если у номера T во всех операциях проекта два и более D, каждая его операция показывает свой D.
 Фасетная 3D-модель первого листа включается галочкой в стартовом меню.
 По умолчанию галочка снята; после включения доступны коэффициент 0 < k ≤ 1 и лимит треугольников.
 Без галочки текущий ракурс вписывается в окно NX и снимается для первого листа.
@@ -53,6 +55,8 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 При k=1 допуски равны 0.01 мм и 3°; при уменьшении k допуски делятся на k.
 Угловой допуск ограничен 180°; предел всей модели задаётся в меню, по умолчанию 500 000.
 Модель перемещается по первому листу; таблицы адаптируются к её габаритам.
+При перетаскивании таблицы следуют за моделью без повторного подбора шрифта.
+Точная компоновка и подгонка текста выполняются после отпускания мыши.
 Масштаб 1–10000%; на печати границей остаётся формат A4.
 Порядок и сквозная нумерация сохраняются при сохранении и повторном экспорте.
 Результат — один автономный HTML для редактирования и печати.
@@ -98,7 +102,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.52"
+SCRIPT_VERSION = "V2.54"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -3952,6 +3956,20 @@ def tool_display_rows(tools):
     return rows
 
 
+def cutcom_cell_text(value):
+    register = tool_number_key(value)
+    return '—' if register is None else 'D%d' % register
+
+
+def tool_cutcom_text(tool):
+    values = tool.get('cutcom_registers') or []
+    registers = sorted({number for value in values
+                        for number in [tool_number_key(value)] if number is not None})
+    if not registers:
+        return cutcom_cell_text(tool.get('cutcom_register'))
+    return ' / '.join('D%d' % value for value in registers)
+
+
 def tool_row_html(row, name_first=True):
     group = row.get('kind') == 'group'
     name = str(row['name'])
@@ -3975,12 +3993,15 @@ def tool_row_html(row, name_first=True):
         attrs = ' data-tool-tag="%s"' % escaped(str(row.get('tag', '')))
     content = ('<span class="tool-tree-cell"><span class="tool-tree-indent" '
                'aria-hidden="true" style="width:%.2fem"></span>%s</span>') % (depth * 1.3, clipped_cell(text, label))
-    name_cell = '<td class="tool-name-cell" title="%s">%s</td>' % (escaped(label), content)
-    number_cell = '<td>%s</td>' % clipped_cell(
+    name_cell = '<td data-tool-column-id="name" class="tool-name-cell" title="%s">%s</td>' % (escaped(label), content)
+    number_cell = '<td data-tool-column-id="number">%s</td>' % clipped_cell(
         '' if group else tool_number_html(row.get('number'), row.get('duplicate_number', False)), number)
+    cutcom = '' if group else tool_cutcom_text(row)
+    cutcom_cell = '<td data-tool-column-id="cutcom" title="%s">%s</td>' % (
+        escaped(cutcom), clipped_cell(escaped(cutcom), cutcom))
     return '<tr data-kind="%s" data-depth="%d"%s>%s</tr>' % (
         'group' if group else 'tool', depth, attrs,
-        name_cell + number_cell if name_first else number_cell + name_cell)
+        name_cell + number_cell + cutcom_cell if name_first else number_cell + cutcom_cell + name_cell)
 
 
 def tool_number_key(value):
@@ -4092,6 +4113,102 @@ def tool_number_html(value, duplicate=False):
     if duplicate:
         return '<strong class="duplicate-tool-number" title="Повторяющийся номер инструмента в проекте">%s</strong>' % text
     return text
+
+
+def cutcom_tool_key(number, tag):
+    """A known T is project-wide; unknown T values must not merge tools."""
+    number = tool_number_key(number)
+    return ('number', number) if number is not None else ('tag', str(tag))
+
+
+def apply_cutcom_registers(report, project_operations, tool_defaults):
+    """Aggregate actual operation values, retaining one row per NX tool object."""
+    registers, operations = {}, {}
+    for operation in project_operations:
+        operations[str(operation['tag'])] = operation
+        if operation.get('tool_tag') in (None, '', '0'):
+            continue
+        key = cutcom_tool_key(operation.get('tool_number'), operation['tool_tag'])
+        value = tool_number_key(operation.get('cutcom_register'))
+        if value is not None:
+            registers.setdefault(key, set()).add(value)
+    for field in ('tools', 'project_tools'):
+        for tool in report.get(field, []):
+            tag = str(tool.get('tag'))
+            key = cutcom_tool_key(tool.get('number'), tag)
+            default = tool_defaults.get(tag)
+            tool['cutcom_register'] = default
+            tool['cutcom_registers'] = sorted(registers.get(key, set()))
+            if not tool['cutcom_registers'] and default is not None:
+                tool['cutcom_registers'] = [default]
+    for row in report.get('operation_rows', []):
+        if row.get('kind') != 'operation':
+            continue
+        operation = operations.get(str(row.get('tag')), {})
+        row['cutcom_register'] = operation.get('cutcom_register')
+        key = cutcom_tool_key(row.get('tool_number'), row.get('tool_tag'))
+        row['show_cutcom'] = len(registers.get(key, ())) >= 2
+    # A fresh snapshot updates only D in retained HTML sections on partial export.
+    # Keep names as well as tags: NX may allocate new tags after reopening a part.
+    snapshot = []
+    for operation in project_operations:
+        item = dict(operation)
+        key = cutcom_tool_key(item.get('tool_number'), item.get('tool_tag'))
+        item['show_cutcom'] = len(registers.get(key, ())) >= 2
+        snapshot.append(item)
+    tool_snapshot = {str(tool.get('tag')): {key: tool.get(key) for key in
+                     ('tag', 'name', 'number', 'cutcom_register', 'cutcom_registers')}
+                     for field in ('tools', 'project_tools') for tool in report.get(field, [])}
+    report['cutcom_data'] = {'operations': snapshot, 'tools': list(tool_snapshot.values()),
+                            'by_number': {str(key[1]): sorted(values)
+                                          for key, values in registers.items() if key[0] == 'number'}}
+
+
+def read_cutcom_registers(nx, part, context, report, groups):
+    """Read the effective operation override/inheritance via UF, without edits.
+
+    UF_PARAM_TL_CUTCOM_REG (1041) is the register number. The activation toggle
+    and the obsolete CUTCOM_REGISTER_NUM (233) are deliberately not used.
+    Scan the whole CAM project, including operations outside selected setups.
+    """
+    uf = nx.UF.UFSession.GetUFSession()
+    register_index = getattr(nx.UF.UFConstants, 'UF_PARAM_TL_CUTCOM_REG', 1041)
+    number_index = getattr(nx.UF.UFConstants, 'UF_PARAM_TL_NUMBER', 1038)
+
+    def integer(obj, index, field):
+        def read():
+            value = tool_number_key(uf.Param.AskIntValue(obj.Tag, index))
+            if value is None:
+                raise ValueError('Ожидалось целое значение параметра.')
+            return value
+        return try_read(report, obj, field, read, True)
+
+    all_operations = try_read(report, part, 'Cutcom: все операции проекта',
+                              lambda: list(part.CAMSetup.CAMOperationCollection))
+    if all_operations is None:
+        all_operations = context['operations']
+    # Include selected operations even if an incomplete collection was returned.
+    by_tag = {object_key(op): op for op in all_operations}
+    by_tag.update((object_key(op), op) for op in context['operations'])
+    numbers, defaults, operations = {}, {}, []
+    for operation in by_tag.values():
+        tag = try_read(report, operation, 'Cutcom: инструмент',
+                       lambda: str(uf.Oper.AskCutterGroup(operation.Tag)), True)
+        tool = groups.get(tag)
+        if tool is None or not isinstance(tool, nx.CAM.Tool):
+            continue
+        if tag not in numbers:
+            numbers[tag] = integer(tool, number_index, 'UF_PARAM_TL_NUMBER')
+        operations.append({'tag': object_key(operation), 'name': str(operation.Name), 'tool_tag': tag,
+                           'tool_number': numbers[tag],
+                           'cutcom_register': integer(operation, register_index, 'Cutcom register операции')})
+    for field in ('tools', 'project_tools'):
+        for tool_data in report.get(field, []):
+            tag = str(tool_data.get('tag'))
+            if tag not in defaults and tag in groups:
+                defaults[tag] = integer(groups[tag], register_index, 'Cutcom register инструмента')
+    apply_cutcom_registers(report, operations, defaults)
+    report['cutcom_source'] = 'UF_PARAM_TL_CUTCOM_REG; all_project_operations; grouped_by_T'
 
 
 def read_operation_data(nx, part, context, report):
@@ -4218,6 +4335,7 @@ def read_operation_data(nx, part, context, report):
         project_tools.sort(key=lambda t: (t["number"] is None, t["number"] or 0, t["name"].casefold(), t["tag"]))
         report["project_tools"] = project_tools
         report["project_tool_count"] = len(project_tools)
+    read_cutcom_registers(nx, part, context, report, groups)
     annotate_tool_hierarchy(nx, part, groups, report)
 
 
@@ -5758,9 +5876,9 @@ CARD_TEMPLATE = r"""<!doctype html>
 <title>__DOCUMENT_TITLE__</title>
 <script id="nx-project-model" type="application/json">__PROJECT_MODEL__</script>
 <style>
-*{box-sizing:border-box}template,[hidden]{display:none!important}body{margin:0;background:#e9eef2;color:#171d21;font-family:Arial,sans-serif}button{font:inherit;cursor:pointer}button:focus-visible,.photo:focus-visible{outline:2px solid #078778;outline-offset:3px}.toolbar{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #ced8dd;padding:12px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}.brand{font-weight:700;font-size:17px}.summary{color:#526872;font-size:12px}.actions{display:flex;gap:8px;margin-left:auto}.actions button{border:1px solid #a9c2c8;background:#fff;border-radius:6px;padding:9px 16px;font-size:14px}.actions .primary{background:#087d72;border-color:#087d72;color:#fff}.page{background:white;width:210mm;height:297mm;padding:8mm;margin:18px auto;box-shadow:0 2px 12px #223b4320}.page-content{position:relative;height:281mm;padding-bottom:4.5mm;display:flex;flex-direction:column}.card-header{height:49mm;flex:none;display:grid;grid-template-columns:57.52% 40.48%;gap:2%;margin-bottom:2mm}.card-header>div{min-width:0}.header-right{display:flex;flex-direction:column}.header-right>.locked-spacer{flex:1}.metadata,.coordinates,.legends,.tools,.ops{width:100%;border-collapse:collapse;table-layout:fixed}.metadata{height:49mm;font-size:10.5pt}.metadata th,.metadata td,.coordinates th,.coordinates td,.legends th,.legends td{border:.25mm solid #363e43;padding:0 .8mm;font-weight:400}.metadata th{background:#d8d8d8;text-align:center;white-space:normal}.metadata th.white{background:#fff}.metadata th.white .field{font-size:9.3pt}.metadata .note-row{height:14.2mm}.field{min-width:0;line-height:1.1;white-space:pre-wrap;overflow-wrap:anywhere;outline:0;cursor:text}.metadata td>.field,.metadata th>.field{height:6.45mm;padding:.6mm 0}.metadata .note-row .field{height:13.1mm;display:flex;justify-content:center;align-items:center;white-space:pre-wrap}.field:empty:before{content:attr(data-placeholder);color:#929ea3;font-size:8pt;font-weight:400}.field:hover{background:#f0fbf8}.field:focus{outline:.5mm solid #078778;outline-offset:-.5mm;background:#f3fcfa}.field.overflowing{outline:.4mm solid #cc5b12}.bold{font-weight:700}.center{text-align:center}.red{color:#e50000}.setup-values{display:grid;grid-template-columns:max-content max-content max-content 1fr;column-gap:1.5mm;height:6.45mm;align-items:center}.setup-values>.field{height:6.45mm;padding:.6mm 0}.setup-values>.field:empty:before{content:''}.setup-values>span{text-align:center}.setup-values,.setup-values.named-setup{display:flex;gap:1.5mm;justify-content:flex-start}.setup-values [data-field="setup"]{flex:0 1 auto;min-width:1ch;max-width:calc(100% - 14mm);text-align:left;white-space:nowrap}.setup-values [data-field="setup_total"]{flex:0 0 auto;min-width:1.2ch;text-align:left}.setup-values>.locked-spacer{display:none}.coordinates{height:20.85mm;font-size:14pt}.coordinates th{background:#d3e3d1;text-align:center}.coordinates .field{height:6.2mm;padding:.5mm 0}.legends{height:20.85mm}.legends th{background:#bdc5cb;font-size:14pt;text-align:center}.legends td{font-size:7.1pt}.legends .field{height:6.2mm;padding:.7mm 0;display:flex;align-items:center;justify-content:center}.locked-spacer{cursor:default}.gallery{position:relative;height:225.5mm;flex:none}.gallery-grid{height:225.5mm;display:grid;grid-template-columns:58.75% 41.25%;grid-template-rows:47% 53%;border:0}.gallery-frame{position:absolute;top:0;left:0;width:194mm;height:225.5mm;z-index:2;pointer-events:none;fill:none;stroke:#363e43;stroke-width:.25mm}.photo{position:relative;min-width:0;min-height:0;margin:0;background:white;display:flex;flex-direction:column;overflow:hidden;cursor:default}.photo[role="button"]{cursor:pointer}.photo-stage{position:absolute;left:2mm;right:2mm;top:18mm;bottom:6mm}.photo img{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:contain;object-position:50% 50%;padding:0}.mcs-onpart{position:absolute;transform:translate(-50%,-50%);width:36mm;height:36mm;z-index:1;pointer-events:none;overflow:visible}.axes-control{display:flex;align-items:center;gap:8px;font-size:13px;color:#344f58;white-space:nowrap}.axes-control input{width:130px;accent-color:#087d72}.axes-control output{min-width:42px;font-variant-numeric:tabular-nums}.axes-control input:focus-visible{outline:2px solid #078778;outline-offset:3px}.photo figcaption{position:absolute;bottom:0;left:0;right:0;order:2;min-height:4mm;flex:none;font-size:6.3pt;color:#515a60;text-align:center;padding:.4mm;line-height:1.2}.mcs-axes{position:absolute;left:1mm;top:5mm;width:24mm;height:24mm;z-index:1;pointer-events:none;overflow:visible}.mcs-name{position:absolute;left:2mm;top:1mm;max-width:calc(100% - 4mm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:7pt;font-weight:700;color:#42494e;z-index:1;background:#fffffff2;padding:.3mm .5mm;pointer-events:none}.iso-photo{grid-row:1;grid-column:1}.top-photo{grid-column:1;grid-row:2}.side-photo{grid-column:2;grid-row:2}.right-panel{grid-column:2;grid-row:1;min-width:0;min-height:0;display:flex;flex-direction:column}.tool-panel{min-height:0;padding:1.5mm;flex:1;display:flex;justify-content:flex-start;flex-direction:column}.tools{font-size:8pt}.tools td,.tools th{border:.18mm solid #a8aeb2;padding:.55mm .8mm;line-height:1.2;overflow-wrap:anywhere}.tools th{background:#f0f2f3;text-align:left;font-size:7pt;font-weight:400}.tools td:last-child,.tools th:last-child{text-align:center}.empty-tools{font-size:7pt;margin:1.5mm 0;text-align:center}.empty-image{margin:auto;font-size:8pt;color:#7b858b;text-align:center}.rows-area{flex:1;min-height:0;border:.25mm solid #363e43}.ops{border:0;font-size:7pt;line-height:1.2}.ops th,.ops td{border-right:.16mm solid #acb3b7;border-bottom:.16mm solid #b9c0c3;vertical-align:middle;overflow-wrap:anywhere;padding:.65mm .6mm}.ops td:first-child,.ops th:first-child{border-left:0}.ops td:last-child,.ops th:last-child{border-right:0}.ops th{height:6mm;font-size:6pt;font-weight:400;background:#e7edf1;text-align:left;line-height:1.1}.ops th:nth-child(3),.ops th:nth-child(4){text-align:center}.ops .numeric{font-size:6.2pt;white-space:nowrap;text-align:center;padding-left:.35mm;padding-right:.35mm}.ops .name-cell{white-space:normal}.tree-name{display:block;position:relative;overflow-wrap:anywhere}.folder-icon{display:inline-block;vertical-align:baseline;width:2.3mm;height:1.6mm;background:#e4d7a7;border:.15mm solid #9c894d;margin-right:1mm}.group-row{background:#f0f3f5;font-weight:700}.group-row td{padding-top:.65mm;padding-bottom:.65mm}.suppressed-row{color:#79858a;background:#f7f7f7}.tool-change{display:inline-block;width:2mm;height:3mm;color:#454c51}.ops svg{display:block;width:2mm;height:3mm;margin:auto}.path{font-size:10pt;font-weight:700;line-height:1;display:inline-block}.path.ready{color:#27843b}.path.stale{color:#b36213}.path.suppressed,.path.missing{color:#727b81}.page-footer{position:absolute;bottom:0;left:0;width:100%;height:4.5mm;flex:none;text-align:right;font-size:11pt;line-height:4.5mm;white-space:nowrap;border:0}.page-footer span{display:inline-block;min-width:7mm;text-align:center}.continuation-header{flex:none;height:28mm;margin-bottom:3mm}.continuation-header .metadata{height:28mm}.continuation-header th{width:15.5%}.tools-title{font-size:12pt;font-weight:400;margin:3mm 0}.tools-page .tools{font-size:10pt}.tools-page .page-footer{margin-top:auto}.tools-page .tools td{padding:1.5mm}.empty-operations{font-size:8pt;margin:2mm 0}
+*{box-sizing:border-box}template,[hidden]{display:none!important}body{margin:0;background:#e9eef2;color:#171d21;font-family:Arial,sans-serif}button{font:inherit;cursor:pointer}button:focus-visible,.photo:focus-visible{outline:2px solid #078778;outline-offset:3px}.toolbar{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #ced8dd;padding:12px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}.brand{font-weight:700;font-size:17px}.summary{color:#526872;font-size:12px}.actions{display:flex;gap:8px;margin-left:auto}.actions button{border:1px solid #a9c2c8;background:#fff;border-radius:6px;padding:9px 16px;font-size:14px}.actions .primary{background:#087d72;border-color:#087d72;color:#fff}.page{background:white;width:210mm;height:297mm;padding:8mm;margin:18px auto;box-shadow:0 2px 12px #223b4320}.page-content{position:relative;height:281mm;padding-bottom:4.5mm;display:flex;flex-direction:column}.card-header{height:49mm;flex:none;display:grid;grid-template-columns:57.52% 40.48%;gap:2%;margin-bottom:2mm}.card-header>div{min-width:0}.header-right{display:flex;flex-direction:column}.header-right>.locked-spacer{flex:1}.metadata,.coordinates,.legends,.tools,.ops{width:100%;border-collapse:collapse;table-layout:fixed}.metadata{height:49mm;font-size:10.5pt}.metadata th,.metadata td,.coordinates th,.coordinates td,.legends th,.legends td{border:.25mm solid #363e43;padding:0 .8mm;font-weight:400}.metadata th{background:#d8d8d8;text-align:center;white-space:normal}.metadata th.white{background:#fff}.metadata th.white .field{font-size:9.3pt}.metadata .note-row{height:14.2mm}.field{min-width:0;line-height:1.1;white-space:pre-wrap;overflow-wrap:anywhere;outline:0;cursor:text}.metadata td>.field,.metadata th>.field{height:6.45mm;padding:.6mm 0}.metadata .note-row .field{height:13.1mm;display:flex;justify-content:center;align-items:center;white-space:pre-wrap}.field:empty:before{content:attr(data-placeholder);color:#929ea3;font-size:8pt;font-weight:400}.field:hover{background:#f0fbf8}.field:focus{outline:.5mm solid #078778;outline-offset:-.5mm;background:#f3fcfa}.field.overflowing{outline:.4mm solid #cc5b12}.bold{font-weight:700}.center{text-align:center}.red{color:#e50000}.setup-values{display:grid;grid-template-columns:max-content max-content max-content 1fr;column-gap:1.5mm;height:6.45mm;align-items:center}.setup-values>.field{height:6.45mm;padding:.6mm 0}.setup-values>.field:empty:before{content:''}.setup-values>span{text-align:center}.setup-values,.setup-values.named-setup{display:flex;gap:1.5mm;justify-content:flex-start}.setup-values [data-field="setup"]{flex:0 1 auto;min-width:1ch;max-width:calc(100% - 14mm);text-align:left;white-space:nowrap}.setup-values [data-field="setup_total"]{flex:0 0 auto;min-width:1.2ch;text-align:left}.setup-values>.locked-spacer{display:none}.coordinates{height:20.85mm;font-size:14pt}.coordinates th{background:#d3e3d1;text-align:center}.coordinates .field{height:6.2mm;padding:.5mm 0}.legends{height:20.85mm}.legends th{background:#bdc5cb;font-size:14pt;text-align:center}.legends td{font-size:7.1pt}.legends .field{height:6.2mm;padding:.7mm 0;display:flex;align-items:center;justify-content:center}.locked-spacer{cursor:default}.gallery{position:relative;height:225.5mm;flex:none}.gallery-grid{height:225.5mm;display:grid;grid-template-columns:58.75% 41.25%;grid-template-rows:47% 53%;border:0}.gallery-frame{position:absolute;top:0;left:0;width:194mm;height:225.5mm;z-index:2;pointer-events:none;fill:none;stroke:#363e43;stroke-width:.25mm}.photo{position:relative;min-width:0;min-height:0;margin:0;background:white;display:flex;flex-direction:column;overflow:hidden;cursor:default}.photo[role="button"]{cursor:pointer}.photo-stage{position:absolute;left:2mm;right:2mm;top:18mm;bottom:6mm}.photo img{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:contain;object-position:50% 50%;padding:0}.mcs-onpart{position:absolute;transform:translate(-50%,-50%);width:36mm;height:36mm;z-index:1;pointer-events:none;overflow:visible}.axes-control{display:flex;align-items:center;gap:8px;font-size:13px;color:#344f58;white-space:nowrap}.axes-control input{width:130px;accent-color:#087d72}.axes-control output{min-width:42px;font-variant-numeric:tabular-nums}.axes-control input:focus-visible{outline:2px solid #078778;outline-offset:3px}.photo figcaption{position:absolute;bottom:0;left:0;right:0;order:2;min-height:4mm;flex:none;font-size:6.3pt;color:#515a60;text-align:center;padding:.4mm;line-height:1.2}.mcs-axes{position:absolute;left:1mm;top:5mm;width:24mm;height:24mm;z-index:1;pointer-events:none;overflow:visible}.mcs-name{position:absolute;left:2mm;top:1mm;max-width:calc(100% - 4mm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:7pt;font-weight:700;color:#42494e;z-index:1;background:#fffffff2;padding:.3mm .5mm;pointer-events:none}.iso-photo{grid-row:1;grid-column:1}.top-photo{grid-column:1;grid-row:2}.side-photo{grid-column:2;grid-row:2}.right-panel{grid-column:2;grid-row:1;min-width:0;min-height:0;display:flex;flex-direction:column}.tool-panel{min-height:0;padding:1.5mm;flex:1;display:flex;justify-content:flex-start;flex-direction:column}.tools{font-size:8pt}.tools td,.tools th{border:.18mm solid #a8aeb2;padding:.55mm .8mm;line-height:1.2;overflow-wrap:anywhere}.tools th{background:#f0f2f3;text-align:left;font-size:7pt;font-weight:400}.tools [data-tool-column-id="number"],.tools [data-tool-column-id="cutcom"]{text-align:center}.empty-tools{font-size:7pt;margin:1.5mm 0;text-align:center}.empty-image{margin:auto;font-size:8pt;color:#7b858b;text-align:center}.rows-area{flex:1;min-height:0;border:.25mm solid #363e43}.ops{border:0;font-size:7pt;line-height:1.2}.ops th,.ops td{border-right:.16mm solid #acb3b7;border-bottom:.16mm solid #b9c0c3;vertical-align:middle;overflow-wrap:anywhere;padding:.65mm .6mm}.ops td:first-child,.ops th:first-child{border-left:0}.ops td:last-child,.ops th:last-child{border-right:0}.ops th{height:6mm;font-size:6pt;font-weight:400;background:#e7edf1;text-align:left;line-height:1.1}.ops th:nth-child(3),.ops th:nth-child(4){text-align:center}.ops .numeric{font-size:6.2pt;white-space:nowrap;text-align:center;padding-left:.35mm;padding-right:.35mm}.ops .name-cell{white-space:normal}.tree-name{display:block;position:relative;overflow-wrap:anywhere}.folder-icon{display:inline-block;vertical-align:baseline;width:2.3mm;height:1.6mm;background:#e4d7a7;border:.15mm solid #9c894d;margin-right:1mm}.group-row{background:#f0f3f5;font-weight:700}.group-row td{padding-top:.65mm;padding-bottom:.65mm}.suppressed-row{color:#79858a;background:#f7f7f7}.tool-change{display:inline-block;width:2mm;height:3mm;color:#454c51}.ops svg{display:block;width:2mm;height:3mm;margin:auto}.path{font-size:10pt;font-weight:700;line-height:1;display:inline-block}.path.ready{color:#27843b}.path.stale{color:#b36213}.path.suppressed,.path.missing{color:#727b81}.page-footer{position:absolute;bottom:0;left:0;width:100%;height:4.5mm;flex:none;text-align:right;font-size:11pt;line-height:4.5mm;white-space:nowrap;border:0}.page-footer span{display:inline-block;min-width:7mm;text-align:center}.continuation-header{flex:none;height:28mm;margin-bottom:3mm}.continuation-header .metadata{height:28mm}.continuation-header th{width:15.5%}.tools-title{font-size:12pt;font-weight:400;margin:3mm 0}.tools-page .tools{font-size:10pt}.tools-page .page-footer{margin-top:auto}.tools-page .tools td{padding:1.5mm}.empty-operations{font-size:8pt;margin:2mm 0}
 .time-footnote{position:absolute;left:0;top:0;font-size:6.5pt;color:#53626a;font-weight:400}
-.catalog-title{font-size:14pt;margin:3mm 0 1.5mm;font-weight:700}.catalog-subtitle{font-size:9pt;margin:0 0 4mm;color:#52626a}.catalog-table{border-collapse:collapse;table-layout:fixed;width:100%;font-size:9.5pt}.catalog-table td,.catalog-table th{border:.2mm solid #687279;padding:1.2mm 1.4mm;overflow-wrap:anywhere;line-height:1.25;text-align:center}.catalog-table th{background:#e7edf1;font-size:8.5pt}.catalog-table td:nth-child(2),.catalog-table th:nth-child(2){text-align:left}.catalog-table tr{break-inside:avoid;page-break-inside:avoid}.catalog-table thead{display:table-header-group}@media(max-width:840px){.toolbar{padding:10px}.page{margin:12px 8px}.summary{display:none}.actions button{padding:8px}.brand{font-size:14px}}
+.catalog-title{font-size:14pt;margin:3mm 0 1.5mm;font-weight:700}.catalog-subtitle{font-size:9pt;margin:0 0 4mm;color:#52626a}.catalog-table{border-collapse:collapse;table-layout:fixed;width:100%;font-size:9.5pt}.catalog-table td,.catalog-table th{border:.2mm solid #687279;padding:1.2mm 1.4mm;overflow-wrap:anywhere;line-height:1.25;text-align:center}.catalog-table th{background:#e7edf1;font-size:8.5pt}.catalog-table [data-tool-column-id="name"]{text-align:left}.catalog-table tr{break-inside:avoid;page-break-inside:avoid}.catalog-table thead{display:table-header-group}@media(max-width:840px){.toolbar{padding:10px}.page{margin:12px 8px}.summary{display:none}.actions button{padding:8px}.brand{font-size:14px}}
 
 @page{size:A4 portrait;margin:0}
 @media print{html,body{margin:0;background:#fff}.toolbar{display:none!important}.page{margin:0;box-shadow:none;break-after:page;page-break-after:always}.page:last-child{break-after:auto;page-break-after:auto}.field{outline:none!important;background:transparent!important}.field:empty:before{content:none}.field.overflowing{outline:.4mm solid #d00!important}.photo figcaption{color:#353a3e}.ops thead{display:table-header-group}.ops tr,.tools tr{break-inside:avoid;page-break-inside:avoid}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
@@ -6224,7 +6342,7 @@ function setFieldValue(el,value){
  else el.textContent=value;
 }
 
-const OP_COLUMNS=[['name','Операции'],['mcs','СКС'],['change','Смена инструмента'],['tool','Инструмент'],['number','T.'],['time','Время'],['feed','Подача'],['speed','Обороты'],['stock','Припуск на стенки'],['floor_stock','Припуск на пол'],['zmin','Zmin']];
+const OP_COLUMNS=[['name','Операции'],['mcs','СКС'],['change','Смена инструмента'],['tool','Инструмент'],['number','T.'],['cutcom','D'],['time','Время'],['feed','Подача'],['speed','Обороты'],['stock','Припуск на стенки'],['floor_stock','Припуск на пол'],['zmin','Zmin']];
 const ColumnOptions=(()=>{
  const meta=document.querySelector('meta[name="nx-operation-options"]'),list=document.getElementById('operation-column-list');
  let hidden=new Set(),wrapped=false;
@@ -6241,12 +6359,16 @@ const ColumnOptions=(()=>{
 })();
 function restoreCellText(root){root.querySelectorAll('[data-full-html]').forEach(n=>{n.innerHTML=n.dataset.fullHtml;delete n.dataset.fullHtml;});}
 const operationTableSchemas=new WeakMap();
+function tableColumnKeys(family){
+ return family==='operations'?OP_COLUMNS.map(c=>c[0]):(family==='project-tools'?['number','cutcom','name']:['name','number','cutcom']);
+}
 function migrateOperationTables(root){
  root.querySelectorAll('table.ops').forEach(table=>{
   restoreCellText(table);
   const head=table.tHead?.rows[0];if(!head)return;
-  const hasZmin=[...head.cells].some(c=>c.dataset.columnId==='zmin'),legacy=!hasZmin&&table.dataset.opsSchema!=='3'&&head.cells.length===11;
-  operationTableSchemas.set(table,legacy?1:(hasZmin?3:2));
+  const hasZmin=[...head.cells].some(c=>c.dataset.columnId==='zmin'),hasCutcom=[...head.cells].some(c=>c.dataset.columnId==='cutcom');
+  const legacy=!hasZmin&&Number(table.dataset.opsSchema||0)<3&&head.cells.length===11;
+  operationTableSchemas.set(table,legacy?1:(hasCutcom?4:(hasZmin?3:2)));
   if(legacy){
    for(const row of table.rows)row.cells[3]?.remove();table.querySelectorAll('colgroup>col')[3]?.remove();
    const floor=table.dataset.minMm?.split(',');if(floor?.length===11){floor.splice(3,1);table.dataset.minMm=floor.join(',');}table.dataset.flexCols='0';
@@ -6255,6 +6377,11 @@ function migrateOperationTables(root){
    const col=document.createElement('col');col.dataset.columnId='zmin';table.querySelector('colgroup').append(col);
    for(const row of table.rows){const cell=document.createElement(row.parentElement===table.tHead?'th':'td');cell.dataset.columnId='zmin';if(cell.tagName==='TD')cell.className='numeric';const span=document.createElement('span');span.className='cell-text';cell.append(span);row.append(cell);}
    const floor=table.dataset.minMm.split(',');floor.push('7');table.dataset.minMm=floor.join(',');
+  }
+  if(!hasCutcom&&head.cells.length===11){
+   const col=document.createElement('col');col.dataset.columnId='cutcom';table.querySelector('colgroup').insertBefore(col,table.querySelectorAll('colgroup>col')[5]);
+   for(const row of table.rows){const cell=document.createElement(row.parentElement===table.tHead?'th':'td');cell.dataset.columnId='cutcom';if(cell.tagName==='TD')cell.className='numeric';const span=document.createElement('span');span.className='cell-text';cell.append(span);row.insertBefore(cell,row.cells[5]);}
+   const floor=table.dataset.minMm.split(',');floor.splice(5,0,'7');table.dataset.minMm=floor.join(',');
   }
   [...table.querySelectorAll('colgroup>col')].forEach((col,i)=>col.dataset.columnId=OP_COLUMNS[i][0]);
   [...table.rows].forEach(row=>[...row.cells].forEach((cell,i)=>cell.dataset.columnId=OP_COLUMNS[i][0]));
@@ -6274,11 +6401,88 @@ function migrateOperationTables(root){
     text.textContent=value;text.title=value;cell.title=value;
    }
   }
-  table.dataset.opsSchema='3';table.dataset.flexCols='0';ColumnOptions.apply(table);
+  table.dataset.opsSchema='4';table.dataset.flexCols='0';ColumnOptions.apply(table);
  });
  root.querySelectorAll('template').forEach(t=>migrateOperationTables(t.content));
 }
 migrateOperationTables(document);
+function migrateToolTables(root){
+ root.querySelectorAll('table[data-fit-family="cover-tools"],table[data-fit-family="project-tools"]').forEach(table=>{
+  restoreCellText(table);const head=table.tHead?.rows[0];if(!head)return;
+  const project=table.dataset.fitFamily==='project-tools',index=project?1:2,keys=tableColumnKeys(table.dataset.fitFamily);
+  if(head.cells.length===2){
+   const col=document.createElement('col');table.querySelector('colgroup').insertBefore(col,table.querySelectorAll('colgroup>col')[index]||null);
+   for(const row of table.rows){
+    const header=row.parentElement===table.tHead,cell=document.createElement(header?'th':'td'),span=document.createElement('span');
+    // Saved old rows contain no Cutcom data; never substitute their T number.
+    const value=header?'D':(row.dataset.kind==='group'||row.classList.contains('tool-group-row')?'':'—');
+    span.className='cell-text';span.textContent=value;span.title=value;cell.title=value;cell.append(span);row.insertBefore(cell,row.cells[index]||null);
+   }
+   const floor=table.dataset.minMm.split(',');floor.splice(index,0,'8');table.dataset.minMm=floor.join(',');
+  }
+  if(head.cells.length!==3)return;
+  [...table.querySelectorAll('colgroup>col')].forEach((col,i)=>col.dataset.toolColumnId=keys[i]);
+  [...table.rows].forEach(row=>[...row.cells].forEach((cell,i)=>cell.dataset.toolColumnId=keys[i]));
+  table.dataset.toolSchema='2';table.dataset.flexCols=project?'2':'0';
+ });
+ root.querySelectorAll('template').forEach(t=>migrateToolTables(t.content));
+}
+migrateToolTables(document);
+function refreshCutcomTables(root){
+ const snapshot=DOC.cutcom;if(!snapshot||typeof snapshot!=='object')return;
+ const integer=value=>typeof value==='number'&&Number.isFinite(value)&&Number.isInteger(value)?value:null;
+ const registers=values=>[...new Set((Array.isArray(values)?values:[]).map(integer).filter(v=>v!==null))].sort((a,b)=>a-b);
+ const byNumber=snapshot.by_number&&typeof snapshot.by_number==='object'?snapshot.by_number:{};
+ const operations=Array.isArray(snapshot.operations)?snapshot.operations:[],tools=Array.isArray(snapshot.tools)?snapshot.tools:[];
+ const taggedOperations=new Map(),namedOperations=new Map(),taggedTools=new Map(),numberedTools=new Map();
+ const append=(map,key,value)=>{if(!map.has(key))map.set(key,[]);map.get(key).push(value);};
+ const nameKey=(name,number)=>JSON.stringify([name,number]);
+ operations.forEach(op=>{
+  const number=integer(op.tool_number),name=String(op.name??'');
+  if(op.tag!==null&&op.tag!==undefined)append(taggedOperations,String(op.tag),op);
+  if(number!==null)append(namedOperations,nameKey(name,number),op);
+ });
+ tools.forEach(tool=>{if(tool.tag!==null&&tool.tag!==undefined)append(taggedTools,String(tool.tag),tool);const number=integer(tool.number);if(number!==null)append(numberedTools,number,tool);});
+ const cellValue=cell=>cell?.getAttribute('title')??cell?.querySelector('.cell-text')?.getAttribute('title')??cell?.textContent??'';
+ const cellNumber=cell=>{const value=cellValue(cell).trim();return /^[+-]?\d+$/.test(value)?integer(Number(value)):null;};
+ const single=items=>items?.length===1?items[0]:null;
+ function update(cell,value){
+  if(!cell)return;let span=cell.querySelector('.cell-text');if(!span){span=document.createElement('span');span.className='cell-text';cell.append(span);}
+  span.textContent=value;span.title=value;cell.title=value;
+ }
+ function visit(node){
+  node.querySelectorAll('table.ops').forEach(table=>{
+   [...table.tBodies].forEach(body=>[...body.rows].forEach(row=>{
+    const cell=row.querySelector('[data-column-id="cutcom"]');
+    if(row.dataset.kind==='group'||row.classList.contains('group-row')){update(cell,'');return;}
+    const name=cellValue(row.querySelector('[data-column-id="name"]')),number=cellNumber(row.querySelector('[data-column-id="number"]'));
+    const compatible=op=>String(op.name??'')===name&&integer(op.tool_number)===number;
+    let operation=single((taggedOperations.get(row.dataset.operationTag)||[]).filter(compatible));
+    if(!operation&&number!==null)operation=single(namedOperations.get(nameKey(name,number)));
+    const visible=number!==null?registers(byNumber[String(number)]).length>=2:operation?.show_cutcom===true;
+    const value=integer(operation?.cutcom_register);
+    update(cell,visible?(value===null?'—':'D'+value):'');
+   }));
+  });
+  node.querySelectorAll('table[data-fit-family="cover-tools"],table[data-fit-family="project-tools"]').forEach(table=>{
+   [...table.tBodies].forEach(body=>[...body.rows].forEach(row=>{
+    const cell=row.querySelector('[data-tool-column-id="cutcom"]');
+    if(row.dataset.kind==='group'||row.classList.contains('tool-group-row')){update(cell,'');return;}
+    const number=cellNumber(row.querySelector('[data-tool-column-id="number"]'));
+    let values=number===null?[]:registers(byNumber[String(number)]);
+    if(!values.length){
+     let tool=single((taggedTools.get(row.dataset.toolTag)||[]).filter(t=>integer(t.number)===number));
+     if(!tool&&number!==null)tool=single(numberedTools.get(number));
+     if(tool){values=registers(tool.cutcom_registers);const fallback=integer(tool.cutcom_register);if(!values.length&&fallback!==null)values=[fallback];}
+    }
+    update(cell,values.length?values.map(v=>'D'+v).join(' / '):'—');
+   }));
+  });
+  node.querySelectorAll('template').forEach(template=>visit(template.content));
+ }
+ visit(root);
+}
+refreshCutcomTables(document);
 
 // One embedded mesh and one renderer for the project's first sheet.
 // No network, workers, libraries, STL files or NX display objects are required.
@@ -6403,7 +6607,7 @@ const ProjectModel=(()=>{
   edgeKey=key;edgeRevision++;return edgePoints.subarray(0,edgeCount);
  }
  const active=initialize();
- function invalidate(){modelBounds=null;lastKey='';}
+ function invalidate(boundsChanged=true){if(boundsChanged)modelBounds=null;lastKey='';}
  function adoptScale(){if(active&&view.zoom!==1){ProjectImage.set(ProjectImage.value()*view.zoom);view.zoom=1;sync();}}
  function geometry(){
   if(!modelBounds)modelBounds=bounds();const b=modelBounds,unit=base*ProjectImage.value()/100,width=b.width*unit,height=b.height*unit;
@@ -6472,7 +6676,7 @@ const ProjectModel=(()=>{
    gl.enable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.clearColor(0,0,0,0);
    surface.addEventListener('webglcontextlost',event=>{event.preventDefault();backend=null;queue();});
    return{surface,draw(w,h,m,s,placement){
-    if(gl.isContextLost())throw Error('WebGL context lost');surface.width=w;surface.height=h;gl.viewport(0,0,w,h);gl.depthMask(true);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    if(gl.isContextLost())throw Error('WebGL context lost');if(surface.width!==w)surface.width=w;if(surface.height!==h)surface.height=h;gl.viewport(0,0,w,h);gl.depthMask(true);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
     const stroke=.18*w/sheetWidth;
     gl.disable(gl.BLEND);gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(stroke*.5+.75,1);
     use(solid,w,h,m,s,placement);attribute(solid,'p',solidP,3);attribute(solid,'n',solidN,3);gl.drawArrays(gl.TRIANGLES,0,positions.length/3);gl.disable(gl.POLYGON_OFFSET_FILL);
@@ -6547,20 +6751,33 @@ const ProjectModel=(()=>{
   else software(ctx,w,h,m,s,placement);
   node.dataset.renderer=backend?'webgl':'software';
  }
- function queue(layout=false){needsLayout=needsLayout||layout;if(frame)return;frame=requestAnimationFrame(()=>{frame=-1;try{const refresh=needsLayout,focused=canvas&&document.activeElement===canvas;needsLayout=false;if(refresh)editors.forEach(e=>e.flow.refreshCatalog());mount();if(focused&&canvas)canvas.focus({preventScroll:true});draw();}finally{frame=0;}});}
+ function queue(layout=false){
+  needsLayout=needsLayout||layout;if(frame)return;
+  frame=requestAnimationFrame(()=>{
+   frame=-1;
+   try{
+    const refresh=needsLayout,focused=canvas&&document.activeElement===canvas;needsLayout=false;
+    // Keep the live canvas and tables throughout the gesture. Exact text
+    // fitting and row splitting run once the pointer is released.
+    if(drag)editors.forEach(e=>e.flow.previewCatalog());
+    else if(refresh)editors.forEach(e=>e.flow.refreshCatalog());
+    mount();if(focused&&canvas)canvas.focus({preventScroll:true});draw();
+   }finally{frame=0;}
+  });
+ }
  function mount(){
   const next=document.querySelector('.setup-pages>.project-tools-page .project-model');
   if(!active){if(next)next.replaceChildren();return;}
   if(next===node&&canvas?.isConnected)return;
   node=next;canvas=null;if(!node)return;
   node.querySelectorAll('canvas').forEach(c=>c.remove());canvas=document.createElement('canvas');canvas.tabIndex=0;
-  canvas.setAttribute('aria-label','3D-модель детали: перетаскивание — вращение; Shift и перетаскивание — сдвиг; колесо — масштаб.');canvas.title='Перетаскивание — вращение · Shift + перетаскивание — сдвиг · Колесо — масштаб';node.append(canvas);node.classList.add('model-ready');draw();
+  canvas.setAttribute('aria-label','3D-модель детали: перетаскивание — вращение; Shift и перетаскивание — сдвиг; колесо — масштаб.');canvas.title='Перетаскивание — вращение · Shift + перетаскивание — сдвиг · Колесо — масштаб';node.append(canvas);node.classList.add('model-ready');
  }
  function commit(){sync();lastKey='';markChanged();}
  function finish(cancel=false){
   if(!drag)return;
   const item=drag;drag=null;if(cancel)view=item.start;
-  try{item.host.releasePointerCapture(item.id);}catch(e){}item.host.style.cursor='';invalidate();queue(true);if(!cancel&&item.moved)commit();
+  try{item.host.releasePointerCapture(item.id);}catch(e){}item.host.style.cursor='';invalidate(cancel);queue(true);if(!cancel&&item.moved)commit();
  }
  function prepare(){
   finish();if(frame>0)cancelAnimationFrame(frame);frame=0;needsLayout=false;editors.forEach(e=>e.flow.refreshCatalog());mount();if(!canvas)return;sync();draw(true);
@@ -6583,7 +6800,7 @@ const ProjectModel=(()=>{
   if(!drag){const host=active&&hit(event);if(node){const page=node.closest('.page');page.style.cursor=host?'grab':'';page.title=host?canvas.title:'';}return;}
   if(event.pointerId!==drag.id)return;event.preventDefault();const r=node.getBoundingClientRect(),dx=event.clientX-drag.x,dy=event.clientY-drag.y;
   if(!dx&&!dy)return;drag.moved=true;drag.x=event.clientX;drag.y=event.clientY;
-  if(drag.pan){view.pan[0]+=dx*sheetWidth/r.width;view.pan[1]+=dy*sheetHeight/r.height;invalidate();}else rotate(dx/220,dy/220);queue(true);
+  if(drag.pan){view.pan[0]+=dx*sheetWidth/r.width;view.pan[1]+=dy*sheetHeight/r.height;invalidate(false);}else rotate(dx/220,dy/220);queue(true);
  });
  document.addEventListener('pointerup',event=>{if(drag&&event.pointerId===drag.id){event.preventDefault();finish();}});
  document.addEventListener('pointercancel',event=>{if(drag&&event.pointerId===drag.id)finish(true);});
@@ -7074,21 +7291,30 @@ function readColumnWidths(data){
  const result=Object.create(null);
  if(!data||typeof data!=='object')return result;
  scope.querySelectorAll('table[data-fit-family]').forEach(table=>{
-  const family=table.dataset.fitFamily,value=data[family],count=table.querySelectorAll('colgroup>col').length;let widths=Array.isArray(value)?value:value?.widths;
-  if(family==='operations'&&Array.isArray(widths)){
-   const schema=operationTableSchemas.get(table)||Number(table.dataset.opsSchema)||2;
-   // Old status-column tables and new Zmin tables both contain 11 columns.
-   // Use their source schema (or saved keys), never the count alone.
-   if(!Array.isArray(value?.keys)&&schema===1&&widths.length===11)widths=widths.filter((_,i)=>i!==3);
-   if(widths.length===10&&count===11){
-    const ratio=Array.isArray(value)||value?.unit==='ratio',extra=ratio?7/194:7*96/25.4;
-    const total=widths.reduce((a,b)=>a+b,0);widths=ratio?widths.map(n=>n/total*(1-extra)).concat(extra):widths.concat(extra);
-   }
+  const family=table.dataset.fitFamily,value=data[family],count=table.querySelectorAll('colgroup>col').length;
+  let widths=Array.isArray(value)?value:value?.widths;
+  if(!Array.isArray(widths)||!widths.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>0))return;
+  const keys=tableColumnKeys(family),ratio=Array.isArray(value)||value?.unit==='ratio';
+  let source=Array.isArray(value?.keys)?value.keys.slice():null;
+  if(!source){
+   if(family==='operations'){
+    const schema=operationTableSchemas.get(table)||Number(table.dataset.opsSchema)||2;
+    if(widths.length===12)source=keys;
+    else if(widths.length===11&&schema===1)source=['name','mcs','change','status','tool','number','time','feed','speed','stock','floor_stock'];
+    else if(widths.length===11)source=keys.filter(k=>k!=='cutcom');
+    else if(widths.length===10)source=keys.filter(k=>k!=='cutcom'&&k!=='zmin');
+   }else if(widths.length===2)source=keys.filter(k=>k!=='cutcom');
+   else if(widths.length===3)source=keys;
   }
-  if(Array.isArray(widths)&&widths.length===count&&widths.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>0)){
-   const total=widths.reduce((a,b)=>a+b,0);
-   if(Number.isFinite(total)){result[family]=Array.isArray(value)?{unit:'ratio',widths:widths.map(n=>n/total)}:{unit:value.unit==='ratio'?'ratio':'px',widths:widths.slice()};if(family==='operations')result[family].keys=OP_COLUMNS.map(c=>c[0]);}
-  }
+  if(!source||source.length!==widths.length||new Set(source).size!==source.length||keys.length!==count)return;
+  const previous=new Map(source.map((key,i)=>[key,widths[i]])),missing=keys.filter(k=>!previous.has(k));
+  if(missing.some(k=>k!=='cutcom'&&k!=='zmin'))return;
+  const kept=keys.filter(k=>previous.has(k)),total=kept.reduce((sum,k)=>sum+previous.get(k),0);
+  if(!(total>0&&Number.isFinite(total)))return;
+  const newMm=family==='operations'?7:8,targetMm=family==='cover-tools'?77.025:194;
+  const extra=ratio?newMm/targetMm:newMm*96/25.4;
+  widths=keys.map(k=>previous.has(k)?(ratio?previous.get(k)/total*(1-missing.length*extra):previous.get(k)):extra);
+  if(widths.every(n=>Number.isFinite(n)&&n>0))result[family]={unit:ratio?'ratio':'px',widths,keys};
  });
  return result;
 }
@@ -7163,7 +7389,7 @@ function moveColumnBoundary(table,index,initial,delta){
  const next=initial.slice();next[index]=Math.max(minimum,Math.min(maximum,initial[index]+delta));
  if(Math.abs(next[index]-metrics.widths[index])<.001)return false;
  columnWidths[family]={unit:'px',widths:next.slice()};
- if(family==='operations')columnWidths[family].keys=OP_COLUMNS.map(c=>c[0]);
+ columnWidths[family].keys=tableColumnKeys(family);
  for(const m of new Set(columnMetrics.values()))if(m.tables[0].dataset.fitFamily===family)applyColumnLayout(family,m,next);
  return true;
 }
@@ -7383,7 +7609,29 @@ const CoverTools=(()=>{
 
 // A project catalog always occupies one page. Fit both columns uniformly.
 const ProjectTools=(()=>{
+ let previewSizes=new WeakMap();
+ function preview(page){
+  const columns=page.querySelector('.catalog-columns'),tables=[...page.querySelectorAll('.catalog-table')];
+  if(!columns||!tables.length)return;
+  const screenScale=screenPaperScale(page),content=page.querySelector('.page-content');
+  const bottom=content.getBoundingClientRect().top+Number(page.dataset.projectToolsBottom)*96/25.4*screenScale;
+  const available=Math.max(1,(bottom-columns.getBoundingClientRect().top)/screenScale-14);
+  const data=tables.map(table=>{
+   let size=previewSizes.get(table);
+   if(!size){size={width:Math.max(1,parseFloat(table.style.width)||table.offsetWidth),height:Math.max(1,table.offsetHeight)};previewSizes.set(table,size);}
+   const viewport=table.closest('.catalog-scroll');
+   return{table,plane:table.parentElement,width:viewport.clientWidth,size};
+  });
+  // Scale both existing columns from stable logical sizes. Do not touch
+  // fonts, column widths or rows while the model is being dragged.
+  const scale=Math.max(.001,Math.min(1,available/Math.max(...data.map(d=>d.size.height)),...data.map(d=>d.width/d.size.width)));
+  data.forEach(({table,plane,size})=>{
+   table.style.transform='scale('+scale+')';
+   plane.style.width=(size.width*scale)+'px';plane.style.height=(size.height*scale+1)+'px';
+  });
+ }
  function fit(){
+  previewSizes=new WeakMap();
   scope.querySelectorAll('.setup-pages>.project-tools-page').forEach(page=>{
    const columns=page.querySelector('.catalog-columns'),tables=[...page.querySelectorAll('.catalog-table')];
    if(!columns||!tables.length)return;
@@ -7403,7 +7651,7 @@ const ProjectTools=(()=>{
    });
   });
  }
- return{fit};
+ return{fit,preview};
 })();
 
 function fitDataTables(only=null){
@@ -8570,8 +8818,9 @@ const CardFlow=(()=>{
  window.addEventListener('blur',()=>finish(true));
  local('operations-to-cover').addEventListener('click',()=>move([...selection],'cover'));
  local('operations-to-next').addEventListener('click',()=>move([...selection],'next'));
+ function previewCatalog(){const page=pages.querySelector('.project-tools-page');if(page&&ProjectModel.layout(page))ProjectTools.preview(page);}
  function refreshCatalog(){if(busy||!catalog.content.firstElementChild)return;busy=true;try{const data=values();catalogPages(data);applyValues(data);PageScale.refresh();fitDataTables();fitFields();renumber();}finally{busy=false;}}
- return{reflow,refreshCatalog,finish,move,availableHeight,layoutMetrics,heightState,previewHeight,finishHeight,previewLayout:m=>reflow(fitted(committed,m),m),galleryValues:()=>drag?.moved?drag.gallery:GalleryLayout.values(),hasCatalog:()=>!!catalog.content.firstElementChild,
+ return{reflow,refreshCatalog,previewCatalog,finish,move,availableHeight,layoutMetrics,heightState,previewHeight,finishHeight,previewLayout:m=>reflow(fitted(committed,m),m),galleryValues:()=>drag?.moved?drag.gallery:GalleryLayout.values(),hasCatalog:()=>!!catalog.content.firstElementChild,
   catalogContent:()=>catalog.content.cloneNode(true),setCatalog:content=>{catalog.content.replaceChildren(...(content?[content]:[]));pages.querySelectorAll('.project-tools-page').forEach(page=>page.remove());},
   values:()=>opIds.filter(id=>committed.has(id)),mode:()=>placement,limit:()=>limitEnabled,restore:(value,mode,limit)=>{committed=validIds(value);placement=mode==='auto'?'auto':'manual';if(typeof limit==='boolean')limitEnabled=limit;syncLimit();},
   cleanClone:clone=>{clone.querySelectorAll('.operation-selected').forEach(n=>{n.classList.remove('operation-selected');n.setAttribute('aria-selected','false');});clone.querySelectorAll('.drop-active,.operations-dragging,.operation-drop-active').forEach(n=>n.classList.remove('drop-active','operations-dragging','operation-drop-active'));clone.querySelectorAll('.operation-drop-page,.operation-drag-ghost').forEach(n=>n.remove());clone.querySelector('[data-editor-id="operations-status"]').textContent='';clone.querySelector('[data-editor-id="operations-to-cover"]').disabled=true;clone.querySelector('[data-editor-id="operations-to-next"]').disabled=true;},
@@ -8671,8 +8920,8 @@ document.getElementById('setup-jump').addEventListener('change',event=>{
 TABLE_ROW_MM = 3.8
 COVER_TOOL_ROW_MM = 3.8
 COVER_TOOL_WIDTH_MM = 77.025
-OP_KEYS = ['name', 'mcs', 'change', 'tool', 'number', 'time', 'feed', 'speed', 'stock', 'floor_stock', 'zmin']
-OP_HEADERS = ['Операции', 'СКС', '', 'Инструмент', 'T.', 'Время', 'Подача', 'Обороты', 'Припуск на стенки', 'Припуск на пол', 'Zmin']
+OP_KEYS = ['name', 'mcs', 'change', 'tool', 'number', 'cutcom', 'time', 'feed', 'speed', 'stock', 'floor_stock', 'zmin']
+OP_HEADERS = ['Операции', 'СКС', '', 'Инструмент', 'T.', 'D', 'Время', 'Подача', 'Обороты', 'Припуск на стенки', 'Припуск на пол', 'Zmin']
 TOOL_ICON = '<svg viewBox="0 0 12 18" aria-hidden="true"><rect x="3" y="1" width="6" height="15" rx="1" fill="none" stroke="currentColor"/><path d="M3 8L9 3M3 12L9 7M3 16L9 11" fill="none" stroke="currentColor"/></svg>'
 
 
@@ -8763,27 +9012,33 @@ def operation_layout(report):
                     extra += 4.5
                     value = str(value) + ' · продолжение'
             samples[i].append((text_width_em(value, row['kind'] == 'group' or i == 3 or (i == 0 and bool(re.search(r'(?<![^\W_])R0(?![^\W_]|[.,][0-9])', str(value), re.IGNORECASE)))), extra))
-    minima = (8, 5, 4, 8, 4, 7, 7, 7, 7, 7, 7)
+    minima = (8, 5, 4, 8, 4, 7, 7, 7, 7, 7, 7, 7)
     font, widths = fitted_columns(samples, 193.4, 7, minima, (0,))
     attrs, cols = layout_attributes('operations', font, widths, 7, minima, (0,))
     for key in OP_KEYS:
         cols = cols.replace('<col style=', '<col data-column-id="%s" style=' % key, 1)
-    return attrs + ' data-ops-schema="3"', cols
+    return attrs + ' data-ops-schema="4"', cols
 
 
 def tool_layout(tools, width_mm, base_pt, family, name_first=True, name_header=None, fit_scale=1.0):
     names = [(text_width_em(name_header if name_header is not None else ('Инструмент' if name_first else 'Наименование инструмента'), True), 2.0)]
     numbers = [(text_width_em('T'), 2.0)]
+    registers = [(text_width_em('D'), 2.0)]
     for row in tool_display_rows(tools):
         extra_em = min(12, row['depth']) * 1.3 + (2.1 if row['kind'] == 'group' else 0)
         names.append((text_width_em(row['name'], True) + extra_em, 2.0))
         if row['kind'] != 'group':
             numbers.append((text_width_em(number_text(row.get('number'))), 2.0))
-    minima, flexible = ((8, 6), (0,)) if name_first else ((6, 8), (1,))
-    samples = [names, numbers] if name_first else [numbers, names]
+            registers.append((text_width_em(tool_cutcom_text(row)), 2.0))
+    minima, flexible = ((8, 6, 8), (0,)) if name_first else ((6, 8, 8), (2,))
+    samples = [names, numbers, registers] if name_first else [numbers, registers, names]
     font, widths = fitted_columns(samples, width_mm - .6, base_pt * fit_scale,
                                   tuple(value * fit_scale for value in minima), flexible)
-    return layout_attributes(family, font, widths, base_pt, minima, flexible)
+    attrs, cols = layout_attributes(family, font, widths, base_pt, minima, flexible)
+    keys = ('name', 'number', 'cutcom') if name_first else ('number', 'cutcom', 'name')
+    for key in keys:
+        cols = cols.replace('<col style=', '<col data-tool-column-id="%s" style=' % key, 1)
+    return attrs + ' data-tool-schema="2"', cols
 
 
 def number_text(value, digits=None):
@@ -8833,9 +9088,11 @@ def zmin_text(value):
 
 def operation_cells(row, report):
     if row['kind'] == 'group':
-        return [row['name'], '', '', '', '', time_text(row.get('seconds')), '', '', '', '', '']
+        return [row['name'], '', '', '', '', '', time_text(row.get('seconds')), '', '', '', '', '']
     return [row['name'], row.get('mcs', ''), '', row.get('tool_name') or '—',
-            number_text(row.get('tool_number')), time_text(row.get('seconds')),
+            number_text(row.get('tool_number')),
+            cutcom_cell_text(row.get('cutcom_register')) if row.get('show_cutcom') else '',
+            time_text(row.get('seconds')),
             feed_text(row, report), number_text(row.get('speed')) + (' об/мин' if row.get('speed') is not None else ''),
             stock_text(row.get('stock')), '' if row.get('floor_stock_mode') == 'not_applicable' else stock_text(row.get('floor_stock')),
             zmin_text(row.get('zmin'))]
@@ -8882,7 +9139,9 @@ def operation_row_html(row, report):
         cells.append('<td data-column-id="%s" class="%s" title="%s">%s</td>' % (OP_KEYS[index], css, escaped(value), clipped_cell(content, value, indent if index == 0 else None)))
     return '<tr class="%s" data-kind="%s" data-depth="%d"%s>%s</tr>' % (
         classes, row['kind'], int(row.get('depth', 0)),
-        ' data-repeat="true"' if row.get('continued') else '', ''.join(cells))
+        (' data-repeat="true"' if row.get('continued') else '')
+        + (' data-operation-tag="%s"' % escaped(str(row['tag']))
+           if not group and row.get('tag') is not None else ''), ''.join(cells))
 
 
 def operations_table(rows, report):
@@ -9125,7 +9384,11 @@ def tool_table(tools, width_mm=77.025, base_pt=7, family='cover-tools', all_tool
         properties = ''.join('--cover-%s:%.8fmm;' % (key, value * scale) for key, value in sizes.items())
         attrs = attrs.replace(' style="', ' data-cover-scale="%.10f" style="%s' % (scale, properties), 1)
     rows = ''.join(tool_row_html(row) for row in display_rows)
-    return '<table class="tools"%s>%s<thead><tr><th>%s</th><th>%s</th></tr></thead><tbody>%s</tbody></table>' % (attrs, cols, clipped_cell(escaped(name_header), name_header), clipped_cell('T', 'T'), rows)
+    return ('<table class="tools"%s>%s<thead><tr><th data-tool-column-id="name">%s</th>'
+            '<th data-tool-column-id="number">%s</th><th data-tool-column-id="cutcom">%s</th>'
+            '</tr></thead><tbody>%s</tbody></table>') % (
+                attrs, cols, clipped_cell(escaped(name_header), name_header),
+                clipped_cell('T', 'T'), clipped_cell('D', 'D'), rows)
 
 
 def sorted_tools(tools):
@@ -9255,8 +9518,9 @@ def project_tool_pages(report):
     rows = tool_display_rows(tools)
     attrs, cols = tool_layout(tools, 194, 7, 'project-tools', name_first=False)
     table_head = ('<table class="catalog-table"%s>%s'
-                  '<thead><tr><th>%s</th><th>%s</th></tr></thead><tbody>') % (
-                      attrs, cols, clipped_cell('T', 'T'),
+                  '<thead><tr><th data-tool-column-id="number">%s</th>'
+                  '<th data-tool-column-id="cutcom">%s</th><th data-tool-column-id="name">%s</th></tr></thead><tbody>') % (
+                      attrs, cols, clipped_cell('T', 'T'), clipped_cell('D', 'D'),
                       clipped_cell('Наименование инструмента', 'Наименование инструмента'))
     body = ''.join(tool_row_html(row, name_first=False) for row in rows)
     head = '<div class="catalog-heading"><h2 class="catalog-title">Инструменты проекта</h2></div>'
@@ -9875,6 +10139,9 @@ def write_preview(output, report):
     body = ''.join(renumber_saved_sections(sections, len(entries)))
     context = {'filename': report['document_stem'] + '.html', 'id': report['card_id'], 'key': report['card_id'],
                'title': TITLE}
+    cutcom = next((item.get('cutcom_data') for item in setups if item.get('cutcom_data')), None)
+    if cutcom is not None:
+        context['cutcom'] = cutcom
     page = CARD_TEMPLATE.replace('__DOCUMENT_TITLE__', escaped(TITLE + ' — ' + report['document_stem']))
     page = page.replace('__CARD_ID__', report['card_id']).replace('__CARD_REVISION__', report['html_revision'])
     page = page.replace('__PROJECT_TOOLS_POSITION__', 'first')

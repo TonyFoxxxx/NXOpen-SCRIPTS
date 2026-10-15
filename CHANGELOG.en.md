@@ -2,6 +2,15 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-15 — Setup sheets V2.54
+
+- Added a D column for Cutcom registers to every tool list. Each tool occupies one row; used registers are deduplicated and sorted in ascending order, for example `D5 / D12`.
+- The operation D column is immediately after T. It reads each operation's own parameter and is populated in every row of that tool number when two or more distinct D values are used across the CAM project. Tool changes and D = T do not affect visibility. With only one D, operation cells remain blank even if D ≠ T.
+- Partial re-exports also refresh D in retained setups and the project catalog while preserving the rest of those sections' formatting. Operations require an unambiguous match; a required D cell shows `—` if its value is unavailable or matching is ambiguous.
+- Includes changes from the previously delivered V2.53: while the 3D model rotates or pans, the table keeps moving and fitting the available space. Precise shared-font fitting and final layout run after mouse release; both catalog columns scale equally.
+- Retained V2.52 Zmin fixes, faceted model quality, manual editing and saving. Regenerate the HTML to get the new columns and improved viewer.
+- Updated source, updater catalog, README and guide in Russian and English.
+
 ## 2026-10-15 — Zmin V1.04, Setup sheets V2.52 and Postprocessing V1.47
 
 - Extended machine-cycle support in all three scripts. `SPOT_DRILLING` / `NXHOLECENTER` spot drilling accepts `Drill` and `Drill,Csink`; depth to the tip is operation-local FBM `DEPTH`.

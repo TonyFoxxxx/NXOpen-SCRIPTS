@@ -8,15 +8,15 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.52 · 2026-10-15**
+**V2.54 · 2026-10-15**
 
-- Both the Zmin column and optional renaming use the extended Zmin V1.04 cycle support: `Drill` or `Drill,Csink` spot drilling and through-hole drilling with confirmed `STEP1HOLE` / `STEP2HOLE` features.
-- Drilling supports `SYS_CL_TIP` with `IgnoreToolTip` disabled and `SYS_CL_SHOULDER` with it enabled. Both settings include full operation-local FBM depth, bottom offset and standard conical point length.
-- Coordinate matching allows small FBM roundoff while retaining unique entrance-point and axis checks. [Exact settings and limitations](zmin.md#spot-drilling-and-drilling).
-- Rotary CL projection, name preparation and rollback are retained. HTML, table fonts, layout and manual width controls are unchanged.
-- Unsupported cycles leave Zmin blank and its suffix unchanged. With renaming enabled, the NX result shows the skip reason; partial minima and substituted Z0 are not used.
+- Every tool list now has a D column for the Cutcom registers in use. One tool still occupies one row; distinct registers appear in ascending order in one cell, for example `D5 / D12`.
+- The new operation D column is immediately after T. If a tool number uses two or more distinct D values across the CAM project, every operation using that number shows its own D, including D = T and rows without a tool change. If there is only one D, operation cells remain blank even when D ≠ T.
+- A partial re-export also refreshes D in retained setups and the project catalog while preserving the rest of unselected setups' formatting. An operation must match the current NX data unambiguously.
+- Includes V2.53: the table beside the 3D model moves and scales during rotation and panning. Precise shared-font fitting and final layout run after mouse release.
+- Retains V2.52 Zmin fixes for spot drilling, through and stepped holes including drill-point length, as well as rotary calculation along the actual tool axis.
 
-Calculations were checked outside NX against new diagnostic data and reference NC output. This revision still requires a control run inside the target NX / Designcenter environment. See the [changelog](../../CHANGELOG.en.md).
+Regenerate the HTML sheet with the updated script to get the new columns and improved viewer. See the [changelog](../../CHANGELOG.en.md).
 
 ## Building the sheet in NX
 
@@ -61,10 +61,17 @@ The operation table retains program-folder hierarchy.
 | MCS | Operation machining coordinate system. |
 | Tool change | Marks a transition to a different tool. |
 | Tool / T | Tool name and number. |
+| D | The operation's own Cutcom register. Immediately after T; populated only when the tool number uses two or more distinct D values across the CAM project. |
 | Time | Toolpath time; groups show the total for active toolpaths. |
 | Feed / spindle speed | CAM machining parameters. |
 | Wall / floor stock | Stock values where supported by the operation. |
 | Zmin | Minimum calculated toolpath position along the actual tool axis, relative to the operation's MCS origin, in CAM-part units. |
+
+The project catalog and setup tool lists show the same complete set of Cutcom registers used by a tool number T across the CAM project, deduplicated and sorted in ascending order: `D5 / D12`. Operations outside the selected setups and suppressed operations are included. Different D values do not create extra rows for the same tool.
+
+An operation's register is read from its own parameters and can differ from the tool's Cutcom register and from T. An unused tool-level register is not added to the set of registers read from operations. Only when no operation register could be read does the tool list use the tool's available default; missing data is shown as `—`. D is never substituted with T.
+
+Operation D visibility is determined by tool number T across the whole CAM project. With two or more distinct registers, every operation shows its own D, including D = T and rows without a tool-change mark. With one register, operation cells are blank even if it differs from T; that register remains visible in the tool list.
 
 Available tool information includes overhang H, cutting length L and relieved length HL; the sheet explains these labels. Toolpath time does not include every machine overhead.
 
@@ -90,6 +97,7 @@ If even one Cycle point has no resolved depth, Zmin stays blank for the whole op
 - Add image cells up to a 6 × 6 grid where space permits. Paste your own images with Ctrl+V; delete, move or swap cells. Multiple cells can be selected. Add/delete/move operations participate in Undo.
 - Resize cell boundaries and image-block height, or align cells.
 - Rotate the overall 3D model with the mouse, pan with Shift and zoom with the wheel. **«Вписать» (Fit)** and **«Исходный вид» (Original view)** are available. Model scale and placement are saved and appear in print.
+- While the model rotates or pans, the tool table continues moving and fitting into the available space beside it. Both catalog columns scale equally. Precise font fitting is deferred during movement; final layout and the largest fitting shared font size are calculated after mouse release.
 - **Original view** above a sheet restores that sheet's original elements, sizes, layout and settings. Deleted original images return and subsequently added cells are removed. The project sheet restores its initial model view; a setup sheet also restores MCS arrows, images and operation placement. Notes, locating information, global column settings and other sheets are retained. The original state is embedded in HTML, and the reset can be undone in one step.
 - Use **«Отменить» (Undo)** in the top bar, **«Отменить действие» (Undo action)** by a setup, or Ctrl+Z outside a text field. Up to 100 actions, including image deletion, can be undone in sequence. Saving retains history; closing or reloading the HTML clears it. Inside a text field, Ctrl+Z undoes typing.
 - When opened by NX, the sheet saves back to its source HTML automatically about a second after editing pauses. No initial file selection is needed. **«Сохранить карту» (Save sheet)** or Ctrl+S saves immediately.
@@ -116,7 +124,9 @@ Before closing the tab/NX or exporting again, click Save sheet and wait for the 
 
 ## Regenerating
 
-Running the script again updates selected setups in the existing HTML. Unselected setups retain their saved formatting. Selecting a parent folder merges its previous separate subfolder entries into that parent.
+Running the script again updates selected setups in the existing HTML. Unselected setups retain their saved formatting; only their D cells and those of the project catalog are refreshed from the whole current CAM project. Selecting a parent folder merges its previous separate subfolder entries into that parent.
+
+To refresh D, a saved operation must match an NX operation by identifier, name and T, or by a unique name-and-T combination. Ambiguous matches or unreadable registers display `—` when D is required for that tool instead of guessing a value. Manually changed or outdated names can prevent matching; regenerate the relevant setup in that case.
 
 Regenerated setups retain saved notes, their headings and heights, and X/Y/Z locating information. The rest of the selected setup's layout is rebuilt; not every manual layout change is preserved.
 
@@ -139,4 +149,3 @@ Regenerated setups retain saved notes, their headings and heights, and X/Y/Z loc
 - Missing, unavailable, out-of-date or unsupported paths leave Zmin blank. An unavailable ToolAxis is never replaced with fixed MCS Z. Check values on a known control project; live execution in the target NX / Designcenter requires separate validation.
 
 [Configuration](configuration.md#setup-sheets).
-

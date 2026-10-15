@@ -19,6 +19,15 @@ PROFILES = ((dict(spot=True), -1.25),
             (dict(shoulder=True, master_type='STEP2HOLE'), -12.943375672974064))
 
 
+class Tool(NS):
+    pass
+
+
+class OperationCollection(NS):
+    def __iter__(self):
+        return iter(self.operations)
+
+
 class SetupCardCycleTests(unittest.TestCase):
     def frame(self, stack, case):
         mcs = NS(Tag=77, Name='MCS')
@@ -33,7 +42,12 @@ class SetupCardCycleTests(unittest.TestCase):
     def table(self, case, prepared=None):
         """Supply unrelated metadata; preserve Zmin orchestration and its real NX reader."""
         part, uf = case.op.OwningPart, case.nx.UF.UFSession.GetUFSession()
-        case.op.tool.Name = 'CUTTER'
+        part.Name = 'CYCLE_TEST_PART'
+        case.op.tool = Tool(**vars(case.op.tool), Name='CUTTER')
+        case.nx.CAM.Tool = Tool
+        part.CAMSetup.CAMOperationCollection = OperationCollection(
+            operations=[case.op],
+            CreateHoleDrillingBuilder=part.CAMSetup.CAMOperationCollection.CreateHoleDrillingBuilder)
         part.CAMSetup.CAMGroupCollection = [case.op.tool]
         case.nx.UF.UFConstants = NS(UF_PARAM_SUPPRESS_PATH=1,
                                    UF_PARAM_OUTPUT_LOAD_TOOL=2, UF_PARAM_TL_NUMBER=3)
@@ -167,3 +181,4 @@ class SetupCardCycleTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
