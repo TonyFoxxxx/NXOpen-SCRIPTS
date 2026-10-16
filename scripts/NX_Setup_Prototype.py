@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.55
+# SCRIPT_VERSION: V2.57
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -8,7 +8,11 @@
 После запуска отметьте папки установов в дереве Program Order.
 Для выбора установов выделение в NX не используется. Родитель и потомок взаимоисключаются.
 В стартовом меню можно включить нумерацию операций, Description инструментов и Zmin в именах.
-Все три опции по умолчанию выключены. Zmin использует выделение до открытия меню
+При первом запуске опции выключены; далее меню восстанавливает подтверждённые настройки пользователя.
+Настройки первого меню хранятся в %APPDATA%/NX_Scripts/NX_Setup_Prototype.ini.
+Выбор установов и компонентов — в NX_Setup_Prototype.project.json рядом с .prt, отдельно по пользователям.
+«Далее» запоминает первое меню, «Создать карту» — компоненты; отмена меню не меняет его память.
+Zmin использует выделение до открытия меню
 или все операции проекта, если выделение пустое, как отдельный журнал Zmin.
 Каждый ракурс вписывается по геометрии IPW и видимой оснастки и сразу снимается.
 Одна выбранная папка — один установ со всеми её операциями и вложенными папками.
@@ -46,10 +50,12 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 В столбце «Операции» после самой длинной записи остаётся не менее двух пробелов.
 В списках инструмента D содержит используемые корректоры Cutcom: D5 / D12.
 Стрелка Carrier плавно сворачивает его инструменты; состояние сохраняется в HTML.
+Корневые инструменты вне Carrier сворачиваются отдельно в группе «Инструмент».
+Сворачивание пересчитывает только нужный список, без повторной компоновки операций.
 На экране свёрнутый Carrier остаётся заголовком, на печати скрывается целиком.
 Если у номера T во всех операциях проекта два и более D, каждая его операция показывает свой D.
 Фасетная 3D-модель первого листа включается галочкой в стартовом меню.
-По умолчанию галочка снята; после включения доступны коэффициент 0 < k ≤ 1 и лимит треугольников.
+При первом запуске галочка снята; после включения доступны коэффициент 0 < k ≤ 1 и лимит треугольников.
 Без галочки текущий ракурс вписывается в окно NX и снимается для первого листа.
 При повторном выводе снимок заменяет прежнюю модель, а модель — прежний снимок.
 Мышь вращает модель; Shift + мышь сдвигает; колесо меняет масштаб.
@@ -104,7 +110,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.55"
+SCRIPT_VERSION = "V2.57"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -1083,6 +1089,378 @@ def read_card_settings(settings_path=None):
     return result
 
 
+def menu_user_key():
+    """Use the Windows account SID, not NX's display name or a shared script path."""
+    if os.name == 'nt':
+        try:
+            import ctypes
+            from ctypes import wintypes as w
+            kernel, security = ctypes.WinDLL('kernel32', use_last_error=True), ctypes.WinDLL('advapi32', use_last_error=True)
+            kernel.GetCurrentProcess.restype = w.HANDLE
+            kernel.CloseHandle.argtypes = [w.HANDLE]
+            kernel.LocalFree.argtypes, kernel.LocalFree.restype = [ctypes.c_void_p], ctypes.c_void_p
+            security.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, ctypes.POINTER(w.HANDLE)]
+            security.GetTokenInformation.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.POINTER(w.DWORD)]
+            security.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(w.LPWSTR)]
+            token = w.HANDLE()
+            if not security.OpenProcessToken(kernel.GetCurrentProcess(), 0x8, ctypes.byref(token)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                size = w.DWORD()
+                security.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))
+                data = ctypes.create_string_buffer(size.value)
+                if not security.GetTokenInformation(token, 1, data, size, ctypes.byref(size)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                sid = ctypes.cast(data, ctypes.POINTER(ctypes.c_void_p))[0]
+                text = w.LPWSTR()
+                if not security.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                try:
+                    return 'sid:' + text.value
+                finally:
+                    kernel.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+            finally:
+                kernel.CloseHandle(token)
+        except Exception:
+            pass
+    user = os.environ.get('USERNAME') or os.environ.get('USER')
+    domain = os.environ.get('USERDOMAIN') or os.environ.get('COMPUTERNAME') or ''
+    if not user:
+        raise RuntimeError('Не удалось определить текущего пользователя Windows.')
+    return 'account:' + (domain + '\\' + user).casefold()
+
+
+@contextmanager
+def menu_file_lock(path, write=False):
+    """Lock the settings file itself; never create temporary or lock files."""
+    if write:
+        descriptor = os.open(os.fspath(path), os.O_RDWR | os.O_CREAT | getattr(os, 'O_BINARY', 0), 0o600)
+        stream = os.fdopen(descriptor, 'r+b')
+    else:
+        stream = path.open('rb')
+    with stream:
+        if os.name == 'nt':
+            import msvcrt
+            deadline = time.monotonic() + 1.
+            mode = msvcrt.LK_NBLCK if write else msvcrt.LK_NBRLCK
+            while True:
+                try:
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), mode, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('Файл настроек занят другим запуском NX.') from None
+                    time.sleep(.025)
+            try:
+                yield stream
+            finally:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            deadline = time.monotonic() + 1.
+            mode = (fcntl.LOCK_EX if write else fcntl.LOCK_SH) | fcntl.LOCK_NB
+            while True:
+                try:
+                    fcntl.flock(stream.fileno(), mode)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('Файл настроек занят другим запуском NX.') from None
+                    time.sleep(.025)
+            try:
+                yield stream
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def menu_identity_key(path):
+    return json.dumps(path, ensure_ascii=False, separators=(',', ':'))
+
+
+def menu_identity_index(rows, components=False):
+    """Only unique structured paths, including every ancestor, may be restored."""
+    paths, counts = {}, {}
+    for row in rows:
+        path = row.get('memory_path') if components else row.get('path')
+        if not path:
+            continue
+        if components:
+            valid = all(isinstance(segment, (list, tuple)) and len(segment) == 3 and
+                        all(isinstance(value, str) for value in segment) and any(segment[:2]) for segment in path)
+        else:
+            valid = all(isinstance(name, str) and name for name in path)
+        if not valid:
+            continue
+        signature = menu_identity_key(path)
+        paths[row['key']] = (path, signature)
+        counts[signature] = counts.get(signature, 0) + 1
+    result = {}
+    for row in rows:
+        entry = paths.get(row['key'])
+        if entry is None or (row.get('suppressed') if components else not row.get('operation_count', 0)):
+            continue
+        path, signature = entry
+        if any(counts.get(menu_identity_key(path[:length]), 0) > 1 for length in range(1, len(path) + 1)):
+            continue
+        result[signature] = row
+    return result
+
+
+def component_memory_segment(component, project_folder):
+    """Occurrence identity, without loading prototypes or using runtime NX tags."""
+    try:
+        name, display = str(component.Name or ''), str(component.DisplayName or '')
+        if not name and not display:
+            return None
+        prototype = getattr(component, 'Prototype', None)
+        prototype_path = str(getattr(prototype, 'FullPath', '') or '') if prototype is not None else ''
+        if prototype_path:
+            # Windows paths are case-insensitive; project-relative paths also
+            # survive moving the complete project to another directory/drive.
+            original = display_file_name(prototype_path)
+            folder = display_file_name(project_folder) if project_folder else ''
+            normalized = ntpath.normpath(original)
+            if folder:
+                try:
+                    relative = ntpath.relpath(normalized, ntpath.normpath(folder))
+                    if relative != '..' and not relative.startswith('..\\') and not ntpath.isabs(relative):
+                        prototype_path = 'project:' + relative.casefold()
+                    else:
+                        prototype_path = 'file:' + normalized.casefold()
+                except ValueError:
+                    prototype_path = 'file:' + normalized.casefold()
+            else:
+                prototype_path = 'file:' + normalized.casefold()
+        return (name, display, prototype_path)
+    except Exception:
+        # An unreadable identity must not bind a choice to a different instance.
+        return None
+
+
+class MenuMemory:
+    """Two agreed files; confirmed choices are merged under a short file lock."""
+    def __init__(self, project_file, user_key=None, preferences_path=None):
+        self.warnings = []
+        self.project_file = io_path(project_file)
+        self.project_path = self.project_file.parent / 'NX_Setup_Prototype.project.json'
+        self.part_key = self.project_file.name.casefold()
+        self._setup_paths = None
+        try:
+            self.user_key = user_key if user_key is not None else menu_user_key()
+            if not isinstance(self.user_key, str) or not self.user_key:
+                raise ValueError('Не определена учётная запись пользователя.')
+        except Exception as exc:
+            self.user_key = None
+            self.warn('Пользователь настроек', exc)
+        appdata = os.environ.get('APPDATA')
+        self.preferences_path = (io_path(preferences_path) if preferences_path is not None else
+                                 io_path(appdata) / 'NX_Scripts' / SETTINGS_FILENAME if appdata else None)
+        if self.preferences_path is None:
+            self.warn('Настройки первого меню', 'Переменная APPDATA недоступна; путь хранения не определён.')
+
+    def warn(self, scope, error):
+        message = '%s: %s Настройки не сохранены или не восстановлены; создание карты доступно.' % (scope, error)
+        if message not in self.warnings:
+            self.warnings.append(message)
+
+    @staticmethod
+    def ini(raw):
+        config = configparser.ConfigParser(interpolation=None)
+        if raw:
+            config.read_string(raw.decode('utf-8-sig'))
+        return config
+
+    def read_options(self):
+        options = preparation_options()
+        if self.preferences_path is None:
+            return options
+        try:
+            with menu_file_lock(self.preferences_path) as stream:
+                config = self.ini(stream.read())
+            for key, default in options.items():
+                if not config.has_option('Preparation', key):
+                    continue
+                try:
+                    value = config.get('Preparation', key)
+                    options[key] = (config.getboolean('Preparation', key) if isinstance(default, bool) else
+                                    parse_project_model_accuracy(value) if key == 'project_model_accuracy' else
+                                    parse_project_model_triangle_limit(value))
+                except ValueError as exc:
+                    self.warn('Настройка ' + key, exc)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            self.warn('Чтение ' + display_file_name(self.preferences_path), exc)
+        return options
+
+    @staticmethod
+    def replace_bytes(stream, before, after):
+        if before == after:
+            return
+        def write_all(payload):
+            remaining = memoryview(payload)
+            while remaining:
+                written = stream.write(remaining)
+                if not isinstance(written, int) or written <= 0 or written > len(remaining):
+                    raise OSError('Файл настроек записан не полностью.')
+                remaining = remaining[written:]
+        try:
+            stream.seek(0)
+            write_all(after)
+            stream.truncate()
+            stream.flush()
+            os.fsync(stream.fileno())
+        except Exception:
+            # There are no backup/temp files by agreement. Best-effort recovery
+            # after an ordinary write error; this is not power-failure atomic.
+            try:
+                stream.seek(0)
+                write_all(before)
+                stream.truncate()
+                stream.flush()
+                os.fsync(stream.fileno())
+            except Exception:
+                pass
+            raise
+
+    def save_options(self, options):
+        if self.preferences_path is None:
+            return False
+        try:
+            values = normalized_preparation_options(options)
+            self.preferences_path.parent.mkdir(parents=True, exist_ok=True)
+            with menu_file_lock(self.preferences_path, write=True) as stream:
+                before = stream.read()
+                config = self.ini(before)
+                if not config.has_section('Preparation'):
+                    config.add_section('Preparation')
+                for key, value in values.items():
+                    config.set('Preparation', key, str(value))
+                import io
+                text = io.StringIO()
+                config.write(text)
+                self.replace_bytes(stream, before, text.getvalue().encode('utf-8'))
+            return True
+        except Exception as exc:
+            self.warn('Запись ' + display_file_name(self.preferences_path), exc)
+            return False
+
+    @staticmethod
+    def project_data(raw):
+        data = json.loads(raw.decode('utf-8-sig')) if raw else {'format': 'nx-setup-menu-state', 'version': 1, 'users': {}}
+        if not isinstance(data, dict) or data.get('format') != 'nx-setup-menu-state' or type(data.get('version')) is not int or data.get('version') != 1 or not isinstance(data.get('users'), dict):
+            raise ValueError('Неизвестный или повреждённый формат настроек проекта; файл оставлен без изменений.')
+        def setup_path(path):
+            return isinstance(path, list) and bool(path) and all(isinstance(name, str) and name for name in path)
+        def component_path(path):
+            return isinstance(path, list) and bool(path) and all(isinstance(segment, list) and len(segment) == 3 and
+                all(isinstance(value, str) for value in segment) and any(segment[:2]) for segment in path)
+        for user in data['users'].values():
+            if not isinstance(user, dict) or not isinstance(user.get('parts'), dict):
+                raise ValueError('Повреждены записи пользователей; файл оставлен без изменений.')
+            for part in user['parts'].values():
+                if not isinstance(part, dict) or not isinstance(part.get('selected_setups', []), list) or not isinstance(part.get('component_setups', []), list):
+                    raise ValueError('Повреждены записи установов; файл оставлен без изменений.')
+                if not all(setup_path(path) for path in part.get('selected_setups', [])):
+                    raise ValueError('Повреждены пути установов; файл оставлен без изменений.')
+                for entry in part.get('component_setups', []):
+                    if (not isinstance(entry, dict) or not setup_path(entry.get('setup')) or
+                            not isinstance(entry.get('selected'), list) or
+                            not all(component_path(path) for path in entry['selected'])):
+                        raise ValueError('Повреждены записи компонентов; файл оставлен без изменений.')
+        return data
+
+    def read_project(self):
+        if self.user_key is None:
+            return {}
+        try:
+            with menu_file_lock(self.project_path) as stream:
+                data = self.project_data(stream.read())
+            return data['users'].get(self.user_key, {}).get('parts', {}).get(self.part_key, {})
+        except FileNotFoundError:
+            return {}
+        except Exception as exc:
+            self.warn('Чтение ' + display_file_name(self.project_path), exc)
+            return {}
+
+    def update_project(self, update):
+        if self.user_key is None:
+            return False
+        try:
+            with menu_file_lock(self.project_path, write=True) as stream:
+                before = stream.read()
+                data = self.project_data(before)
+                user = data['users'].setdefault(self.user_key, {'parts': {}})
+                part = user['parts'].setdefault(self.part_key, {})
+                update(part)
+                after = (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+                self.replace_bytes(stream, before, after)
+            return True
+        except Exception as exc:
+            self.warn('Запись ' + display_file_name(self.project_path), exc)
+            return False
+
+    def setup_choices(self, rows):
+        index = menu_identity_index(rows)
+        self._setup_paths = set(index)
+        model = SetupFolderChoices(rows)
+        for path in self.read_project().get('selected_setups', []):
+            row = index.get(menu_identity_key(path))
+            if row is not None:
+                model.toggle(row['key'], True)
+        return model.values()
+
+    def save_setup_choices(self, rows, selected):
+        index = menu_identity_index(rows)
+        self._setup_paths = set(index)
+        selected = set(selected)
+        paths = [list(row['path']) for row in rows if row['key'] in selected and menu_identity_key(row['path']) in index]
+        if len(paths) != len(selected):
+            self.warn('Выбор установов', 'Неоднозначные или недоступные папки не запомнены.')
+        return self.update_project(lambda part: part.update(selected_setups=paths))
+
+    def job_paths(self, jobs):
+        paths = [job['report'].get('selected_folder_path', []) for job in jobs]
+        signatures = [menu_identity_key(path) for path in paths]
+        return [path if path and all(isinstance(name, str) and name for name in path) and
+                signatures.count(signature) == 1 and (self._setup_paths is None or signature in self._setup_paths)
+                else None for path, signature in zip(paths, signatures)]
+
+    def component_choices(self, rows, jobs):
+        index = menu_identity_index(rows, components=True)
+        entries = self.read_project().get('component_setups', [])
+        result = []
+        for path in self.job_paths(jobs):
+            matches = [entry for entry in entries if path is not None and entry['setup'] == list(path)]
+            selected = matches[0]['selected'] if len(matches) == 1 else []
+            keys = {index[menu_identity_key(value)]['key'] for value in selected if menu_identity_key(value) in index}
+            result.append(normalized_component_choice(rows, keys))
+        return result
+
+    def save_component_choices(self, rows, jobs, choices):
+        if len(choices) != len(jobs):
+            raise ValueError('Не получены настройки всех установов.')
+        index = menu_identity_index(rows, components=True)
+        paths, updates = self.job_paths(jobs), []
+        for path, choice in zip(paths, choices):
+            if path is None:
+                self.warn('Выбор компонентов', 'Неоднозначный путь установа не запомнен.')
+                continue
+            selected = normalized_component_choice(rows, choice)
+            values = [row['memory_path'] for row in rows if row['key'] in selected and
+                      row.get('memory_path') and menu_identity_key(row['memory_path']) in index]
+            if len(values) != len(selected):
+                self.warn('Выбор компонентов', 'Неоднозначные или недоступные компоненты не запомнены.')
+            updates.append({'setup': list(path), 'selected': values})
+        def update(part):
+            replaced = {menu_identity_key(entry['setup']) for entry in updates}
+            part['component_setups'] = [entry for entry in part.get('component_setups', [])
+                                        if menu_identity_key(entry['setup']) not in replaced] + updates
+        return self.update_project(update)
+
+
 FRAME_MARGIN = 0.05
 FRAME_FIT_FRACTION = 1.0 - 2.0 * FRAME_MARGIN
 # NX 2606 пользователя возвращает минуты: подтверждено сравнением
@@ -1612,12 +1990,15 @@ def setup_folder_inventory(program):
 
 class SetupFolderChoices:
     """Checked folders are an antichain: no selected ancestor or descendant."""
-    def __init__(self, rows):
+    def __init__(self, rows, selected=None):
         self.rows = rows
         self.by_key = {row['key']: row for row in rows}
         if len(self.by_key) != len(rows):
             raise ValueError('Повторяется идентификатор папки.')
         self.selected = set()
+        for row in rows:
+            if row['key'] in (selected or ()):
+                self.toggle(row['key'], True)
 
     def disabled(self, key):
         row = self.by_key[key]
@@ -1861,6 +2242,25 @@ def preparation_options():
                 project_model_triangle_limit=PROJECT_MODEL_DEFAULT_TRIANGLES)
 
 
+def normalized_preparation_options(values=None):
+    """Invalid inactive fields fall back safely; the dialog keeps valid last values."""
+    result = preparation_options()
+    for key, value in (values or {}).items():
+        if key not in result:
+            continue
+        try:
+            if isinstance(result[key], bool):
+                if isinstance(value, bool):
+                    result[key] = value
+            elif key == 'project_model_accuracy':
+                result[key] = parse_project_model_accuracy(value)
+            else:
+                result[key] = parse_project_model_triangle_limit(value)
+        except (ValueError, TypeError):
+            pass
+    return result
+
+
 def parse_project_model_accuracy(value):
     message = 'Коэффициент точности должен быть больше 0 и не больше 1.'
     try:
@@ -1915,8 +2315,8 @@ def setup_folders_dialog_template():
     return bytes(data)
 
 
-def show_setup_folders(rows, options=None):
-    """Native modal tree, built in memory. No resource/configuration files."""
+def show_setup_folders(rows, options=None, selected=None):
+    """Native modal tree; restore choices without creating resource files."""
     import ctypes
     from ctypes import wintypes as w
 
@@ -1977,9 +2377,9 @@ def show_setup_folders(rows, options=None):
     init = INITCOMMONCONTROLSEX(ctypes.sizeof(INITCOMMONCONTROLSEX), 0x2)
     if not common.InitCommonControlsEx(ctypes.byref(init)):
         raise ctypes.WinError(ctypes.get_last_error())
-    model = SetupFolderChoices(rows)
+    model = SetupFolderChoices(rows, selected)
     state = {'window': None, 'tree': None, 'updating': False, 'error': None,
-             'handles': {}, 'keys': {}, 'images': None, 'options': preparation_options(), 'double_click': set()}
+             'handles': {}, 'keys': {}, 'images': None, 'options': normalized_preparation_options(options), 'double_click': set()}
     labels = {row['key']: row['name'] + (' — нет операций' if not row['operation_count'] else '') for row in rows}
 
     def item_info(handle):
@@ -2120,11 +2520,17 @@ def show_setup_folders(rows, options=None):
                 state['window'], state['tree'] = window, user.GetDlgItem(window, 101)
                 for ident in (230, 231, 232, 233, 234, 235):
                     control = user.GetDlgItem(window, ident)
-                    user.SendMessageW(control, 0xF1, int(ident == 232), 0)
+                    values = state['options']
+                    checked = {230: values['number_operations'], 231: values['update_descriptions'],
+                               232: not values['include_tool_numbers'], 233: values['include_tool_numbers'],
+                               234: values['add_zmin'], 235: values['create_project_model']}
+                    user.SendMessageW(control, 0xF1, int(checked[ident]), 0)
                     if not common.SetWindowSubclass(control, option_proc, 2, 0):
                         raise RuntimeError('Не удалось подключить опции подготовки карты.')
                 user.SendMessageW(user.GetDlgItem(window, 237), 0x00C5, 24, 0)  # EM_SETLIMITTEXT
                 user.SendMessageW(user.GetDlgItem(window, 239), 0x00C5, 24, 0)
+                user.SetWindowTextW(user.GetDlgItem(window, 237), format(state['options']['project_model_accuracy'], '.15g'))
+                user.SetWindowTextW(user.GetDlgItem(window, 239), str(state['options']['project_model_triangle_limit']))
                 description_formats()
                 if not state['tree']:
                     raise RuntimeError('Не удалось создать дерево папок.')
@@ -2195,9 +2601,14 @@ def show_setup_folders(rows, options=None):
                                              ('include_tool_numbers', 233), ('add_zmin', 234),
                                              ('create_project_model', 235)):
                             state['options'][key] = user.SendMessageW(user.GetDlgItem(window, control), 0xF0, 0, 0) == 1
-                        if state['options']['create_project_model']:
-                            state['options']['project_model_accuracy'] = model_accuracy()
-                            state['options']['project_model_triangle_limit'] = model_triangle_limit()
+                        for key, read_value in (('project_model_accuracy', model_accuracy),
+                                                ('project_model_triangle_limit', model_triangle_limit)):
+                            try:
+                                state['options'][key] = read_value()
+                            except ValueError:
+                                # Inactive invalid text never replaces the last valid setting.
+                                if state['options']['create_project_model']:
+                                    raise
                     user.EndDialog(window, ident)
                     return 1
                 if ident == 222:
@@ -2227,7 +2638,7 @@ def show_setup_folders(rows, options=None):
     return model.values() if result == 1 else None
 
 
-def ask_setup_folders(nx, part):
+def ask_setup_folders(nx, part, memory=None):
     program = cam_tree(nx, part.CAMSetup.GetRoot(nx.CAM.CAMSetup.View.ProgramOrder))
     rows = setup_folder_inventory(program)
     if not any(row['operation_count'] for row in rows):
@@ -2236,8 +2647,9 @@ def ask_setup_folders(nx, part):
     lock_source = nx.UF.UFConstants.UF_UI_FROM_CUSTOM
     uf_ui.LockUgAccess(lock_source)
     try:
-        options = preparation_options()
-        choices = show_setup_folders(rows, options)
+        options = memory.read_options() if memory is not None else preparation_options()
+        selected = memory.setup_choices(rows) if memory is not None else None
+        choices = show_setup_folders(rows, options, selected=selected) if memory is not None else show_setup_folders(rows, options)
     finally:
         uf_ui.UnlockUgAccess(lock_source)
     if choices is None:
@@ -2248,12 +2660,15 @@ def ask_setup_folders(nx, part):
             raise RuntimeError('Одновременно выбраны родительская папка и её подпапка.')
     if not model.selected:
         raise ExportCancelled()
+    if memory is not None:
+        memory.save_options(options)
+        memory.save_setup_choices(rows, model.values())
     return program, [row['object'] for row in rows if row['key'] in model.selected], options
 
 
-def resolve_setup_jobs(nx, ui, part, report):
+def resolve_setup_jobs(nx, ui, part, report, memory=None):
     """Only the startup folder dialog defines jobs; NX preselection is ignored."""
-    program, folders, options = ask_setup_folders(nx, part)
+    program, folders, options = ask_setup_folders(nx, part, memory) if memory is not None else ask_setup_folders(nx, part)
     report['_preparation_options'] = options
     selections = [[folder] for folder in folders]
     report['selection_source'] = 'startup_folder_tree'
@@ -2615,8 +3030,9 @@ def component_inventory(part):
     if root is None:
         return []
     rows, seen = [], set()
+    project_folder = ntpath.dirname(display_file_name(str(getattr(part, 'FullPath', '') or '')))
 
-    def walk(parent, ancestors=(), names=(), parent_visible=True):
+    def walk(parent, ancestors=(), names=(), parent_visible=True, memory_path=()):
         for component in parent.GetChildren():
             key = object_key(component)
             if key in seen:
@@ -2630,12 +3046,14 @@ def component_inventory(part):
             suppressed = bool(component.IsSuppressed)
             blanked = None if suppressed else bool(component.IsBlanked)
             visible = parent_visible and not suppressed and not blanked
+            segment = component_memory_segment(component, project_folder)
+            identity = memory_path + (segment,) if memory_path is not None and segment is not None else None
             rows.append({'object': component, 'key': key, 'name': name, 'path': path,
                          'ancestors': ancestors, 'suppressed': suppressed,
-                         'blanked': blanked, 'visible': visible})
+                         'blanked': blanked, 'visible': visible, 'memory_path': identity})
             # Suppressed branches must stay suppressed; do not load them to enumerate.
             if not suppressed:
-                walk(component, ancestors + (key,), names + (name,), visible)
+                walk(component, ancestors + (key,), names + (name,), visible, identity)
 
     walk(root)
     return rows
@@ -2735,12 +3153,16 @@ class AssemblyComponentDisplay:
 
 class SetupComponentChoices:
     """Independent in-memory choices; changing the active row never edits NX."""
-    def __init__(self, rows, count):
+    def __init__(self, rows, count, selected=None):
         if count < 1:
             raise ValueError('Не выбраны установы.')
         self.rows, self.active = rows, 0
         self.initial = normalized_component_choice(rows, {r['key'] for r in rows if r['visible']})
-        self.selected = [set() for _ in range(count)]
+        if selected is not None and len(selected) != count:
+            raise ValueError('Не получены настройки всех установов.')
+        available = {row['key'] for row in rows if not row['suppressed']}
+        self.selected = [normalized_component_choice(rows, set(choice) & available)
+                         for choice in (selected if selected is not None else [set() for _ in range(count)])]
 
     def select_setup(self, index):
         if not 0 <= index < len(self.selected):
@@ -2779,7 +3201,7 @@ def setups_components_dialog_template():
         (0x80, 1, 'Создать карту', 450, 307, 100, 22, 0x30001),
         (0x80, 2, 'Отмена', 558, 307, 72, 22, 0x10000),
     ]
-    # The resource is built in memory: no .dlx, .tcl or settings files.
+    # The dialog resource is built in memory: no .dlx or .tcl files.
     data = bytearray(struct.pack('<IIHhhhh', 0x80C808C0, 0, len(controls), 0, 0, 640, 340))
     data += struct.pack('<HH', 0, 0) + text(TITLE + ' — Установы и компоненты')
     data += struct.pack('<H', 9) + text('Segoe UI')
@@ -2791,7 +3213,7 @@ def setups_components_dialog_template():
     return bytes(data)
 
 
-def show_all_setup_components(rows, reports, preview=None):
+def show_all_setup_components(rows, reports, preview=None, selected=None):
     """One modal dialog for the complete batch; Cancel discards every choice."""
     import ctypes
     from ctypes import wintypes as w
@@ -2849,7 +3271,7 @@ def show_all_setup_components(rows, reports, preview=None):
     init = INITCOMMONCONTROLSEX(ctypes.sizeof(INITCOMMONCONTROLSEX), 1)
     if not common.InitCommonControlsEx(ctypes.byref(init)):
         raise ctypes.WinError(ctypes.get_last_error())
-    model = SetupComponentChoices(rows, len(reports))
+    model = SetupComponentChoices(rows, len(reports), selected)
     state = {'updating': False, 'error': None, 'list': None, 'setups': None, 'preview': None}
     labels = [r['path'] + (' — ПОДАВЛЕН' if r['suppressed'] else '') for r in rows]
     choice_rows = NativeChoiceRows(False, lambda index: (labels[index], rows[index]['suppressed'])
@@ -2980,7 +3402,7 @@ def show_all_setup_components(rows, reports, preview=None):
     return model.values() if result == 1 else None
 
 
-def ask_all_setup_components(nx, display, jobs):
+def ask_all_setup_components(nx, display, jobs, memory=None):
     if not any(not row['suppressed'] for row in display.rows):
         return [set() for _ in jobs]
     answer = ask_warning(nx, 'Добавить компоненты сборки для отображения?')
@@ -2992,7 +3414,9 @@ def ask_all_setup_components(nx, display, jobs):
     lock_source = nx.UF.UFConstants.UF_UI_FROM_CUSTOM
     uf_ui.LockUgAccess(lock_source)
     try:
-        choices = show_all_setup_components(display.rows, [job['report'] for job in jobs], display.apply)
+        selected = memory.component_choices(display.rows, jobs) if memory is not None else None
+        choices = (show_all_setup_components(display.rows, [job['report'] for job in jobs], display.apply, selected=selected)
+                   if memory is not None else show_all_setup_components(display.rows, [job['report'] for job in jobs], display.apply))
     finally:
         try:
             restore_errors = display.restore()
@@ -3004,7 +3428,10 @@ def ask_all_setup_components(nx, display, jobs):
         raise ExportCancelled()
     if len(choices) != len(jobs):
         raise RuntimeError('Не получены настройки всех установов.')
-    return [normalized_component_choice(display.rows, choice) for choice in choices]
+    choices = [normalized_component_choice(display.rows, choice) for choice in choices]
+    if memory is not None:
+        memory.save_component_choices(display.rows, jobs, choices)
+    return choices
 
 
 def finite_number(value):
@@ -3933,9 +4360,9 @@ def annotate_tool_hierarchy(nx, part, groups, report):
 def tool_display_rows(tools):
     """Expand only occupied groups; keep separate tool objects even with equal T.
 
-    Root tools remain outside carriers. Tools are sorted by T within each
-    group; group order follows the machine-tool tree whenever NX supplied it.
-    Legacy reports without machine_path retain the previous flat list.
+    Root tools use their own synthetic group, never enclosing a Carrier.
+    Tools are sorted by T within each group; group order follows the actual
+    machine-tool tree whenever NX supplied it.
     """
     root = {'children': {}, 'tools': []}
     for index, tool in enumerate(tools):
@@ -3956,8 +4383,13 @@ def tool_display_rows(tools):
     rows = []
 
     def emit(node, depth, carrier_path=()):
+        root_tools = node is root and bool(node['tools'])
+        if root_tools:
+            rows.append({'kind': 'group', 'tag': 'synthetic:root-tools',
+                         'name': 'Инструмент', 'number': None, 'depth': 0,
+                         'carrier_key': 'synthetic:root-tools', 'root_tools': True})
         for tool in sorted_tools(node['tools']):
-            rows.append(dict(tool, kind='tool', depth=depth))
+            rows.append(dict(tool, kind='tool', depth=depth + (1 if root_tools else 0)))
         def order(child):
             value = child['group'].get('order')
             return (not isinstance(value, (int, float)),
@@ -4007,13 +4439,16 @@ def tool_row_html(row, name_first=True):
                 '<circle cx="8" cy="4.5" r="1.1"/><circle cx="11.5" cy="8" r="1.1"/>'
                 '<circle cx="8" cy="11.5" r="1.1"/><circle cx="4.5" cy="8" r="1.1"/>'
                 '</svg></span>')
+        toggle_label = 'Свернуть инструменты' if row.get('root_tools') else 'Свернуть инструменты Carrier ' + name
         button = ('<button type="button" class="carrier-toggle" aria-expanded="true" '
-                  'aria-label="Свернуть инструменты Carrier %s" title="Свернуть инструменты Carrier %s">'
-                  '<span class="carrier-expanded" aria-hidden="true">▾</span></button>') % (escaped(name), escaped(name))
-        text = button + icon + '<span class="tool-group-label">' + escaped(label) + '</span>'
+                  'aria-label="%s" title="%s">'
+                  '<span class="carrier-expanded" aria-hidden="true"></span></button>') % (escaped(toggle_label), escaped(toggle_label))
+        text = button + ('' if row.get('root_tools') else icon) + '<span class="tool-group-label">' + escaped(label) + '</span>'
         number = ''
         attrs = ' class="tool-group-row" data-tool-group="%s" data-carrier-key="%s"' % (
             escaped(str(row.get('tag', ''))), escaped(row.get('carrier_key', 'tag:' + str(row.get('tag', '')))))
+        if row.get('root_tools'):
+            attrs += ' data-root-tools="true"'
         if row.get('continued'):
             attrs += ' data-repeat="true"'
     else:
@@ -6113,9 +6548,11 @@ table[data-fit-family="cover-tools"] .cell-text{height:calc(var(--cover-row,3.8m
 .tool-tree-cell{display:flex;align-items:center;min-width:0;width:100%}
 .tool-tree-cell>.tool-tree-indent{display:block;flex:none}
 .tool-tree-cell>.cell-text{display:block;flex:1;min-width:0;width:0}
-.carrier-toggle{display:inline-block;vertical-align:baseline;width:1.1em;height:1.1em;margin:0;padding:0;border:0;background:transparent;color:#647b85;font:inherit;line-height:1;cursor:pointer;touch-action:manipulation;user-select:none}
+.carrier-toggle{display:inline-block;position:relative;vertical-align:middle;width:2em;height:1.1em;margin:0 .1em 0 0;padding:0;border:0;background:transparent;color:#526c78;font:inherit;line-height:1;cursor:pointer;touch-action:manipulation;user-select:none}
+.carrier-toggle:before{content:"";position:absolute;inset:-.15em -.1em}
 .carrier-toggle:focus-visible{outline:2px solid #078778;outline-offset:1px}
-.carrier-expanded{display:inline-block;width:.9em;color:inherit;font-weight:400;transform:rotate(0deg);transition:transform 160ms ease-in-out}
+.carrier-expanded{display:inline-block;position:relative;width:1.15em;height:1em;vertical-align:middle;transform:rotate(0deg);transition:transform 160ms ease-in-out}
+.carrier-expanded:before{content:"";position:absolute;left:.1em;top:.25em;border-left:.475em solid transparent;border-right:.475em solid transparent;border-top:.65em solid currentColor}
 .carrier-toggle[aria-expanded="false"] .carrier-expanded{transform:rotate(-90deg)}
 @media(prefers-reduced-motion:reduce){.carrier-expanded{transition:none}}
 @media print{.tool-group-row.carrier-collapsed{display:none!important}.carrier-toggle{display:none!important}}
@@ -6529,7 +6966,7 @@ const ProjectModel=(()=>{
  let modelBounds=null;
  let meshEdges=[],faceNormals=null,faceCenters=null,edgePoints=null,edgeKey='',edgeCount=0,edgeRevision=0;
  const sheetWidth=194,sheetHeight=276.5;
- let backend=null,lastURL='',lastKey='';
+ let backend=null,lastURL='',lastKey='',paintedCanvas=null;
  function normalize(value){
   const result=identity(),q=value?.rotation,p=value?.pan;
   if(Array.isArray(q)&&q.length===4&&q.every(Number.isFinite)){const n=Math.hypot(...q);if(n>1e-8)result.rotation=q.map(x=>x/n);}
@@ -6784,7 +7221,7 @@ const ProjectModel=(()=>{
   if(backend===null)backend=webgl()||false;
   if(backend){try{backend.draw(w,h,m,s,placement);ctx.drawImage(backend.surface,0,0);}catch(e){backend=false;software(ctx,w,h,m,s,placement);}}
   else software(ctx,w,h,m,s,placement);
-  node.dataset.renderer=backend?'webgl':'software';
+  node.dataset.renderer=backend?'webgl':'software';paintedCanvas=canvas;
  }
  function queue(layout=false){
   needsLayout=needsLayout||layout;if(frame)return;
@@ -6815,9 +7252,18 @@ const ProjectModel=(()=>{
   try{item.host.releasePointerCapture(item.id);}catch(e){}item.host.style.cursor='';invalidate(cancel);queue(true);if(!cancel&&item.moved)commit();
  }
  function prepare(){
-  finish();if(frame>0)cancelAnimationFrame(frame);frame=0;needsLayout=false;editors.forEach(e=>e.flow.refreshCatalog());mount();if(!canvas)return;sync();draw(true);
-  const key=JSON.stringify([view,ProjectImage.value(),canvas.width,canvas.height]);if(lastKey!==key){lastURL=canvas.toDataURL('image/png');lastKey=key;}
-  let image=node.querySelector('.project-model-print');if(!image){image=document.createElement('img');image.className='project-model-print';image.alt='3D-модель детали — выбранный вид';node.prepend(image);}image.src=lastURL;
+  finish();if(frame>0)cancelAnimationFrame(frame);frame=0;
+  const pendingLayout=needsLayout;needsLayout=false;if(pendingLayout)editors.forEach(e=>e.flow.refreshCatalog());
+  mount();if(!canvas)return;sync();
+  // A tools-only edit does not change the model or its print image. Reuse the
+  // high-resolution PNG before drawing, rather than merely caching encoding.
+  const rect=node.getBoundingClientRect(),screen=screenPaperScale(node),rw=rect.width/screen,rh=rect.height/screen;
+  if(!(rw>0&&rh>0))return;
+  const factor=Math.min(3.125,3300/Math.max(rw,rh)),w=Math.max(1,Math.round(rw*factor)),h=Math.max(1,Math.round(rh*factor));
+  const key=JSON.stringify([view,ProjectImage.value(),w,h]);
+  if(lastKey!==key||!lastURL){draw(true);lastURL=canvas.toDataURL('image/png');lastKey=key;}
+  else if(paintedCanvas!==canvas)draw(); // A rebuilt page still needs its live canvas painted.
+  let image=node.querySelector('.project-model-print');if(!image){image=document.createElement('img');image.className='project-model-print';image.alt='3D-модель детали — выбранный вид';node.prepend(image);}if(image.src!==lastURL)image.src=lastURL;
  }
  function fit(){finish();const b=bounds();ProjectImage.set(100*Math.min(110/(base*b.width),160/(base*b.height)));view.pan=[0,0];invalidate();commit();queue(true);}
  function captureInitial(){if(data&&!data.initialView){data.initialView=normalize(view);data.initialScale=ProjectImage.value();sync();}}
@@ -7355,7 +7801,7 @@ function readColumnWidths(data){
 }
 let columnWidths=Object.create(null),columnDrag=null;
 try{columnWidths=readColumnWidths(JSON.parse(local('column-widths').textContent));}catch(e){}
-const columnMetrics=new Map();
+const columnMetrics=new Map(),toolFitCache=new Map();
 function columnLabel(table,index){return table.tHead.rows[0].cells[index].textContent.trim()||(index===2&&table.dataset.fitFamily==='operations'?'Смена инструмента':'Столбец '+(index+1));}
 function ensureColumnHandles(table){
  const cells=[...table.tHead.rows[0].cells];
@@ -7411,7 +7857,9 @@ function applyColumnLayout(family,metrics,widths){
   });
  };
  metrics.tables.forEach(apply);
- fitTableText(metrics.tables,metrics.base);
+ const cachedFont=metrics.cachedFont;delete metrics.cachedFont;
+ if(Number.isFinite(cachedFont))metrics.tables.forEach(table=>{table.style.fontSize=cachedFont+'px';table.dataset.fittedFont=String(cachedFont);});
+ else fitTableText(metrics.tables,metrics.base);
  if(family==='cover-tools'||family==='project-tools')metrics.tables.forEach(table=>{
   const plane=table.parentElement;plane.style.height=(table.offsetHeight*metrics.layoutScale+1)+'px';
  });
@@ -7619,7 +8067,7 @@ const PageScale=(()=>{
 
 // Collapse belongs to one tools list: this setup's cover or the shared catalog.
 const ToolGroups=(()=>{
- const collapsed={cover:new Set(),catalog:new Set()},legacyKeys={cover:new Map(),catalog:new Map()};
+ const collapsed={cover:new Set(),catalog:new Set()},legacyKeys={cover:new Map(),catalog:new Map()},prepared=new WeakMap();
  const selector='table[data-fit-family="cover-tools"],table[data-fit-family="project-tools"]';
  const owner=table=>table.dataset.fitFamily==='project-tools'?'catalog':'cover';
  function tables(root=scope){
@@ -7630,7 +8078,26 @@ const ToolGroups=(()=>{
  for(const table of tables()){
   try{for(const key of valid(JSON.parse(table.dataset.collapsedCarriers||'[]')))collapsed[owner(table)].add(key);}catch(e){}
  }
+ function ensureRootTools(table){
+  const body=table.tBodies[0];if(!body)return;
+  const rows=[...body.rows],outside=rows.filter(row=>row.dataset.kind!=='group'&&!row.classList.contains('tool-group-row')&&Number(row.dataset.depth||0)===0);
+  if(!outside.length)return;
+  let group=rows.find(row=>row.dataset.rootTools==='true');
+  if(!group){
+   group=document.createElement('tr');group.className='tool-group-row';Object.assign(group.dataset,{kind:'group',depth:'0',toolGroup:'synthetic:root-tools',carrierKey:'synthetic:root-tools',rootTools:'true'});
+   for(const key of tableColumnKeys(table.dataset.fitFamily)){
+    const cell=document.createElement('td');cell.dataset.toolColumnId=key;
+    if(key==='name'){cell.className='tool-name-cell';cell.title='Инструмент';cell.innerHTML='<span class="tool-tree-cell"><span class="tool-tree-indent" aria-hidden="true" style="width:0em"></span><span class="cell-text" title="Инструмент"><span class="carrier-expanded" aria-hidden="true"></span><span class="tool-group-label">Инструмент</span></span></span>';}
+    else cell.innerHTML='<span class="cell-text"></span>';group.append(cell);
+   }
+   body.insertBefore(group,outside[0]);
+  }
+  // Only rows outside actual Carrier groups belong to this independent block.
+  for(const row of outside){row.dataset.depth='1';const indent=row.querySelector('.tool-tree-indent');if(indent)indent.style.width='1.3em';}
+ }
  function decorate(table){
+  if(prepared.has(table))return prepared.get(table);
+  ensureRootTools(table);
   const groups=[...table.querySelectorAll('tbody>tr[data-kind="group"],tbody>tr.tool-group-row')],paths=new Map(),seen=new Map(),stack=[];
   const label=row=>(row.querySelector('.tool-group-label')?.textContent||row.querySelector('.tool-name-cell')?.title||'').replace(/ · продолжение$/,'');
   // Legacy HTML has no stable name key. Ambiguous names use their NX tags,
@@ -7653,26 +8120,28 @@ const ToolGroups=(()=>{
    let button=row.querySelector('.carrier-toggle');
    if(!button){
     button=document.createElement('button');button.type='button';button.className='carrier-toggle';
-    const arrow=row.querySelector('.carrier-expanded')||document.createElement('span');arrow.className='carrier-expanded';arrow.textContent='▾';arrow.setAttribute('aria-hidden','true');
+    const arrow=row.querySelector('.carrier-expanded')||document.createElement('span');arrow.className='carrier-expanded';arrow.textContent='';arrow.setAttribute('aria-hidden','true');
     if(arrow.parentElement)arrow.replaceWith(button);else row.querySelector('.tool-name-cell .cell-text')?.prepend(button);button.append(arrow);
    }
-   button.dataset.carrierKey=key;button.dataset.carrierOwner=owner(table);button.type='button';
+   button.dataset.carrierKey=key;button.dataset.carrierOwner=owner(table);button.type='button';button.querySelector('.carrier-expanded')?.replaceChildren();
   }
+  const rows=[...table.querySelectorAll('tbody>tr')];prepared.set(table,rows);return rows;
  }
  function apply(table){
-  decorate(table);const state=collapsed[owner(table)],stack=[];
+  const rows=decorate(table),state=collapsed[owner(table)],stack=[];
   table.dataset.collapsedCarriers=JSON.stringify([...state]);
-  for(const row of table.querySelectorAll('tbody>tr')){
+  for(const row of rows){
    const depth=Number(row.dataset.depth||0);while(stack.length&&stack.at(-1).depth>=depth)stack.pop();
    row.hidden=stack.some(parent=>parent.closed);
    if(row.dataset.kind==='group'||row.classList.contains('tool-group-row')){
     const closed=state.has(row.dataset.carrierKey),button=row.querySelector('.carrier-toggle');row.classList.toggle('carrier-collapsed',closed);
-    if(button){const name=row.querySelector('.tool-group-label')?.textContent.replace(/ · продолжение$/,'')||'Carrier';const text=(closed?'Развернуть':'Свернуть')+' инструменты Carrier '+name;button.setAttribute('aria-expanded',String(!closed));button.setAttribute('aria-label',text);button.title=text;}
+    if(button){const name=row.querySelector('.tool-group-label')?.textContent.replace(/ · продолжение$/,'')||'Carrier';const text=(closed?'Развернуть':'Свернуть')+(row.dataset.rootTools==='true'?' инструменты':' инструменты Carrier '+name);button.setAttribute('aria-expanded',String(!closed));button.setAttribute('aria-label',text);button.title=text;}
     stack.push({depth,closed});
    }
   }
  }
  function applyAll(){tables().forEach(apply);}
+ function applyOwner(list){tables().filter(table=>owner(table)===list).forEach(apply);}
  function visibleRows(table){apply(table);const printing=window.matchMedia('print').matches;return[...table.tBodies[0].rows].filter(row=>!row.hidden&&(!printing||!row.classList.contains('carrier-collapsed')));}
  function state(){return{cover:[...collapsed.cover],catalog:[...collapsed.catalog]};}
  function restore(value){collapsed.cover=valid(value?.cover);collapsed.catalog=valid(value?.catalog);applyAll();}
@@ -7687,14 +8156,14 @@ const ToolGroups=(()=>{
   const key=button.dataset.carrierKey,list=button.dataset.carrierOwner;if(!key||!collapsed[list])return;
   const closed=!collapsed[list].has(key),wasRepeat=button.closest('tr').dataset.repeat==='true';
   if(closed)collapsed[list].add(key);else collapsed[list].delete(key);
-  applyAll();CardFlow.reflow();markChanged();
+  applyOwner(list);CardFlow.refreshTools(list);markChanged();
   const buttons=[...scope.querySelectorAll('.carrier-toggle')].filter(b=>b.dataset.carrierKey===key&&b.dataset.carrierOwner===list&&!b.closest('tr').hidden);
   if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)for(const next of buttons){
    const arrow=next.querySelector('.carrier-expanded');arrow?.animate?.([{transform:closed?'rotate(0deg)':'rotate(-90deg)'},{transform:closed?'rotate(-90deg)':'rotate(0deg)'}],{duration:160,easing:'ease-in-out'});
   }
   (buttons.find(b=>(b.closest('tr').dataset.repeat==='true')===wasRepeat)||buttons[0])?.focus({preventScroll:true});
  },true);
- applyAll();return{applyAll,visibleRows,state,restore,reset,save,adoptCatalog};
+ applyAll();return{applyAll,applyOwner,visibleRows,state,restore,reset,save,adoptCatalog};
 })();
 
 
@@ -7702,7 +8171,7 @@ const ToolGroups=(()=>{
 const CoverTools=(()=>{
  const mm=96/25.4;
  function fit(){
-  ToolGroups.applyAll();
+  ToolGroups.applyOwner('cover');
   const panel=scope.querySelector('.gallery .tool-panel'),table=panel?.querySelector('table[data-fit-family="cover-tools"]');if(!table)return;
   const style=getComputedStyle(panel),number=k=>parseFloat(style[k])||0;
   const width=(number('width')||Number(panel.dataset.cellWidth)*mm)-number('paddingLeft')-number('paddingRight');
@@ -7789,6 +8258,15 @@ function fitDataTables(only=null){
   const base=Number(first.dataset.basePt)*scale,allFloor=first.dataset.minMm.split(',').map(x=>Number(x)*96/25.4*scale);
   const shown=allFloor.map((_,i)=>family!=='operations'||ColumnOptions.shown(OP_COLUMNS[i][0]));
   const floor=allFloor.map((x,i)=>shown[i]?x:0),flex=(family==='operations'?[0]:first.dataset.flexCols.split(',').map(Number)).filter(i=>shown[i]);
+  // Reopening a list reuses its previously measured exact fit. The key covers
+  // visible markup, geometry, manual widths, print CSS and screen rounding.
+  const fitKey=family==='operations'?null:JSON.stringify([family,target,base,renderScale,allFloor,flex,screenPaperScale(first),window.matchMedia('print').matches,columnWidths[family]||null,
+   tables.map(table=>[table.className,[...table.tHead.querySelectorAll('.cell-text')].map(c=>c.innerHTML),[...table.tBodies[0].rows].filter(row=>!row.hidden&&getComputedStyle(row).display!=='none').map(row=>[row.className,row.getAttribute('style'),row.dataset.depth,row.innerHTML])])]);
+  const cached=fitKey&&toolFitCache.get(fitKey);
+  if(cached){
+   const metrics={target,base,natural:cached.natural.slice(),floor,renderScale,tables,shown,cachedFont:cached.font};tables.forEach(t=>columnMetrics.set(t,metrics));
+   applyColumnLayout(family,metrics,cached.widths);continue;
+  }
   const holder=document.createElement('div');holder.style.cssText='position:absolute;left:-30000px;top:0;visibility:hidden;width:max-content;pointer-events:none;';holder.style.setProperty('--data-scale',scale);
   const probe=first.cloneNode(false);probe.classList.add('column-probe');probe.classList.remove('wrap-operation-names');probe.style.width='max-content';probe.style.tableLayout='auto';probe.style.fontSize=base+'pt';for(const property of ['transform','transform-origin','position','left','top','zoom'])probe.style.removeProperty(property);
   probe.append(first.tHead.cloneNode(true));const body=document.createElement('tbody');probe.append(body);
@@ -7819,8 +8297,13 @@ function fitDataTables(only=null){
    if(natural.some((x,i)=>shown[i]&&!(x>.35)))continue;
    const metrics={target,base,natural,floor,renderScale,tables,shown};tables.forEach(t=>columnMetrics.set(t,metrics));
    const manual=columnWidths[family]&&safeManualWidths(metrics,columnWidths[family]);
-   if(manual){applyColumnLayout(family,metrics,manual);continue;}
-   fitAutoColumns(family,metrics,flex,allFloor,measureNatural);
+   if(manual)applyColumnLayout(family,metrics,manual);
+   else fitAutoColumns(family,metrics,flex,allFloor,measureNatural);
+   const font=Number(first.dataset.fittedFont);
+   if(fitKey&&metrics.widths&&Number.isFinite(font)&&font>0){
+    toolFitCache.set(fitKey,{natural:natural.slice(),widths:metrics.widths.slice(),font});
+    while(toolFitCache.size>24)toolFitCache.delete(toolFitCache.keys().next().value);
+   }
   }finally{holder.remove();}
  }
 }
@@ -8742,19 +9225,29 @@ const CardFlow=(()=>{
   }
   if(current.length)result.push({key:'operations-'+pageIndex,items:current});return result;
  }
- function catalogPages(data){
+ function catalogPages(data,toolsOnly=false){
   const saved=catalog.content.firstElementChild;if(!saved){pages.querySelectorAll('.project-tools-page').forEach(p=>p.remove());return;}
-  ToolGroups.applyAll();
-  const rows=ToolGroups.visibleRows(saved.querySelector('.catalog-table')),
-        probe=measurePage(saved.cloneNode(true),'catalog');applyValues(data);
-  const bottom=probe.dataset.projectToolsBottom?probe.querySelector('.page-content').getBoundingClientRect().top+Number(probe.dataset.projectToolsBottom)*mm:probe.querySelector('.page-content').getBoundingClientRect().bottom-4.5*mm;
-  const top=probe.querySelector('.catalog-table thead').getBoundingClientRect().bottom;
-  const row=Math.max(3.8*PageScale.factor('catalog')*mm,...[...probe.querySelectorAll('.catalog-table tbody>tr')].filter(r=>!r.hidden&&getComputedStyle(r).display!=='none').slice(0,10).map(r=>r.getBoundingClientRect().height));
-  const budget=(bottom>top?bottom-top:221*mm)-12;probe.remove();
+  ToolGroups.applyOwner('catalog');
+  const rows=ToolGroups.visibleRows(saved.querySelector('.catalog-table')),live=pages.querySelector('.project-tools-page');
+  let budget,row;
+  if(toolsOnly&&live){
+   const table=live.querySelector('.catalog-table'),screen=screenPaperScale(live),content=live.querySelector('.page-content');
+   const render=Math.max(.001,table.getBoundingClientRect().width/Math.max(1,table.offsetWidth)/screen);
+   const bottom=live.dataset.projectToolsBottom?content.getBoundingClientRect().top+Number(live.dataset.projectToolsBottom)*mm*screen:live.querySelector('.page-footer').getBoundingClientRect().top;
+   const top=table.getBoundingClientRect().top+table.tHead.getBoundingClientRect().height/render;
+   row=Math.max(3.8*PageScale.factor('catalog')*mm,...[...table.tBodies[0].rows].filter(r=>!r.hidden&&getComputedStyle(r).display!=='none').slice(0,10).map(r=>r.getBoundingClientRect().height/screen/render));
+   budget=(bottom>top?(bottom-top)/screen:221*mm)-12;
+  }else{
+   const probe=measurePage(saved.cloneNode(true),'catalog');applyValues(data);
+   const bottom=probe.dataset.projectToolsBottom?probe.querySelector('.page-content').getBoundingClientRect().top+Number(probe.dataset.projectToolsBottom)*mm:probe.querySelector('.page-content').getBoundingClientRect().bottom-4.5*mm;
+   const top=probe.querySelector('.catalog-table thead').getBoundingClientRect().bottom;
+   row=Math.max(3.8*PageScale.factor('catalog')*mm,...[...probe.querySelectorAll('.catalog-table tbody>tr')].filter(r=>!r.hidden&&getComputedStyle(r).display!=='none').slice(0,10).map(r=>r.getBoundingClientRect().height));
+   budget=(bottom>top?bottom-top:221*mm)-12;probe.remove();
+  }
   // Use two columns before scaling; never create continuation catalog pages.
   const plan=projectToolPlan(rows,budget/row),count=plan.length;
   {
-   const page=saved.cloneNode(true),table=page.querySelector('.catalog-table');
+   const page=toolsOnly&&live?null:saved.cloneNode(true),table=page?page.querySelector('.catalog-table'):saved.querySelector('.catalog-table').cloneNode(true);
    table.remove();table.tBodies[0].replaceChildren();
    const columns=document.createElement('div');columns.className='catalog-columns';columns.dataset.columns=String(count);
    for(const chunk of plan){
@@ -8769,12 +9262,14 @@ const CardFlow=(()=>{
     }));
     viewport.append(column);columns.append(viewport);
    }
-   page.querySelector('.page-footer').before(columns);
-   page.querySelector('.catalog-title').textContent='Инструменты проекта';
-   const live=pages.querySelector('.project-tools-page');
-   if(live){live.querySelector('.page-content').replaceWith(page.querySelector('.page-content'));PageScale.apply(live,'catalog');if(cover.previousElementSibling!==live)cover.before(live);}
-   else{PageScale.apply(page,'catalog');cover.before(page);} 
-   ProjectModel.queue();
+   if(toolsOnly&&live){
+    const old=live.querySelector('.catalog-columns');if(old)old.replaceWith(columns);else live.querySelector('.page-footer').before(columns);
+   }else{
+    page.querySelector('.page-footer').before(columns);page.querySelector('.catalog-title').textContent='Инструменты проекта';
+    if(live){live.querySelector('.page-content').replaceWith(page.querySelector('.page-content'));PageScale.apply(live,'catalog');if(cover.previousElementSibling!==live)cover.before(live);}
+    else{PageScale.apply(page,'catalog');cover.before(page);}
+    ProjectModel.queue();
+   }
   }
  }
  function dropSheet(){
@@ -8938,8 +9433,21 @@ const CardFlow=(()=>{
  local('operations-to-cover').addEventListener('click',()=>move([...selection],'cover'));
  local('operations-to-next').addEventListener('click',()=>move([...selection],'next'));
  function previewCatalog(){const page=pages.querySelector('.project-tools-page');if(page&&ProjectModel.layout(page))ProjectTools.preview(page);}
+ function refreshTools(list){
+  if(busy)return;busy=true;
+  try{
+   const family=list==='catalog'?'project-tools':'cover-tools';
+   for(const [table] of columnMetrics)if(table.dataset.fitFamily===family&&!table.isConnected)columnMetrics.delete(table);
+   if(list==='catalog'){
+    catalogPages(null,true);ProjectTools.fit();
+    const tables=[...pages.querySelectorAll('.project-tools-page .catalog-table')];fitDataTables(tables);
+   }else{
+    CoverTools.fit();const table=cover.querySelector('table[data-fit-family="cover-tools"]');if(table)fitDataTables([table]);
+   }
+  }finally{busy=false;}
+ }
  function refreshCatalog(){if(busy||!catalog.content.firstElementChild)return;busy=true;try{const data=values();catalogPages(data);applyValues(data);PageScale.refresh();fitDataTables();fitFields();renumber();}finally{busy=false;}}
- return{reflow,refreshCatalog,previewCatalog,finish,move,availableHeight,layoutMetrics,heightState,previewHeight,finishHeight,previewLayout:m=>reflow(fitted(committed,m),m),galleryValues:()=>drag?.moved?drag.gallery:GalleryLayout.values(),hasCatalog:()=>!!catalog.content.firstElementChild,
+ return{reflow,refreshCatalog,refreshTools,previewCatalog,finish,move,availableHeight,layoutMetrics,heightState,previewHeight,finishHeight,previewLayout:m=>reflow(fitted(committed,m),m),galleryValues:()=>drag?.moved?drag.gallery:GalleryLayout.values(),hasCatalog:()=>!!catalog.content.firstElementChild,
   catalogContent:()=>catalog.content.cloneNode(true),setCatalog:content=>{catalog.content.replaceChildren(...(content?[content]:[]));pages.querySelectorAll('.project-tools-page').forEach(page=>page.remove());ToolGroups.adoptCatalog(catalog.content);},
   values:()=>opIds.filter(id=>committed.has(id)),mode:()=>placement,limit:()=>limitEnabled,restore:(value,mode,limit)=>{committed=validIds(value);placement=mode==='auto'?'auto':'manual';if(typeof limit==='boolean')limitEnabled=limit;syncLimit();},
   cleanClone:clone=>{clone.querySelectorAll('.operation-selected').forEach(n=>{n.classList.remove('operation-selected');n.setAttribute('aria-selected','false');});clone.querySelectorAll('.drop-active,.operations-dragging,.operation-drop-active').forEach(n=>n.classList.remove('drop-active','operations-dragging','operation-drop-active'));clone.querySelectorAll('.operation-drop-page,.operation-drag-ghost').forEach(n=>n.remove());clone.querySelector('[data-editor-id="operations-status"]').textContent='';clone.querySelector('[data-editor-id="operations-to-cover"]').disabled=true;clone.querySelector('[data-editor-id="operations-to-next"]').disabled=true;},
@@ -10503,7 +11011,7 @@ def main():
     global EXPORT_PROGRESS
     previous_progress, progress = EXPORT_PROGRESS, None
     ui, nx, part, staging, card = None, None, None, None, None
-    components, preparation = None, None
+    components, preparation, memory = None, None, None
     jobs, state = [], new_report()
     processing, cancelled = False, False
     created_directories = []
@@ -10531,7 +11039,8 @@ def main():
             project_name, project_file = project_name_from_part(part), project_file_from_part(part)
             state.update(project_name=project_name, project_file=display_file_name(project_file),
                          document_stem=safe_file_component(project_name), format='nx-setup-document')
-            jobs = resolve_setup_jobs(nx, ui, part, state)
+            memory = MenuMemory(project_file)
+            jobs = resolve_setup_jobs(nx, ui, part, state, memory=memory)
             confirm_duplicate_tool_numbers(nx, part, state)
             components = AssemblyComponentDisplay(nx, part)
             for job in jobs:
@@ -10540,11 +11049,12 @@ def main():
                 report['data_issues'].extend(copy.deepcopy(state['data_issues']))
                 report.update(project_name=project_name, project_file=display_file_name(project_file),
                               document_stem=state['document_stem'], html_file=state['document_stem'] + '.html')
-            choices = ask_all_setup_components(nx, components, jobs)
+            choices = ask_all_setup_components(nx, components, jobs, memory=memory)
             for job, selected in zip(jobs, choices):
                 job['context']['visible_component_keys'] = selected
             # Preview visibility is restored before meshing the startup view.
-            # No output files until every confirmation has been answered.
+            # Card output starts after all confirmations; accepted menus already
+            # saved their own settings independently of the export outcome.
             destination = project_file.parent / 'Карты Наладки' / safe_file_component(project_name, True)
             state['_existing_card'] = read_existing_card(destination / (state['document_stem'] + '.html'))
             plan_setup_update(state['_existing_card'], [job['report'] for job in jobs])
@@ -10656,8 +11166,17 @@ def main():
             EXPORT_PROGRESS = previous_progress
             if progress is not None:
                 progress.close()
+    if memory is not None and memory.warnings:
+        state['menu_warnings'] = list(memory.warnings)
+        if state['status'] == 'ok':
+            state['status'] = 'warning'
     if cancelled and not state.get('error'):
         diagnostic_event('export.cancelled')
+        if state.get('menu_warnings'):
+            try:
+                ui.NXMessageBox.Show(TITLE, nx.NXMessageBox.DialogType.Warning, '\n\n'.join(state['menu_warnings']))
+            except Exception:
+                print('\n\n'.join(state['menu_warnings']))
         return
     diagnostic_event('export.result', status=state['status'], error=state.get('error'),
                      setups=[{'name': setup_label(j['report']), 'status': j['report']['status'],
@@ -10686,6 +11205,8 @@ def main():
             message += '\n\n' + '\n'.join(failures)
     if state.get('cleanup_errors'):
         message += '\n\n' + '\n'.join(state['cleanup_errors'])
+    if state.get('menu_warnings'):
+        message += '\n\n' + '\n\n'.join(state['menu_warnings'])
     if card is not None and preparation is not None and preparation.result():
         message += '\n\n' + preparation.result()
     message += copy_card_path(card, state)

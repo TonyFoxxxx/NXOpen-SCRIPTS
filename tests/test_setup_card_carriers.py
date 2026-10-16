@@ -23,6 +23,30 @@ class Group:
 
 
 class CarrierTests(unittest.TestCase):
+    def test_root_tools_have_their_own_group_outside_carriers(self):
+        tools = [dict(tag='1', name='ROOT_TOOL', number=1),
+                 dict(tag='2', name='CARRIER_TOOL', number=2,
+                      machine_path=[dict(tag='10', name='Carrier', name_index=0)])]
+        rows = CARD.tool_display_rows(tools)
+        self.assertEqual([(r['name'], r['depth']) for r in rows],
+                         [('Инструмент', 0), ('ROOT_TOOL', 1), ('Carrier', 0), ('CARRIER_TOOL', 1)])
+        self.assertTrue(rows[0]['root_tools'])
+        self.assertEqual(rows[0]['carrier_key'], 'synthetic:root-tools')
+        self.assertNotIn('root_tools', rows[2])
+        html = CARD.tool_row_html(rows[0])
+        self.assertIn('data-root-tools="true"', html)
+        self.assertIn('aria-label="Свернуть инструменты"', html)
+        self.assertNotIn('Carrier', html)
+
+    def test_no_empty_root_group_and_real_instrument_carrier_is_independent(self):
+        tool = dict(tag='2', name='CARRIER_TOOL', number=2,
+                    machine_path=[dict(tag='10', name='Инструмент', name_index=0)])
+        rows = CARD.tool_display_rows([tool])
+        self.assertEqual(len(rows), 2)
+        self.assertNotIn('root_tools', rows[0])
+        self.assertNotEqual(rows[0]['carrier_key'], 'synthetic:root-tools')
+        self.assertEqual(CARD.tool_display_rows([]), [])
+
     def test_key_uses_all_siblings_even_when_first_carrier_is_unused(self):
         root = Group(1, 'ROOT')
         first, second = Group(2, 'Carrier', root), Group(3, 'Carrier', root)

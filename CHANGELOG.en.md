@@ -2,6 +2,22 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-16 — Setup sheets V2.57
+
+- First-menu settings are saved separately for each Windows user in `%APPDATA%\NX_Scripts\NX_Setup_Prototype.ini`: preparation checkboxes, Description format, faceted model, coefficient and triangle limit.
+- Setup-folder and per-setup component selections are stored in one `NX_Setup_Prototype.project.json` beside the PRT, separately for each user and part.
+- Next saves settings and folders; Create sheet saves components. Cancel does not write unconfirmed changes in the current dialog. Menus still appear for review; As in NX uses current NX visibility.
+- Retained the adjacent programmer-name INI, V2.56 features, D columns and Zmin calculation. Menu memory needs only the updated script to run; no NX restart is required.
+- Updated source, updater catalog and documentation in Russian and English.
+
+## 2026-10-16 — Setup sheets V2.56
+
+- Removed unnecessary operation and image layout work from Carrier toggles; only the relevant tool list is updated.
+- Enlarged arrows and click areas while retaining smooth 160 ms rotation, down when expanded and right when collapsed.
+- Added an independent «Инструмент» (Tools) block for tools outside Carriers only. Collapsing it neither hides Carriers nor changes their states.
+- Retained independent setup-list and project-catalog states, restoration after save/reopen, retention on re-export and expansion through Original view. Collapsed blocks keep their headings on screen and are omitted entirely from print.
+- Regenerate HTML to get the new features. Updated source, updater catalog and documentation in Russian and English.
+
 ## 2026-10-16 — Setup sheets V2.55
 
 - Added Carrier group collapsing through the arrow in tool lists. A collapsed group's heading stays on screen while its tools and nested groups are hidden.

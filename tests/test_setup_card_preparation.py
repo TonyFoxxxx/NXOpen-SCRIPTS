@@ -308,7 +308,8 @@ class PreparationTests(unittest.TestCase):
         m.nx.XYZAxis = NS(XAxis=1, YAxis=2, ZAxis=3)
         m.nx.Assemblies = m.nx.Facet = m.nx.Gateway = NS()
         components = NS(restore=lambda: [], apply=lambda keys: None, dirty=False)
-        def jobs(nx, ui, part, state):
+        menu_memory = NS(warnings=[])
+        def jobs(nx, ui, part, state, memory=None):
             state['_preparation_options'] = dict(number_operations=True, update_descriptions=True, add_zmin=True)
             state['_preparation_options'].update(model_options or {})
             m.selection = [3]  # Startup modal changes navigator selection after snapshot.
@@ -324,6 +325,7 @@ class PreparationTests(unittest.TestCase):
             return []
         mocks = dict(snapshot_view=Mock(return_value={}), read_view_projection=Mock(return_value='Orthographic'),
                      project_name_from_part=Mock(return_value='Project'), project_file_from_part=Mock(return_value=Path('/project/Project.prt')),
+                     MenuMemory=Mock(return_value=menu_memory),
                      resolve_setup_jobs=Mock(side_effect=jobs), confirm_duplicate_tool_numbers=Mock(side_effect=confirm),
                      AssemblyComponentDisplay=Mock(return_value=components),
                      ask_all_setup_components=Mock(side_effect=CARD.ExportCancelled() if cancel else None, return_value=[set()]),
@@ -338,6 +340,9 @@ class PreparationTests(unittest.TestCase):
         modules = {'NXOpen': m.nx, **{'NXOpen.' + name: getattr(m.nx, name) for name in ('CAM', 'UF', 'Assemblies', 'Facet', 'Gateway')}}
         with patch.dict(sys.modules, modules), patch.multiple(CARD, **mocks):
             CARD.main()
+        mocks['MenuMemory'].assert_called_once_with(Path('/project/Project.prt'))
+        self.assertIs(mocks['resolve_setup_jobs'].call_args.kwargs['memory'], menu_memory)
+        self.assertIs(mocks['ask_all_setup_components'].call_args.kwargs['memory'], menu_memory)
         return observed, mocks
 
     def test_main_prepares_before_html_and_retains_edits_only_after_publish(self):
