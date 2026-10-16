@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-16 — Setup sheets V2.55
+
+- Added Carrier group collapsing through the arrow in tool lists. A collapsed group's heading stays on screen while its tools and nested groups are hidden.
+- Printing omits the entire collapsed group, including its heading. HTML saves and restores the state on reopening, separately for each setup's tool list and the shared project catalog.
+- The arrow rotates smoothly down when expanded and right when collapsed.
+- Retained D columns, Zmin calculation, manual editing and smooth model/table movement. Updated source, updater catalog and documentation in Russian and English.
+
 ## 2026-10-15 — Setup sheets V2.54
 
 - Added a D column for Cutcom registers to every tool list. Each tool occupies one row; used registers are deduplicated and sorted in ascending order, for example `D5 / D12`.

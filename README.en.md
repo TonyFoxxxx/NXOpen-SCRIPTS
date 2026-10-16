@@ -14,7 +14,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 | File | Version | Purpose | Guide |
 | --- | --- | --- | --- |
-| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.54 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
+| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.55 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.47 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.04 | Add minimum Z to operation names, including supported spot-drilling and through-hole drilling cycles. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
@@ -30,11 +30,10 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Setup sheets V2.54 · 2026-10-15
+### Latest update — Setup sheets V2.55 · 2026-10-16
 
-- Tool lists now include a D column for Cutcom registers. Multiple values for one tool share one cell, for example `D5 / D12`.
-- The operation D column is immediately after T. It is populated for every operation of a tool number using two or more distinct D values across the CAM project; a single D leaves operation cells blank.
-- Includes the V2.53 viewer improvement: the table continues moving beside the 3D model while it rotates or pans, with precise font fitting after mouse release. V2.52 Zmin fixes are retained.
+- Click a Carrier arrow in a tool list to collapse the group. Its heading stays on screen while its tools and nested groups are hidden.
+- A collapsed group, including its heading, is omitted from print. HTML saves the state separately for each list; the arrow rotates smoothly down or right.
 - Details: [Setup sheets](docs/en/setup-card.md#latest-release).
 
 ## Installation

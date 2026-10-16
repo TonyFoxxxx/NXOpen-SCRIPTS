@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.54
+# SCRIPT_VERSION: V2.55
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -45,6 +45,8 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 Таблицы используют единый максимально помещающийся шрифт для полного текста ячеек.
 В столбце «Операции» после самой длинной записи остаётся не менее двух пробелов.
 В списках инструмента D содержит используемые корректоры Cutcom: D5 / D12.
+Стрелка Carrier плавно сворачивает его инструменты; состояние сохраняется в HTML.
+На экране свёрнутый Carrier остаётся заголовком, на печати скрывается целиком.
 Если у номера T во всех операциях проекта два и более D, каждая его операция показывает свой D.
 Фасетная 3D-модель первого листа включается галочкой в стартовом меню.
 По умолчанию галочка снята; после включения доступны коэффициент 0 < k ≤ 1 и лимит треугольников.
@@ -102,7 +104,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.54"
+SCRIPT_VERSION = "V2.55"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -3848,7 +3850,7 @@ def annotate_tool_hierarchy(nx, part, groups, report):
     except Exception as exc:
         audit['errors'].append({'field': 'MachineTool root', 'message': str(exc)})
     root_key = audit.get('root', {}).get('tag')
-    orders, cache = {}, {}
+    orders, name_indices, cache = {}, {}, {}
 
     def sibling_order(parent, child_key):
         if parent is None:
@@ -3856,7 +3858,21 @@ def annotate_tool_hierarchy(nx, part, groups, report):
         key = object_key(parent)
         if key not in orders:
             try:
-                orders[key] = {object_key(obj): i for i, obj in enumerate(parent.GetMembers())}
+                members = list(parent.GetMembers())
+                orders[key] = {object_key(obj): i for i, obj in enumerate(members)}
+                counts, name_indices[key] = {}, {}
+                try:
+                    for obj in members:
+                        if not isinstance(obj, nx.CAM.NCGroup):
+                            continue
+                        name = str(obj.Name)
+                        name_indices[key][object_key(obj)] = counts.get(name, 0)
+                        counts[name] = counts.get(name, 0) + 1
+                except Exception as exc:
+                    # An unreadable sibling name must not discard valid tree
+                    # ordering; its same-name index is simply unavailable.
+                    name_indices[key] = {}
+                    audit['order_errors'].append({'tag': key, 'field': 'name_index', 'message': str(exc)})
             except Exception as exc:
                 orders[key] = {}
                 audit['order_errors'].append({'tag': key, 'message': str(exc)})
@@ -3892,6 +3908,7 @@ def annotate_tool_hierarchy(nx, part, groups, report):
                 path.append(entry)
                 parent = current.GetParent()
                 entry['order'] = sibling_order(parent, key)
+                entry['name_index'] = name_indices.get(object_key(parent), {}).get(key) if parent is not None else None
                 current = parent
             else:
                 raise ValueError('Превышена глубина дерева инструментов.')
@@ -3938,7 +3955,7 @@ def tool_display_rows(tools):
         node['tools'].append(tool)
     rows = []
 
-    def emit(node, depth):
+    def emit(node, depth, carrier_path=()):
         for tool in sorted_tools(node['tools']):
             rows.append(dict(tool, kind='tool', depth=depth))
         def order(child):
@@ -3946,12 +3963,21 @@ def tool_display_rows(tools):
             return (not isinstance(value, (int, float)),
                     value if isinstance(value, (int, float)) else child['first'],
                     child['first'])
-        for child in sorted(node['children'].values(), key=order):
+        siblings = list(node['children'].values())
+        for child in sorted(siblings, key=order):
             group = child['group']
+            name = str(group.get('name', ''))
+            index = group.get('name_index')
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                # Legacy reports can identify a unique name safely; duplicate
+                # names fall back to tags instead of guessing an occupied index.
+                index = 0 if sum(str(c['group'].get('name', '')) == name for c in siblings) == 1 else 'tag:' + str(group['tag'])
+            stable_path = tuple(carrier_path) + ((name, index),)
             rows.append({'kind': 'group', 'tag': str(group['tag']),
-                         'name': str(group.get('name', '')), 'number': None,
-                         'depth': depth, 'group_path': child['path']})
-            emit(child, depth + 1)
+                         'name': name, 'number': None,
+                         'depth': depth, 'group_path': child['path'],
+                         'carrier_key': json.dumps(stable_path, ensure_ascii=False, separators=(',', ':'))})
+            emit(child, depth + 1, stable_path)
     emit(root, 0)
     return rows
 
@@ -3973,7 +3999,7 @@ def tool_cutcom_text(tool):
 def tool_row_html(row, name_first=True):
     group = row.get('kind') == 'group'
     name = str(row['name'])
-    depth = max(0, min(12, int(row.get('depth', 0))))
+    depth = max(0, int(row.get('depth', 0)))
     if group:
         label = name + (' · продолжение' if row.get('continued') else '')
         icon = ('<span class="carrier-icon" aria-hidden="true">'
@@ -3981,9 +4007,13 @@ def tool_row_html(row, name_first=True):
                 '<circle cx="8" cy="4.5" r="1.1"/><circle cx="11.5" cy="8" r="1.1"/>'
                 '<circle cx="8" cy="11.5" r="1.1"/><circle cx="4.5" cy="8" r="1.1"/>'
                 '</svg></span>')
-        text = '<span class="carrier-expanded" aria-hidden="true">▾</span>' + icon + '<span class="tool-group-label">' + escaped(label) + '</span>'
+        button = ('<button type="button" class="carrier-toggle" aria-expanded="true" '
+                  'aria-label="Свернуть инструменты Carrier %s" title="Свернуть инструменты Carrier %s">'
+                  '<span class="carrier-expanded" aria-hidden="true">▾</span></button>') % (escaped(name), escaped(name))
+        text = button + icon + '<span class="tool-group-label">' + escaped(label) + '</span>'
         number = ''
-        attrs = ' class="tool-group-row" data-tool-group="%s"' % escaped(str(row.get('tag', '')))
+        attrs = ' class="tool-group-row" data-tool-group="%s" data-carrier-key="%s"' % (
+            escaped(str(row.get('tag', ''))), escaped(row.get('carrier_key', 'tag:' + str(row.get('tag', '')))))
         if row.get('continued'):
             attrs += ' data-repeat="true"'
     else:
@@ -3992,7 +4022,7 @@ def tool_row_html(row, name_first=True):
         number = number_text(row.get('number'))
         attrs = ' data-tool-tag="%s"' % escaped(str(row.get('tag', '')))
     content = ('<span class="tool-tree-cell"><span class="tool-tree-indent" '
-               'aria-hidden="true" style="width:%.2fem"></span>%s</span>') % (depth * 1.3, clipped_cell(text, label))
+               'aria-hidden="true" style="width:%.2fem"></span>%s</span>') % (min(12, depth) * 1.3, clipped_cell(text, label))
     name_cell = '<td data-tool-column-id="name" class="tool-name-cell" title="%s">%s</td>' % (escaped(label), content)
     number_cell = '<td data-tool-column-id="number">%s</td>' % clipped_cell(
         '' if group else tool_number_html(row.get('number'), row.get('duplicate_number', False)), number)
@@ -6083,7 +6113,12 @@ table[data-fit-family="cover-tools"] .cell-text{height:calc(var(--cover-row,3.8m
 .tool-tree-cell{display:flex;align-items:center;min-width:0;width:100%}
 .tool-tree-cell>.tool-tree-indent{display:block;flex:none}
 .tool-tree-cell>.cell-text{display:block;flex:1;min-width:0;width:0}
-.carrier-expanded{display:inline-block;width:.9em;color:#647b85;font-weight:400}
+.carrier-toggle{display:inline-block;vertical-align:baseline;width:1.1em;height:1.1em;margin:0;padding:0;border:0;background:transparent;color:#647b85;font:inherit;line-height:1;cursor:pointer;touch-action:manipulation;user-select:none}
+.carrier-toggle:focus-visible{outline:2px solid #078778;outline-offset:1px}
+.carrier-expanded{display:inline-block;width:.9em;color:inherit;font-weight:400;transform:rotate(0deg);transition:transform 160ms ease-in-out}
+.carrier-toggle[aria-expanded="false"] .carrier-expanded{transform:rotate(-90deg)}
+@media(prefers-reduced-motion:reduce){.carrier-expanded{transition:none}}
+@media print{.tool-group-row.carrier-collapsed{display:none!important}.carrier-toggle{display:none!important}}
 .carrier-icon{display:inline-block;width:1.1em;margin-right:.35em;vertical-align:middle;color:#647b85}
 table[data-fit-family] .carrier-icon svg{display:block;width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:1.1}
 .catalog-table .tool-name-cell{text-align:left}
@@ -7582,10 +7617,92 @@ const PageScale=(()=>{
  return{apply,refresh,factor,value,restore,state,save,reset,applyWrap,wrapValue,wrapState,toolsValue:()=>toolScale};
 })();
 
+// Collapse belongs to one tools list: this setup's cover or the shared catalog.
+const ToolGroups=(()=>{
+ const collapsed={cover:new Set(),catalog:new Set()},legacyKeys={cover:new Map(),catalog:new Map()};
+ const selector='table[data-fit-family="cover-tools"],table[data-fit-family="project-tools"]';
+ const owner=table=>table.dataset.fitFamily==='project-tools'?'catalog':'cover';
+ function tables(root=scope){
+  const result=[];root.querySelectorAll('template').forEach(t=>result.push(...tables(t.content)));
+  return result.concat([...root.querySelectorAll(selector)]);
+ }
+ function valid(value){return new Set(Array.isArray(value)?value.filter(key=>typeof key==='string'):[]);}
+ for(const table of tables()){
+  try{for(const key of valid(JSON.parse(table.dataset.collapsedCarriers||'[]')))collapsed[owner(table)].add(key);}catch(e){}
+ }
+ function decorate(table){
+  const groups=[...table.querySelectorAll('tbody>tr[data-kind="group"],tbody>tr.tool-group-row')],paths=new Map(),seen=new Map(),stack=[];
+  const label=row=>(row.querySelector('.tool-group-label')?.textContent||row.querySelector('.tool-name-cell')?.title||'').replace(/ · продолжение$/,'');
+  // Legacy HTML has no stable name key. Ambiguous names use their NX tags,
+  // never a guessed ordinal derived from whichever tools happened to be used.
+  for(const row of groups){
+   const depth=Number(row.dataset.depth||0);while(stack.length&&stack.at(-1).depth>=depth)stack.pop();
+   const names=[...(stack.at(-1)?.names||[]),label(row)],path=JSON.stringify(names);paths.set(row,names);
+   if(!seen.has(path))seen.set(path,new Set());seen.get(path).add(row.dataset.toolGroup||'');stack.push({depth,names});
+  }
+  stack.length=0;
+  for(const row of groups){
+   const depth=Number(row.dataset.depth||0);while(stack.length&&stack.at(-1).depth>=depth)stack.pop();
+   const name=label(row),tag=row.dataset.toolGroup||'',cache=legacyKeys[owner(table)];
+   let key=row.dataset.carrierKey||cache.get(tag);
+   const part=[name,seen.get(JSON.stringify(paths.get(row))).size===1?0:'tag:'+tag];
+   const path=[...(stack.at(-1)?.path||[]),part];
+   if(!key)key=JSON.stringify(path);row.dataset.carrierKey=key;cache.set(tag,key);
+   try{const parsed=JSON.parse(key);if(Array.isArray(parsed))path.splice(0,path.length,...parsed);}catch(e){}
+   stack.push({depth,path});
+   let button=row.querySelector('.carrier-toggle');
+   if(!button){
+    button=document.createElement('button');button.type='button';button.className='carrier-toggle';
+    const arrow=row.querySelector('.carrier-expanded')||document.createElement('span');arrow.className='carrier-expanded';arrow.textContent='▾';arrow.setAttribute('aria-hidden','true');
+    if(arrow.parentElement)arrow.replaceWith(button);else row.querySelector('.tool-name-cell .cell-text')?.prepend(button);button.append(arrow);
+   }
+   button.dataset.carrierKey=key;button.dataset.carrierOwner=owner(table);button.type='button';
+  }
+ }
+ function apply(table){
+  decorate(table);const state=collapsed[owner(table)],stack=[];
+  table.dataset.collapsedCarriers=JSON.stringify([...state]);
+  for(const row of table.querySelectorAll('tbody>tr')){
+   const depth=Number(row.dataset.depth||0);while(stack.length&&stack.at(-1).depth>=depth)stack.pop();
+   row.hidden=stack.some(parent=>parent.closed);
+   if(row.dataset.kind==='group'||row.classList.contains('tool-group-row')){
+    const closed=state.has(row.dataset.carrierKey),button=row.querySelector('.carrier-toggle');row.classList.toggle('carrier-collapsed',closed);
+    if(button){const name=row.querySelector('.tool-group-label')?.textContent.replace(/ · продолжение$/,'')||'Carrier';const text=(closed?'Развернуть':'Свернуть')+' инструменты Carrier '+name;button.setAttribute('aria-expanded',String(!closed));button.setAttribute('aria-label',text);button.title=text;}
+    stack.push({depth,closed});
+   }
+  }
+ }
+ function applyAll(){tables().forEach(apply);}
+ function visibleRows(table){apply(table);const printing=window.matchMedia('print').matches;return[...table.tBodies[0].rows].filter(row=>!row.hidden&&(!printing||!row.classList.contains('carrier-collapsed')));}
+ function state(){return{cover:[...collapsed.cover],catalog:[...collapsed.catalog]};}
+ function restore(value){collapsed.cover=valid(value?.cover);collapsed.catalog=valid(value?.catalog);applyAll();}
+ function reset(key){if(key==='cover'||key==='catalog'){collapsed[key].clear();applyAll();}}
+ function save(copy){tables(copy).forEach(table=>{table.dataset.collapsedCarriers=JSON.stringify([...collapsed[owner(table)]]);});}
+ function adoptCatalog(root){collapsed.catalog.clear();for(const table of tables(root).filter(t=>owner(t)==='catalog')){try{for(const key of valid(JSON.parse(table.dataset.collapsedCarriers||'[]')))collapsed.catalog.add(key);}catch(e){}}applyAll();}
+ scope.addEventListener('pointerdown',event=>{if(event.target.closest('.carrier-toggle'))event.stopPropagation();},true);
+ scope.addEventListener('keydown',event=>{if(event.target.closest('.carrier-toggle')&&['Enter',' '].includes(event.key))event.stopPropagation();},true);
+ scope.addEventListener('dblclick',event=>{if(event.target.closest('.carrier-toggle')){event.preventDefault();event.stopPropagation();}},true);
+ scope.addEventListener('click',event=>{
+  const button=event.target.closest('.carrier-toggle');if(!button)return;event.preventDefault();event.stopPropagation();
+  const key=button.dataset.carrierKey,list=button.dataset.carrierOwner;if(!key||!collapsed[list])return;
+  const closed=!collapsed[list].has(key),wasRepeat=button.closest('tr').dataset.repeat==='true';
+  if(closed)collapsed[list].add(key);else collapsed[list].delete(key);
+  applyAll();CardFlow.reflow();markChanged();
+  const buttons=[...scope.querySelectorAll('.carrier-toggle')].filter(b=>b.dataset.carrierKey===key&&b.dataset.carrierOwner===list&&!b.closest('tr').hidden);
+  if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)for(const next of buttons){
+   const arrow=next.querySelector('.carrier-expanded');arrow?.animate?.([{transform:closed?'rotate(0deg)':'rotate(-90deg)'},{transform:closed?'rotate(-90deg)':'rotate(0deg)'}],{duration:160,easing:'ease-in-out'});
+  }
+  (buttons.find(b=>(b.closest('tr').dataset.repeat==='true')===wasRepeat)||buttons[0])?.focus({preventScroll:true});
+ },true);
+ applyAll();return{applyAll,visibleRows,state,restore,reset,save,adoptCatalog};
+})();
+
+
 // Uniform scaling includes row spacing, text, padding and borders.
 const CoverTools=(()=>{
  const mm=96/25.4;
  function fit(){
+  ToolGroups.applyAll();
   const panel=scope.querySelector('.gallery .tool-panel'),table=panel?.querySelector('table[data-fit-family="cover-tools"]');if(!table)return;
   const style=getComputedStyle(panel),number=k=>parseFloat(style[k])||0;
   const width=(number('width')||Number(panel.dataset.cellWidth)*mm)-number('paddingLeft')-number('paddingRight');
@@ -7675,7 +7792,7 @@ function fitDataTables(only=null){
   const holder=document.createElement('div');holder.style.cssText='position:absolute;left:-30000px;top:0;visibility:hidden;width:max-content;pointer-events:none;';holder.style.setProperty('--data-scale',scale);
   const probe=first.cloneNode(false);probe.classList.add('column-probe');probe.classList.remove('wrap-operation-names');probe.style.width='max-content';probe.style.tableLayout='auto';probe.style.fontSize=base+'pt';for(const property of ['transform','transform-origin','position','left','top','zoom'])probe.style.removeProperty(property);
   probe.append(first.tHead.cloneNode(true));const body=document.createElement('tbody');probe.append(body);
-  const sample=family==='operations'?[...local('operation-source').content.querySelectorAll('tbody>tr')]:tables.flatMap(t=>[...t.tBodies[0].rows]);
+  const sample=family==='operations'?[...local('operation-source').content.querySelectorAll('tbody>tr')]:tables.flatMap(t=>[...t.tBodies[0].rows].filter(r=>!r.hidden&&getComputedStyle(r).display!=='none'));
   sample.forEach(row=>{const clone=row.cloneNode(true);restoreCellText(clone);body.append(clone);if(family==='operations'&&row.dataset.kind==='group'&&!row.dataset.repeat)body.append(repeatGroup(clone));});
   if(family==='operations')ColumnOptions.apply(probe);probe.classList.remove('wrap-operation-names');
   probe.querySelectorAll('.column-grip,.operation-grip').forEach(grip=>grip.remove());holder.append(probe);scope.append(holder);
@@ -7730,10 +7847,10 @@ function fitTableText(tables,basePt){
   const logical=parseFloat(getComputedStyle(table).width),render=table.getBoundingClientRect().width/logical;
   if(!(render>0))continue;
   for(const node of table.querySelectorAll('th:not([hidden]) .cell-text,td:not([hidden]) .cell-text')){
-   if(!node.textContent.trim())continue;
+   if(!node.textContent.trim()||node.closest('tr')?.hidden)continue;
    const cell=node.closest('th,td'),name=cell.dataset.columnId==='name'&&cell.tagName==='TD';
    const multiline=table.dataset.fitFamily==='operations'&&(cell.tagName==='TH'||name&&table.classList.contains('wrap-operation-names'));
-   const bounds=node.getBoundingClientRect(),style=getComputedStyle(node);
+   const bounds=node.getBoundingClientRect(),style=getComputedStyle(node);if(!(bounds.width>0&&bounds.height>0))continue;
    // Repeated feeds, speeds and tool names share geometry. Measure each
    // distinct case once per candidate font instead of once per operation.
    const key=JSON.stringify([node.innerHTML,cell.tagName,cell.dataset.columnId,multiline,style.fontWeight,style.fontStyle,
@@ -8627,10 +8744,12 @@ const CardFlow=(()=>{
  }
  function catalogPages(data){
   const saved=catalog.content.firstElementChild;if(!saved){pages.querySelectorAll('.project-tools-page').forEach(p=>p.remove());return;}
-  const rows=[...saved.querySelectorAll('.catalog-table tbody>tr:not([data-repeat])')],probe=measurePage(saved.cloneNode(true),'catalog');applyValues(data);
+  ToolGroups.applyAll();
+  const rows=ToolGroups.visibleRows(saved.querySelector('.catalog-table')),
+        probe=measurePage(saved.cloneNode(true),'catalog');applyValues(data);
   const bottom=probe.dataset.projectToolsBottom?probe.querySelector('.page-content').getBoundingClientRect().top+Number(probe.dataset.projectToolsBottom)*mm:probe.querySelector('.page-content').getBoundingClientRect().bottom-4.5*mm;
   const top=probe.querySelector('.catalog-table thead').getBoundingClientRect().bottom;
-  const row=Math.max(3.8*PageScale.factor('catalog')*mm,...[...probe.querySelectorAll('.catalog-table tbody>tr')].slice(0,10).map(r=>r.getBoundingClientRect().height));
+  const row=Math.max(3.8*PageScale.factor('catalog')*mm,...[...probe.querySelectorAll('.catalog-table tbody>tr')].filter(r=>!r.hidden&&getComputedStyle(r).display!=='none').slice(0,10).map(r=>r.getBoundingClientRect().height));
   const budget=(bottom>top?bottom-top:221*mm)-12;probe.remove();
   // Use two columns before scaling; never create continuation catalog pages.
   const plan=projectToolPlan(rows,budget/row),count=plan.length;
@@ -8821,7 +8940,7 @@ const CardFlow=(()=>{
  function previewCatalog(){const page=pages.querySelector('.project-tools-page');if(page&&ProjectModel.layout(page))ProjectTools.preview(page);}
  function refreshCatalog(){if(busy||!catalog.content.firstElementChild)return;busy=true;try{const data=values();catalogPages(data);applyValues(data);PageScale.refresh();fitDataTables();fitFields();renumber();}finally{busy=false;}}
  return{reflow,refreshCatalog,previewCatalog,finish,move,availableHeight,layoutMetrics,heightState,previewHeight,finishHeight,previewLayout:m=>reflow(fitted(committed,m),m),galleryValues:()=>drag?.moved?drag.gallery:GalleryLayout.values(),hasCatalog:()=>!!catalog.content.firstElementChild,
-  catalogContent:()=>catalog.content.cloneNode(true),setCatalog:content=>{catalog.content.replaceChildren(...(content?[content]:[]));pages.querySelectorAll('.project-tools-page').forEach(page=>page.remove());},
+  catalogContent:()=>catalog.content.cloneNode(true),setCatalog:content=>{catalog.content.replaceChildren(...(content?[content]:[]));pages.querySelectorAll('.project-tools-page').forEach(page=>page.remove());ToolGroups.adoptCatalog(catalog.content);},
   values:()=>opIds.filter(id=>committed.has(id)),mode:()=>placement,limit:()=>limitEnabled,restore:(value,mode,limit)=>{committed=validIds(value);placement=mode==='auto'?'auto':'manual';if(typeof limit==='boolean')limitEnabled=limit;syncLimit();},
   cleanClone:clone=>{clone.querySelectorAll('.operation-selected').forEach(n=>{n.classList.remove('operation-selected');n.setAttribute('aria-selected','false');});clone.querySelectorAll('.drop-active,.operations-dragging,.operation-drop-active').forEach(n=>n.classList.remove('drop-active','operations-dragging','operation-drop-active'));clone.querySelectorAll('.operation-drop-page,.operation-drag-ghost').forEach(n=>n.remove());clone.querySelector('[data-editor-id="operations-status"]').textContent='';clone.querySelector('[data-editor-id="operations-to-cover"]').disabled=true;clone.querySelector('[data-editor-id="operations-to-next"]').disabled=true;},
   masterIds:()=>[...opIds],selection:()=>[...selection],fits};
@@ -8835,7 +8954,7 @@ setMcsSize(local('mcs-size').value);
 scope.addEventListener('click',event=>{
  const button=event.target.closest('[data-page-reset]');if(!button)return;
  const page=button.closest('.page'),key=page.dataset.pageKey,rect=page.getBoundingClientRect();
- cancel();captureInitial();const saved=initialView.state;PageScale.reset(key,saved);NoteLayout.reset(key,saved);
+ cancel();captureInitial();const saved=initialView.state;PageScale.reset(key,saved);NoteLayout.reset(key,saved);ToolGroups.reset(key);
  if(key==='catalog'){ProjectModel.cancel();ProjectModel.reset(false);}
  else if(key==='cover'){
   GalleryLayout.restore(saved.galleryLayout,true);
@@ -8860,9 +8979,9 @@ scope.addEventListener('change',event=>{if(event.target.matches('input[data-fiel
 scope.addEventListener('paste',event=>{const field=event.target.closest('[data-field][contenteditable]');if(field){event.preventDefault();document.execCommand('insertText',false,event.clipboardData.getData('text/plain'));}});
 scope.addEventListener('click',event=>{if(event.target.closest('.photo-view-tools,.cell-remove,.cell-move,.gallery-grip,.gallery-height-grip'))return;const photo=event.target.closest('.photo[data-paired]');if(photo)togglePhoto(photo);});
 
-function state(){const variants={};scope.querySelectorAll('.photo[data-image]:not([data-cell-preview])').forEach(photo=>{variants[photo.dataset.image]=photo.dataset.variant;});return{fields:values(),variants,axesSize:Number(local('mcs-size').value),outlineColor:local('mcs-outline-color').value,outlineWidth:Number(local('mcs-outline-width').value),columnWidths,photoZooms:photoZoomValues(),photoPans:photoPanValues(),galleryLayout:CardFlow.galleryValues(),pageScales:PageScale.state(),pageWraps:PageScale.wrapState(),coverToolScale:PageScale.toolsValue(),coverOperations:CardFlow.values(),coverPlacement:CardFlow.mode(),operationLimit:CardFlow.limit(),noteHeights:NoteLayout.state()};}
+function state(){const variants={};scope.querySelectorAll('.photo[data-image]:not([data-cell-preview])').forEach(photo=>{variants[photo.dataset.image]=photo.dataset.variant;});return{fields:values(),variants,axesSize:Number(local('mcs-size').value),outlineColor:local('mcs-outline-color').value,outlineWidth:Number(local('mcs-outline-width').value),columnWidths,photoZooms:photoZoomValues(),photoPans:photoPanValues(),galleryLayout:CardFlow.galleryValues(),pageScales:PageScale.state(),pageWraps:PageScale.wrapState(),coverToolScale:PageScale.toolsValue(),coverOperations:CardFlow.values(),coverPlacement:CardFlow.mode(),operationLimit:CardFlow.limit(),noteHeights:NoteLayout.state(),toolGroups:ToolGroups.state()};}
 function restoreState(draft,deferred=false){
- if(!draft?.fields)return;applyValues(draft.fields);if(draft.noteHeights)NoteLayout.restore(draft.noteHeights);
+ if(!draft?.fields)return;applyValues(draft.fields);if(draft.noteHeights)NoteLayout.restore(draft.noteHeights);if(draft.toolGroups)ToolGroups.restore(draft.toolGroups);
  if(draft.galleryLayout)GalleryLayout.restore(draft.galleryLayout,deferred);PageScale.restore(draft.pageScales,draft.rowScale,draft.coverToolScale,draft.pageWraps);if(draft.coverOperations)CardFlow.restore(draft.coverOperations,draft.coverPlacement,draft.operationLimit);
  if(draft.photoZooms)applyPhotoZoomValues(draft.photoZooms);if(draft.photoPans)applyPhotoPanValues(draft.photoPans);if(draft.columnWidths)columnWidths=readColumnWidths(draft.columnWidths);
  if(draft.axesSize!=null)setMcsSize(draft.axesSize);if(draft.outlineColor!=null||draft.outlineWidth!=null)setMcsOutline(draft.outlineColor,draft.outlineWidth??100);
@@ -8876,7 +8995,7 @@ function serialize(){
  GalleryLayout.cleanClone(copy);PhotoPan.cleanClone(copy);CardFlow.cleanClone(copy);DatumEditor.cleanClone(copy);PercentInput.cleanClone(copy);
  if(initialView)writeInitial(copy.querySelector('[data-editor-id="initial-view"]'),GalleryLayout.deletedOriginalCells());
  const get=id=>copy.querySelector('[data-editor-id="'+id+'"]');
- PageScale.save(copy);NoteLayout.save(copy);get('column-widths').textContent=JSON.stringify(columnWidths);get('column-size-status').textContent='';copy.classList.remove('columns-dragging');
+ PageScale.save(copy);NoteLayout.save(copy);ToolGroups.save(copy);get('column-widths').textContent=JSON.stringify(columnWidths);get('column-size-status').textContent='';copy.classList.remove('columns-dragging');
  copy.querySelectorAll('.column-grip').forEach(g=>g.classList.remove('dragging'));
  get('mcs-size').setAttribute('value',local('mcs-size').value);get('mcs-outline-width').setAttribute('value',local('mcs-outline-width').value);
  [...get('mcs-outline-color').options].forEach(o=>o.toggleAttribute('selected',o.value===local('mcs-outline-color').value));
@@ -10080,6 +10199,31 @@ def retain_setup_annotations(markup, saved_markup):
             opening = markup[current_scope['start']:current_scope['open_end']]
             opening = opening[:-1] + ' data-note-heights="%s">' % escaped(json.dumps(heights))
             edits.append((current_scope['start'], current_scope['open_end'], opening))
+    for family in ('cover-tools', 'project-tools'):
+        saved_tools = [node for node in saved.nodes
+                       if node['attrs'].get('data-fit-family') == family]
+        current_tools = [node for node in current.nodes
+                         if node['attrs'].get('data-fit-family') == family]
+        if family == 'cover-tools':
+            saved_tools = [node for node in saved_tools if not saved.in_template(node)]
+            current_tools = [node for node in current_tools if not current.in_template(node)]
+        else:
+            # The complete shared source is authoritative even when the live
+            # catalog is split into columns or some Carrier rows are hidden.
+            saved_tools.sort(key=lambda node: not saved.in_template(node))
+        if not saved_tools or not current_tools:
+            continue
+        try:
+            collapsed = json.loads(saved_tools[0]['attrs'].get('data-collapsed-carriers', '[]'))
+            if not isinstance(collapsed, list) or not all(isinstance(key, str) for key in collapsed):
+                collapsed = []
+        except (ValueError, TypeError):
+            collapsed = []
+        if collapsed:
+            for node in current_tools:
+                opening = markup[node['start']:node['open_end']]
+                opening = opening[:-1] + ' data-collapsed-carriers="%s">' % escaped(json.dumps(collapsed, ensure_ascii=False))
+                edits.append((node['start'], node['open_end'], opening))
     for node in current.nodes:
         name = field_name(node)
         if name not in values:

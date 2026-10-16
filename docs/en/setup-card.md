@@ -8,15 +8,13 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.54 · 2026-10-15**
+**V2.55 · 2026-10-16**
 
-- Every tool list now has a D column for the Cutcom registers in use. One tool still occupies one row; distinct registers appear in ascending order in one cell, for example `D5 / D12`.
-- The new operation D column is immediately after T. If a tool number uses two or more distinct D values across the CAM project, every operation using that number shows its own D, including D = T and rows without a tool change. If there is only one D, operation cells remain blank even when D ≠ T.
-- A partial re-export also refreshes D in retained setups and the project catalog while preserving the rest of unselected setups' formatting. An operation must match the current NX data unambiguously.
-- Includes V2.53: the table beside the 3D model moves and scales during rotation and panning. Precise shared-font fitting and final layout run after mouse release.
-- Retains V2.52 Zmin fixes for spot drilling, through and stepped holes including drill-point length, as well as rotary calculation along the actual tool axis.
+- Click the arrow to collapse or expand a Carrier group in a tool list. A collapsed group's heading stays on screen while its tools and nested groups are hidden.
+- Printing omits the entire collapsed group, including its heading. HTML saves the state and restores it when reopened.
+- Collapsing is independent in each setup's tool list and the shared project catalog. A short, smooth arrow rotation points down when expanded and right when collapsed.
 
-Regenerate the HTML sheet with the updated script to get the new columns and improved viewer. See the [changelog](../../CHANGELOG.en.md).
+Regenerate the HTML sheet with the updated script to enable group controls. See the [changelog](../../CHANGELOG.en.md).
 
 ## Building the sheet in NX
 
@@ -87,6 +85,8 @@ If even one Cycle point has no resolved depth, Zmin stays blank for the whole op
 - Enter X/Y/Z locating information manually or choose supplied wording.
 - Notes grow without shrinking the font. Drag the lower boundary to set a height, which is saved.
 - Jump to a setup using the top-bar list.
+- Click the arrow before a Carrier name to collapse it: its heading stays in the list while all tools and nested groups are hidden. Click again to expand. The arrow rotates smoothly down when expanded and right when collapsed.
+- Collapsing is independent in each setup's tool list and the shared project catalog, and is saved with the HTML. Printing omits the entire collapsed group, including the heading that remains on screen.
 - Hide operation columns, wrap long names, scale tables and adjust column widths; return to **«Автоширина» (Auto width)** when needed.
 - Auto width shows complete operation/tool names and other values without ellipses, allowing two spaces after the longest operation name. Each table uses a shared maximum fitting font; both columns of the project tool catalog use the same size. Name wrapping is controlled by the sheet checkbox. If necessary, the whole table fits to the page without internal horizontal scrolling. Manual widths are saved.
 - Move selected operations onto the setup's first sheet or back using buttons or drag-and-drop. The optional limit is 25 operations on the first sheet; available space also limits placement.
