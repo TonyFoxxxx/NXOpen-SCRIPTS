@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-16 — Setup sheets V2.58
+
+- Removed automatic font fitting to operation and tool table contents, including the two-space reserve. Existing sliders set the scale manually.
+- Only the operation name uses a single-line ellipsis when name wrapping is off. Enabling the checkbox wraps only that name; other operation and tool columns stay on one line without wrapping or ellipses.
+- The table beside the faceted model continues moving in real time, without automatic font fitting after mouse release.
+- Retained Carrier and Tools groups, collapsing and printing, menu memory, D columns and Zmin calculation. Regenerate HTML to apply the new text rules.
+- Updated source, updater catalog and documentation in Russian and English.
+
 ## 2026-10-16 — Setup sheets V2.57
 
 - First-menu settings are saved separately for each Windows user in `%APPDATA%\NX_Scripts\NX_Setup_Prototype.ini`: preparation checkboxes, Description format, faceted model, coefficient and triangle limit.

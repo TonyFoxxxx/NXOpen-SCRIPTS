@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.57
+# SCRIPT_VERSION: V2.58
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -46,8 +46,9 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 Остальные установы и сохранённые ручные правки переносятся без пересоздания.
 «Инструменты проекта» — всегда один первый лист, при необходимости в две колонки.
 Если двух колонок недостаточно, таблица равномерно уменьшается до размеров листа.
-Таблицы используют единый максимально помещающийся шрифт для полного текста ячеек.
-В столбце «Операции» после самой длинной записи остаётся не менее двух пробелов.
+Размер текста таблиц задаётся ручными ползунками и не подбирается по содержимому.
+Названия операций без переноса показываются одной строкой с многоточием; галочка включает перенос.
+Все остальные ячейки списков — одна строка без многоточия, с обрезкой по границе.
 В списках инструмента D содержит используемые корректоры Cutcom: D5 / D12.
 Стрелка Carrier плавно сворачивает его инструменты; состояние сохраняется в HTML.
 Корневые инструменты вне Carrier сворачиваются отдельно в группе «Инструмент».
@@ -64,7 +65,7 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 Угловой допуск ограничен 180°; предел всей модели задаётся в меню, по умолчанию 500 000.
 Модель перемещается по первому листу; таблицы адаптируются к её габаритам.
 При перетаскивании таблицы следуют за моделью без повторного подбора шрифта.
-Точная компоновка и подгонка текста выполняются после отпускания мыши.
+После отпускания мыши обновляется компоновка без подбора размера текста.
 Масштаб 1–10000%; на печати границей остаётся формат A4.
 Порядок и сквозная нумерация сохраняются при сохранении и повторном экспорте.
 Результат — один автономный HTML для редактирования и печати.
@@ -110,7 +111,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.57"
+SCRIPT_VERSION = "V2.58"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -6357,7 +6358,7 @@ table[data-fit-family] td,table[data-fit-family] .numeric{font-size:inherit}
 table[data-fit-family] th{font-size:.85714286em;line-height:1.15}
 table[data-fit-family] .tree-name,table[data-fit-family] .name-cell{white-space:nowrap;overflow-wrap:normal;word-break:normal}
 
-/* Full cell contents are fitted with one font size for the whole table. */
+/* Text size follows the manual slider; overflow does not change the font. */
 .rows-area{min-width:0;width:100%}
 table[data-fit-family] th,table[data-fit-family] td{max-width:0}
 table[data-fit-family] td{overflow:hidden}
@@ -6627,13 +6628,13 @@ table[data-fit-family] tbody>tr.operation-selected>td{background:#dcf2ff}
 #operation-options{position:relative;font:13px Arial}#operation-options summary{cursor:pointer;padding:7px;border:1px solid #a9c2c8;border-radius:4px}
 .operation-options-panel{position:absolute;top:100%;left:0;z-index:90;width:320px;background:white;border:1px solid #a9c2c8;border-radius:6px;box-shadow:0 5px 18px #173c4930;padding:14px}
 .operation-options-panel strong{display:block;margin-bottom:10px;line-height:1.4}.operation-options-panel label{display:flex;align-items:center;gap:8px;padding:5px 0}.operation-options-panel .wrap-option{border-top:1px solid #d4dfe2;margin-top:7px;padding-top:12px;line-height:1.4}
-.ops th .cell-text{height:auto!important;min-height:calc(3.4mm * var(--data-scale) - 1px);line-height:1.12!important;white-space:normal!important;overflow:visible;text-overflow:clip}
-.ops th{white-space:normal!important;text-align:center}.ops th[data-column-id="name"]{text-align:left}
+.ops th .cell-text{white-space:nowrap;overflow:hidden;text-overflow:clip}
+.ops th{text-align:center}.ops th[data-column-id="name"]{text-align:left}
 .ops tbody td.numeric,.ops tbody td.numeric .cell-text{text-align:center}
 .ops.wrap-operation-names tbody td[data-column-id="name"] .cell-text{height:auto;min-height:calc(3.4mm * var(--data-scale) - 1px);white-space:normal;overflow-wrap:anywhere;word-break:normal;line-height:1.2;text-overflow:clip}
 .ops.wrap-operation-names tbody td[data-column-id="name"] .tree-cell{align-items:center}
 .ops tbody td[data-column-id="name"] .tree-cell{width:100%}
-.ops tbody td[data-column-id="name"] .cell-text{padding-right:var(--operation-name-gap,0px)}
+.ops:not(.wrap-operation-names) tbody td[data-column-id="name"] .cell-text{text-overflow:ellipsis}
 .ops .operation-grip{position:absolute;left:.3mm;top:50%;transform:translateY(-50%);float:none}
 .ops tbody td[data-column-id="name"]{padding-left:calc(3.8mm * var(--data-scale))!important}
 .ops col[hidden],.ops td[hidden],.ops th[hidden]{display:none!important}
@@ -6859,7 +6860,7 @@ function migrateOperationTables(root){
   [...table.rows].forEach(row=>[...row.cells].forEach((cell,i)=>cell.dataset.columnId=OP_COLUMNS[i][0]));
   [...table.tHead.rows[0].cells].forEach((cell,i)=>{
    const [id,label]=OP_COLUMNS[i],text=cell.querySelector('.cell-text');cell.title=label;cell.setAttribute('aria-label',label);
-   if(id!=='change'){text.replaceChildren();label.split(' ').forEach((word,j)=>{if(j)text.append(document.createElement('br'));text.append(document.createTextNode(word));});}text.title=label;
+   if(id!=='change')text.textContent=label;text.title=label;
   });
   for(const row of table.tBodies[0].rows){
    for(const key of ['stock','floor_stock','feed','speed']){
@@ -6900,6 +6901,20 @@ function migrateToolTables(root){
  root.querySelectorAll('template').forEach(t=>migrateToolTables(t.content));
 }
 migrateToolTables(document);
+function clearLegacyTableText(root){
+ const tables=[...(root.matches?.('table[data-fit-family]')?[root]:[]),...root.querySelectorAll('table[data-fit-family]')];
+ tables.forEach(table=>{
+  if(table.dataset.textLayout==='manual')return;
+  restoreCellText(table);
+  for(const node of [table,...table.querySelectorAll('[style],[data-fitted-font]')]){
+   node.style.removeProperty('font-size');node.style.removeProperty('--operation-name-gap');delete node.dataset.fittedFont;
+  }
+  table.querySelectorAll('.cell-text br').forEach(br=>br.replaceWith(document.createTextNode(' ')));
+  table.dataset.textLayout='manual';
+ });
+ root.querySelectorAll('template').forEach(template=>clearLegacyTableText(template.content));
+}
+clearLegacyTableText(document);
 function refreshCutcomTables(root){
  const snapshot=DOC.cutcom;if(!snapshot||typeof snapshot!=='object')return;
  const integer=value=>typeof value==='number'&&Number.isFinite(value)&&Number.isInteger(value)?value:null;
@@ -7229,8 +7244,8 @@ const ProjectModel=(()=>{
    frame=-1;
    try{
     const refresh=needsLayout,focused=canvas&&document.activeElement===canvas;needsLayout=false;
-    // Keep the live canvas and tables throughout the gesture. Exact text
-    // fitting and row splitting run once the pointer is released.
+    // Keep the live canvas and tables throughout the gesture. Replan
+    // tool rows once the pointer is released; text size stays manual.
     if(drag)editors.forEach(e=>e.flow.previewCatalog());
     else if(refresh)editors.forEach(e=>e.flow.refreshCatalog());
     mount();if(focused&&canvas)canvas.focus({preventScroll:true});draw();
@@ -7801,7 +7816,7 @@ function readColumnWidths(data){
 }
 let columnWidths=Object.create(null),columnDrag=null;
 try{columnWidths=readColumnWidths(JSON.parse(local('column-widths').textContent));}catch(e){}
-const columnMetrics=new Map(),toolFitCache=new Map();
+const columnMetrics=new Map();
 function columnLabel(table,index){return table.tHead.rows[0].cells[index].textContent.trim()||(index===2&&table.dataset.fitFamily==='operations'?'Смена инструмента':'Столбец '+(index+1));}
 function ensureColumnHandles(table){
  const cells=[...table.tHead.rows[0].cells];
@@ -7837,8 +7852,8 @@ function applyColumnLayout(family,metrics,widths){
  const apply=table=>{
   const viewport=tableViewport(table);if(!viewport)return;
   table.style.width=total+'px';table.style.setProperty('--print-source-width',total+'px');
-  // At extreme font scales or manual widths fit the entire table, keeping
-  // complete values and the same layout on screen and on paper.
+  // Preserve the established layout for manually oversized columns.
+  // Automatic widths stay inside the viewport without changing text size.
   if(family==='operations'){table.style.zoom=String(fit);table.style.setProperty('--print-table-scale',fit);}
   table.style.fontSize=font+'pt';table.dataset.widthMode=columnWidths[family]?'manual':'auto';
   [...table.querySelectorAll('colgroup>col')].forEach((col,i)=>{col.style.width=(total?visible[i]/total*100:0)+'%';});
@@ -7857,9 +7872,6 @@ function applyColumnLayout(family,metrics,widths){
   });
  };
  metrics.tables.forEach(apply);
- const cachedFont=metrics.cachedFont;delete metrics.cachedFont;
- if(Number.isFinite(cachedFont))metrics.tables.forEach(table=>{table.style.fontSize=cachedFont+'px';table.dataset.fittedFont=String(cachedFont);});
- else fitTableText(metrics.tables,metrics.base);
  if(family==='cover-tools'||family==='project-tools')metrics.tables.forEach(table=>{
   const plane=table.parentElement;plane.style.height=(table.offsetHeight*metrics.layoutScale+1)+'px';
  });
@@ -7927,50 +7939,22 @@ scope.addEventListener('keydown',event=>{
 });
 local('columns-auto').addEventListener('click',()=>resetColumnWidths());
 
-function autoColumnWidths(natural,floor,flex,target,wrapped=false){
+function autoColumnWidths(natural,floor,flex,target){
+ // Size columns at the chosen font. Text overflow clips instead of shrinking
+ // the table's font, including long tool names and correction-register lists.
  const widths=natural.map((n,i)=>Math.max(n,floor[i]));
- // Reserve complete text in every column. Only explicitly wrapped operation
- // names may use the remaining width instead of their full one-line width.
- if(wrapped)flex.forEach(i=>widths[i]=floor[i]);
- const slack=Math.max(0,target-widths.reduce((a,b)=>a+b,0)),recipients=flex.length?flex:widths.map((_,i)=>i).filter(i=>floor[i]>0||natural[i]>0);
- const weight=recipients.reduce((s,i)=>s+Math.max(natural[i],floor[i]),0);
- if(weight>0)recipients.forEach(i=>{widths[i]+=slack*Math.max(natural[i],floor[i])/weight;});
+ flex.forEach(i=>widths[i]=floor[i]);
+ const minimum=floor.reduce((sum,n)=>sum+n,0);
+ if(minimum>=target)return floor.map(n=>n*target/Math.max(1,minimum));
+ const total=widths.reduce((sum,n)=>sum+n,0);
+ if(total>target){
+  const fraction=(target-minimum)/Math.max(.001,total-minimum);
+  return widths.map((n,i)=>floor[i]+(n-floor[i])*fraction);
+ }
+ const recipients=flex.length?flex:widths.map((_,i)=>i).filter(i=>floor[i]>0||natural[i]>0);
+ const weight=recipients.reduce((sum,i)=>sum+Math.max(natural[i],floor[i]),0);
+ if(weight>0)recipients.forEach(i=>widths[i]+=(target-total)*Math.max(natural[i],floor[i])/weight);
  return widths;
-}
-
-function fitAutoColumns(family,metrics,flex,hiddenWidths,measureNatural){
- const wrapped=family==='operations'&&metrics.tables[0].classList.contains('wrap-operation-names');
- const required=measureNatural,total=values=>values.reduce((sum,n,i)=>sum+(wrapped&&flex.includes(i)?metrics.floor[i]:Math.max(n,metrics.floor[i])),0);
- // Choose column widths and text size together. Otherwise a long tool name
- // would reserve its old large width while squeezing all operation names.
- let low=0,high=metrics.base*2,natural=required(high);
- if(total(natural)<=metrics.target)low=high;
- else for(let pass=0;pass<13;pass++){
-  const mid=(low+high)/2;if(total(required(mid))<=metrics.target)low=mid;else high=mid;
- }
- natural=required(Math.max(.01,low));
- const range=document.createRange();
- for(let pass=0;pass<4;pass++){
-  const widths=autoColumnWidths(natural,metrics.floor,flex,metrics.target,wrapped).map((n,i)=>metrics.shown[i]?n:Math.max(1,hiddenWidths[i]));
-  applyColumnLayout(family,metrics,widths);
-  if(pass===3)break;
-  // At very small screen zooms the browser still paints a border at least
-  // one pixel wide. Measure the final cells as well as the unscaled probe.
-  const extra=natural.map(()=>0);
-  for(const table of metrics.tables){
-   if(table.hidden)continue;
-   const scale=screenPaperScale(table)*metrics.layoutScale;
-   for(const node of table.querySelectorAll('th .cell-text,td .cell-text')){
-    const cell=node.closest('th,td'),i=cell.cellIndex;if(!metrics.shown[i]||flex.includes(i)||!node.textContent)continue;
-    const bounds=node.getBoundingClientRect();if(!(bounds.width>0))continue;
-    range.selectNodeContents(node);
-    const overflow=Math.max(node.scrollWidth-node.clientWidth,(range.getBoundingClientRect().width-bounds.width)/scale);
-    if(overflow>.01)extra[i]=Math.max(extra[i],overflow+1/scale);
-   }
-  }
-  if(!extra.some(n=>n>0))break;
-  extra.forEach((n,i)=>natural[i]+=n);
- }
 }
 
 const PageScale=(()=>{
@@ -8245,7 +8229,7 @@ function fitDataTables(only=null){
  const families=new Map();
  const selected=only||[...scope.querySelectorAll('table[data-fit-family]')];
  selected.forEach(table=>{
-  restoreCellText(table);const family=table.dataset.fitFamily;if(family==='operations'){ColumnOptions.apply(table);PageScale.applyWrap(table);}
+  clearLegacyTableText(table);restoreCellText(table);const family=table.dataset.fitFamily;if(family==='operations'){ColumnOptions.apply(table);PageScale.applyWrap(table);}
   const scale=PageScale.factor(table),key=family+':'+scale+':'+table.classList.contains('wrap-operation-names');
   if(!families.has(key))families.set(key,[]);families.get(key).push(table);
  });
@@ -8258,15 +8242,6 @@ function fitDataTables(only=null){
   const base=Number(first.dataset.basePt)*scale,allFloor=first.dataset.minMm.split(',').map(x=>Number(x)*96/25.4*scale);
   const shown=allFloor.map((_,i)=>family!=='operations'||ColumnOptions.shown(OP_COLUMNS[i][0]));
   const floor=allFloor.map((x,i)=>shown[i]?x:0),flex=(family==='operations'?[0]:first.dataset.flexCols.split(',').map(Number)).filter(i=>shown[i]);
-  // Reopening a list reuses its previously measured exact fit. The key covers
-  // visible markup, geometry, manual widths, print CSS and screen rounding.
-  const fitKey=family==='operations'?null:JSON.stringify([family,target,base,renderScale,allFloor,flex,screenPaperScale(first),window.matchMedia('print').matches,columnWidths[family]||null,
-   tables.map(table=>[table.className,[...table.tHead.querySelectorAll('.cell-text')].map(c=>c.innerHTML),[...table.tBodies[0].rows].filter(row=>!row.hidden&&getComputedStyle(row).display!=='none').map(row=>[row.className,row.getAttribute('style'),row.dataset.depth,row.innerHTML])])]);
-  const cached=fitKey&&toolFitCache.get(fitKey);
-  if(cached){
-   const metrics={target,base,natural:cached.natural.slice(),floor,renderScale,tables,shown,cachedFont:cached.font};tables.forEach(t=>columnMetrics.set(t,metrics));
-   applyColumnLayout(family,metrics,cached.widths);continue;
-  }
   const holder=document.createElement('div');holder.style.cssText='position:absolute;left:-30000px;top:0;visibility:hidden;width:max-content;pointer-events:none;';holder.style.setProperty('--data-scale',scale);
   const probe=first.cloneNode(false);probe.classList.add('column-probe');probe.classList.remove('wrap-operation-names');probe.style.width='max-content';probe.style.tableLayout='auto';probe.style.fontSize=base+'pt';for(const property of ['transform','transform-origin','position','left','top','zoom'])probe.style.removeProperty(property);
   probe.append(first.tHead.cloneNode(true));const body=document.createElement('tbody');probe.append(body);
@@ -8275,108 +8250,25 @@ function fitDataTables(only=null){
   if(family==='operations')ColumnOptions.apply(probe);probe.classList.remove('wrap-operation-names');
   probe.querySelectorAll('.column-grip,.operation-grip').forEach(grip=>grip.remove());holder.append(probe);scope.append(holder);
   const headerCells=[...probe.tHead.rows[0].cells];
-  if(family==='operations'&&textFitContext)headerCells.forEach((cell,i)=>{
-   if(!shown[i]||OP_COLUMNS[i][0]==='change')return;
-   const style=getComputedStyle(cell);textFitContext.font=[style.fontStyle,style.fontWeight,style.fontSize,style.fontFamily].join(' ');
-   const word=Math.max(...OP_COLUMNS[i][1].split(' ').map(w=>textFitContext.measureText(w).width));
-   floor[i]=Math.max(floor[i],word+(parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0)+3);
-  });
-  if(family==='operations'&&shown[0])for(const row of body.rows){
-   // The remaining column still needs room after the tree indentation and
-   // drag handle, including when long operation names wrap onto more lines.
-   const cell=row.cells[0],style=getComputedStyle(cell),indent=cell.querySelector('.tree-indent');
-   floor[0]=Math.max(floor[0],(indent?.getBoundingClientRect().width||0)+
-    (parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0)+4*(parseFloat(style.fontSize)||base*96/72)+3);
+  // Tree indentation and controls need a visible label area at the manual
+  // font size. This is a column minimum, independent of the label's length.
+  for(const row of body.rows)for(const i of flex){
+   const cell=row.cells[i],style=getComputedStyle(cell),indent=cell.querySelector('.tree-indent,.tool-tree-indent');
+   const controls=[...cell.querySelectorAll('.carrier-toggle,.carrier-icon,.folder-icon')].reduce((sum,node)=>sum+node.getBoundingClientRect().width,0);
+   floor[i]=Math.max(floor[i],(indent?.getBoundingClientRect().width||0)+controls+
+    (parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0)+3*(parseFloat(style.fontSize)||base*96/72)+3);
   }
-  const measureNatural=font=>{
-   probe.style.fontSize=font+'pt';setOperationTextGap(probe,font*96/72);
-   return headerCells.map((cell,i)=>shown[i]?cell.getBoundingClientRect().width+2:0);
-  };
-  const natural=measureNatural(base);
+  const natural=headerCells.map((cell,i)=>shown[i]?cell.getBoundingClientRect().width+2:0);
   try{
    if(natural.some((x,i)=>shown[i]&&!(x>.35)))continue;
    const metrics={target,base,natural,floor,renderScale,tables,shown};tables.forEach(t=>columnMetrics.set(t,metrics));
    const manual=columnWidths[family]&&safeManualWidths(metrics,columnWidths[family]);
    if(manual)applyColumnLayout(family,metrics,manual);
-   else fitAutoColumns(family,metrics,flex,allFloor,measureNatural);
-   const font=Number(first.dataset.fittedFont);
-   if(fitKey&&metrics.widths&&Number.isFinite(font)&&font>0){
-    toolFitCache.set(fitKey,{natural:natural.slice(),widths:metrics.widths.slice(),font});
-    while(toolFitCache.size>24)toolFitCache.delete(toolFitCache.keys().next().value);
-   }
+   else applyColumnLayout(family,metrics,autoColumnWidths(natural,floor,flex,target).map((n,i)=>shown[i]?n:Math.max(1,allFloor[i])));
   }finally{holder.remove();}
  }
 }
 
-// Measure rendered text, including mixed weights and tree icons. A single
-// font fits the complete logical table (both columns of the project catalog).
-const textFitCanvas=document.createElement('canvas'),textFitContext=textFitCanvas.getContext('2d');
-function setOperationTextGap(table,px){
- if(table.dataset.fitFamily!=='operations')return;
- let gap=px*.6;
- if(textFitContext){
-  const family=getComputedStyle(table).fontFamily;
-  textFitContext.font=px+'px '+family;gap=textFitContext.measureText('  ').width;
-  textFitContext.font='bold '+px+'px '+family;gap=Math.max(gap,textFitContext.measureText('  ').width);
- }
- table.style.setProperty('--operation-name-gap',(gap+.25)+'px');
-}
-function fitTableText(tables,basePt){
- const visible=tables.filter(t=>!t.hidden&&t.getBoundingClientRect().width>0);
- if(!visible.length)return;
- const range=document.createRange(),items=[],seen=new Set();
- let ceiling=Infinity;
- for(const table of visible){
-  const logical=parseFloat(getComputedStyle(table).width),render=table.getBoundingClientRect().width/logical;
-  if(!(render>0))continue;
-  for(const node of table.querySelectorAll('th:not([hidden]) .cell-text,td:not([hidden]) .cell-text')){
-   if(!node.textContent.trim()||node.closest('tr')?.hidden)continue;
-   const cell=node.closest('th,td'),name=cell.dataset.columnId==='name'&&cell.tagName==='TD';
-   const multiline=table.dataset.fitFamily==='operations'&&(cell.tagName==='TH'||name&&table.classList.contains('wrap-operation-names'));
-   const bounds=node.getBoundingClientRect(),style=getComputedStyle(node);if(!(bounds.width>0&&bounds.height>0))continue;
-   // Repeated feeds, speeds and tool names share geometry. Measure each
-   // distinct case once per candidate font instead of once per operation.
-   const key=JSON.stringify([node.innerHTML,cell.tagName,cell.dataset.columnId,multiline,style.fontWeight,style.fontStyle,
-    bounds.width/render,bounds.height/render,render,node.previousElementSibling?.style.width||'']);
-   if(seen.has(key))continue;seen.add(key);
-   const runs=[],walker=document.createTreeWalker(node,NodeFilter.SHOW_TEXT);let run;
-   while(run=walker.nextNode())if(run.textContent.trim())runs.push(run);
-   items.push({node,table,multiline,render,runs});
-   // Row controls define the available line height. Text may grow up to that
-   // height, but it must not silently enlarge rows or change tool-list scale.
-   if(!multiline)ceiling=Math.min(ceiling,bounds.height/render*2);
-  }
- }
- if(!items.length)return;
- if(!Number.isFinite(ceiling))ceiling=basePt*96/72;
- function setFont(px){
-  for(const table of visible){
-   table.style.fontSize=px+'px';
-   setOperationTextGap(table,px);
-  }
- }
- function fits(px){
-  setFont(px);
-  for(const {node,multiline,render,runs} of items){
-   const box=node.getBoundingClientRect(),style=getComputedStyle(node);
-   const width=box.width-((parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0))*render;
-   range.selectNodeContents(node);const text=range.getBoundingClientRect();
-   if(text.width>width-.75*render)return false;
-   // Inline wrappers include their whole line box. Inspect text runs instead
-   // so a carrier icon cannot force the font to zero at a small screen zoom.
-   if(!multiline)for(const run of runs){range.selectNodeContents(run);const glyph=range.getBoundingClientRect();if(glyph.height>box.height+.01*render)return false;}
-  }
-  return true;
- }
- let low=0,high=Math.max(.01,ceiling);
- if(fits(high))low=high;
- else for(let n=0;n<16&&high-low>.005;n++){
-  const mid=(low+high)/2;if(fits(mid))low=mid;else high=mid;
- }
- // Round down: never lose the last glyph to browser subpixel quantization.
- const font=Math.max(.001,Math.floor(low*1000)/1000);setFont(font);
- visible.forEach(table=>table.dataset.fittedFont=String(font));
-}
 
 
 function paginate(){
@@ -9446,7 +9338,7 @@ const CardFlow=(()=>{
    }
   }finally{busy=false;}
  }
- function refreshCatalog(){if(busy||!catalog.content.firstElementChild)return;busy=true;try{const data=values();catalogPages(data);applyValues(data);PageScale.refresh();fitDataTables();fitFields();renumber();}finally{busy=false;}}
+ function refreshCatalog(){if(busy||!catalog.content.firstElementChild)return;busy=true;try{const data=values();catalogPages(data);applyValues(data);PageScale.refresh();ProjectTools.fit();fitDataTables([...pages.querySelectorAll('.project-tools-page .catalog-table')]);fitFields();renumber();}finally{busy=false;}}
  return{reflow,refreshCatalog,refreshTools,previewCatalog,finish,move,availableHeight,layoutMetrics,heightState,previewHeight,finishHeight,previewLayout:m=>reflow(fitted(committed,m),m),galleryValues:()=>drag?.moved?drag.gallery:GalleryLayout.values(),hasCatalog:()=>!!catalog.content.firstElementChild,
   catalogContent:()=>catalog.content.cloneNode(true),setCatalog:content=>{catalog.content.replaceChildren(...(content?[content]:[]));pages.querySelectorAll('.project-tools-page').forEach(page=>page.remove());ToolGroups.adoptCatalog(catalog.content);},
   values:()=>opIds.filter(id=>committed.has(id)),mode:()=>placement,limit:()=>limitEnabled,restore:(value,mode,limit)=>{committed=validIds(value);placement=mode==='auto'?'auto':'manual';if(typeof limit==='boolean')limitEnabled=limit;syncLimit();},
@@ -9587,28 +9479,32 @@ def text_width_em(value, bold=False):
     return total * (1.24 if bold else 1.20)
 
 
-def fitted_columns(samples, width_mm, base_pt, minima, flexible):
-    """Reserve complete values first; flexible names receive the remaining width."""
-    needed = [max([minimum] + [em * base_pt * 25.4 / 72 + extra for em, extra in column])
-              for column, minimum in zip(samples, minima)]
+def column_layout_widths(samples, width_mm, base_pt, minima, flexible):
+    """Distribute column widths at a fixed font; overflow never shrinks text."""
     if width_mm <= 0:
         raise ValueError('Недостаточная ширина таблицы.')
-    natural = needed[:]
-    for i in flexible:
-        needed[i] = minima[i]
-    slack = max(0., width_mm - sum(needed))
-    recipients = flexible or list(range(len(needed)))
-    weight = sum(natural[i] for i in recipients)
-    for i in recipients:
-        needed[i] += slack * natural[i] / weight
-    # Initial static HTML also stays inside the sheet. JavaScript refines this
-    # using the actual font and scales the whole table only when necessary.
-    fit = min(1.0, width_mm / sum(needed))
-    return base_pt * fit, [value * fit for value in needed]
+    natural = [max([minimum] + [em * base_pt * 25.4 / 72 + extra for em, extra in column])
+               for column, minimum in zip(samples, minima)]
+    widths = natural[:]
+    for index in flexible:
+        widths[index] = minima[index]
+    minimum = sum(minima)
+    if minimum >= width_mm:
+        return [value * width_mm / minimum for value in minima]
+    total = sum(widths)
+    if total > width_mm:
+        fraction = (width_mm - minimum) / (total - minimum)
+        return [floor + (value - floor) * fraction for value, floor in zip(widths, minima)]
+    recipients = flexible or list(range(len(widths)))
+    weight = sum(natural[index] for index in recipients)
+    if weight:
+        for index in recipients:
+            widths[index] += (width_mm - total) * natural[index] / weight
+    return widths
 
 
 def clipped_cell(content, full_text, indent_mm=None):
-    """Keep full markup and tooltips; the browser fits a shared table font."""
+    """Keep full markup and tooltips even when the chosen width clips the text."""
     css = 'cell-text tree-name' if indent_mm is not None else 'cell-text'
     text = '<span class="%s" title="%s">%s</span>' % (css, escaped(full_text), content)
     if indent_mm is not None:
@@ -9626,7 +9522,7 @@ def layout_attributes(family, font, widths, base_pt, minima, flexible):
 
 
 def operation_layout(report):
-    samples = [[(max((text_width_em(word) for word in h.split()), default=0) * 6 / 7, 1.8)] for h in OP_HEADERS]
+    samples = [[(text_width_em(h), 1.8)] for h in OP_HEADERS]
     for row in report.get('operation_rows', []):
         values = operation_cells(row, report)
         for i, value in enumerate(values):
@@ -9640,8 +9536,8 @@ def operation_layout(report):
                     value = str(value) + ' · продолжение'
             samples[i].append((text_width_em(value, row['kind'] == 'group' or i == 3 or (i == 0 and bool(re.search(r'(?<![^\W_])R0(?![^\W_]|[.,][0-9])', str(value), re.IGNORECASE)))), extra))
     minima = (8, 5, 4, 8, 4, 7, 7, 7, 7, 7, 7, 7)
-    font, widths = fitted_columns(samples, 193.4, 7, minima, (0,))
-    attrs, cols = layout_attributes('operations', font, widths, 7, minima, (0,))
+    widths = column_layout_widths(samples, 193.4, 7, minima, (0,))
+    attrs, cols = layout_attributes('operations', 7, widths, 7, minima, (0,))
     for key in OP_KEYS:
         cols = cols.replace('<col style=', '<col data-column-id="%s" style=' % key, 1)
     return attrs + ' data-ops-schema="4"', cols
@@ -9659,8 +9555,9 @@ def tool_layout(tools, width_mm, base_pt, family, name_first=True, name_header=N
             registers.append((text_width_em(tool_cutcom_text(row)), 2.0))
     minima, flexible = ((8, 6, 8), (0,)) if name_first else ((6, 8, 8), (2,))
     samples = [names, numbers, registers] if name_first else [numbers, registers, names]
-    font, widths = fitted_columns(samples, width_mm - .6, base_pt * fit_scale,
-                                  tuple(value * fit_scale for value in minima), flexible)
+    font = base_pt * fit_scale  # Initial whole-panel scale, independent of text length.
+    widths = column_layout_widths(samples, width_mm - .6, font,
+                                 tuple(value * fit_scale for value in minima), flexible)
     attrs, cols = layout_attributes(family, font, widths, base_pt, minima, flexible)
     keys = ('name', 'number', 'cutcom') if name_first else ('number', 'cutcom', 'name')
     for key in keys:
@@ -9772,7 +9669,7 @@ def operation_row_html(row, report):
 
 
 def operations_table(rows, report):
-    headers = [TOOL_ICON if key == 'change' else '<br>'.join(escaped(w) for w in label.split())
+    headers = [TOOL_ICON if key == 'change' else escaped(label)
                for key, label in zip(OP_KEYS, OP_HEADERS)]
     titles = [label or 'Смена инструмента' for label in OP_HEADERS]
     attrs, cols = operation_layout(report)
@@ -10620,6 +10517,38 @@ def normalize_project_catalog(sections, project_view_image=None, project_model=N
     return sections
 
 
+def normalize_manual_table_text(markup):
+    """Remove retired text-fit state from retained live tables and templates."""
+    parsed = CardMarkup(markup)
+    tables = {id(node) for node in parsed.nodes if node['tag'] == 'table' and
+              (node['attrs'].get('data-fit-family') or any(parsed.has_class(node, name)
+                for name in ('ops', 'tools', 'catalog-table')))}
+    edits = []
+    for node in parsed.nodes:
+        owner = node
+        while owner is not None and id(owner) not in tables:
+            owner = owner['parent']
+        if owner is None:
+            continue
+        if node['tag'] == 'br':
+            edits.append((node['start'], node['end'], ' '))
+            continue
+        attrs = dict(node['attrs'])
+        attrs.pop('data-fitted-font', None)
+        style = ';'.join(part for part in attrs.get('style', '').split(';')
+                         if part.strip() and part.split(':', 1)[0].strip().lower() not in
+                         ('font-size', '--operation-name-gap'))
+        if style:
+            attrs['style'] = style
+        else:
+            attrs.pop('style', None)
+        if attrs != node['attrs']:
+            opening = '<' + node['tag'] + ''.join(' ' + key + ('="%s"' % escaped(value) if value is not None else '')
+                                                 for key, value in attrs.items()) + '>'
+            edits.append((node['start'], node['open_end'], opening))
+    return edit_markup_spans(markup, edits)
+
+
 def remove_html_notifications(markup):
     """Strip retired messages from saved setups while preserving all card data."""
     parsed = CardMarkup(markup)
@@ -10788,6 +10717,7 @@ def write_preview(output, report):
     # did not request any change to the shared model.
     project_model = report.get('project_model', existing.get('project_model') if existing else None)
     sections = normalize_project_catalog(sections, report.get('project_view_image'), project_model)
+    sections = [normalize_manual_table_text(section) for section in sections]
     body = ''.join(renumber_saved_sections(sections, len(entries)))
     context = {'filename': report['document_stem'] + '.html', 'id': report['card_id'], 'key': report['card_id'],
                'title': TITLE}
