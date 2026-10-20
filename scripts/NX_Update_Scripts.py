@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # NX_Update_Scripts.py
-# SCRIPT_VERSION: V1.18
+# SCRIPT_VERSION: V1.19
 """
 Апдейтер NX / Designcenter для Windows: GitHub manifest или папка обновлений.
 
@@ -14,8 +14,10 @@ GitHub: Проверить загружает только manifest.json; При
 Рабочие пути, кнопки NX и пользовательские INI сохраняются. Новые INI создаются
 из примеров только при первоначальной установке; существующие не заменяются.
 INI и Excel нумератора находятся рядом с установленным скриптом. При переходе
-с прежней папки переносятся существующие настройки и история. Пустой реестр
-загружается только при первой установке. Новые кнопки не создаются.
+с прежней папки переносятся существующие настройки и история после обновления
+кода. Отсутствие INI/Excel не блокирует обновление. Подключение реестра или новая
+нумерация выбираются отдельно; пустой реестр — только по явному выбору.
+Новые кнопки не создаются.
 
 Запись использует проверенный промежуточный файл рядом с назначением и замену
 целого файла. При обычной ошибке выполняется откат из памяти. При аварийном
@@ -39,19 +41,24 @@ import io
 import json
 import ntpath
 import os
+import posixpath
 import queue
 import re
 import threading
 import tokenize
 import ssl
 import stat
+import struct
 import uuid
 import urllib.parse
 import urllib.request
+import webbrowser
+import zipfile
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 
-SCRIPT_VERSION = "V1.18"
+SCRIPT_VERSION = "V1.19"
 SCRIPT_NAME = "Обновление скриптов NX"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode('utf-8')
@@ -1153,7 +1160,7 @@ def scan_github(settings, cancelled, fetcher=None, self_path=None):
             if (paths and entry['id'] == 'NX_Number_Program_Folders'
                     and current == available and not row['eligible']
                     and _numbering_files_missing(entry, path)):
-                row.update(status='Отсутствуют файлы нумерации — восстановление', eligible=True, checked=False)
+                row.update(status='Нужна настройка данных нумерации — выбор вручную', eligible=True, checked=False)
             if need_updater and family[0] != UPDATER_ID:
                 row.update(status='Сначала обновите апдейтер до ' + manifest['min_updater_version'],
                            eligible=False, checked=False)
@@ -1208,8 +1215,12 @@ def _numbering_files_missing(entry, script_path):
     ini = _companion_target(config, script_path)
     if not os.path.isfile(ini):
         return True
-    raw, _ = _data_snapshot(ini, MAX_CONFIG_SIZE)
-    return not os.path.isfile(_numbering_registry(ini, raw))
+    try:
+        raw, _ = _data_snapshot(ini, MAX_CONFIG_SIZE)
+        _numbering_values(raw)
+        return not os.path.isfile(_numbering_registry(ini, raw))
+    except (OSError, ValueError, configparser.Error):
+        return True  # Data errors must not disable a script update.
 
 
 def _relocated_numbering_ini(raw, filename):
@@ -1274,20 +1285,133 @@ def _numbering_jobs(row, fetcher):
 
     if local_raw is not None:
         raise ValueError('Не найден Excel-реестр из INI. Восстановите историю; пустой файл не будет скачан:\n' + local_book)
-    additions = row['remote'].get('install_files', [])
-    history_paths = [_companion_target(record, row['path']) for record in additions]
-    history_paths += [os.path.join(NUMBERING_DATA_FOLDER, record['file']) for record in additions]
-    if row['operation'] != 'install' or any(os.path.lexists(path + suffix) for path in history_paths for suffix in ('', '.bak', '.lock')):
-        raise ValueError('Не найдены настройки нумерации. Перенесите прежний INI и Excel-реестр в папку скрипта:\n' + folder)
-    jobs = []
-    for record in [config] + additions:
-        raw = _verified_download(record, MAX_CONFIG_SIZE if record is config else MAX_SCRIPT_SIZE, fetcher)
-        if record is config:
-            registry = _numbering_registry(ini, raw)
-            if len(additions) != 1 or path_key(registry) != path_key(_companion_target(additions[0], row['path'])):
-                raise ValueError('Имя Excel-реестра в шаблоне INI не соответствует каталогу')
-        jobs.append(dict(path=_companion_target(record, row['path']), data=raw, expected=None, create=True,
-                         is_self=False, root_identity=row.get('root_identity')))
+    raise ValueError('Не найдены настройки нумерации. Подключите существующий Excel-реестр '
+                     'или выберите новую нумерацию:\n' + folder)
+
+
+def _numbering_values(raw):
+    # Match the journal's UTF-8 settings and Int32 range, without guessing a range.
+    raw.decode('utf-8-sig')
+    values = config_section(config_parser(raw), 'Numbering')
+    if set(values) != {'prefix', 'startnumber', 'endnumber', 'registryfile'}:
+        raise ValueError('В INI нужны только Prefix, StartNumber, EndNumber и RegistryFile в [Numbering].')
+    _numbering_range(values['prefix'], values['startnumber'], values['endnumber'])
+    return values
+
+
+def _numbering_range(prefix, start, end):
+    prefix, start, end = str(prefix).strip(), str(start).strip(), str(end).strip()
+    if not re.fullmatch(r'[A-Z]{1,8}', prefix):
+        raise ValueError('Prefix: от 1 до 8 заглавных латинских букв, например O.')
+    if (not re.fullmatch(r'[0-9]{1,10}', start) or not re.fullmatch(r'[0-9]{1,10}', end)
+            or not 1 <= int(start) <= int(end) <= 2147483647):
+        raise ValueError('Укажите свой диапазон: целые положительные числа, начало не больше конца.')
+    return prefix, str(int(start)), str(int(end))
+
+
+def _validate_numbering_book(raw):
+    """Check the register sheet/headers, keeping every workbook byte unchanged."""
+    ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+    rel = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
+    headers = ('Имя папки', 'Номер', 'Проект', 'Полный путь проекта', 'Дата и время',
+               'Прежнее имя', 'Состояние', 'ID записи', 'Примечание')
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as book:
+            if sum(item.file_size for item in book.infolist()) > MAX_BATCH_SIZE:
+                raise ValueError('Слишком большой распакованный Excel-реестр.')
+
+            def xml(name):
+                data = book.read(name)
+                if b'<!DOCTYPE' in data.upper() or b'<!ENTITY' in data.upper():
+                    raise ValueError('Неподдерживаемая структура XML.')
+                return ET.fromstring(data)
+
+            workbook = xml('xl/workbook.xml')
+            props = workbook.find(ns + 'workbookPr')
+            if props is not None and props.get('date1904', '').lower() in ('1', 'true'):
+                raise ValueError('Нужна книга с системой дат 1900.')
+            sheets = [s for s in workbook.findall(ns + 'sheets/' + ns + 'sheet') if s.get('name') == 'Реестр']
+            if len(sheets) != 1:
+                raise ValueError('Не найден лист «Реестр».')
+            links = [r for r in xml('xl/_rels/workbook.xml.rels') if r.get('Id') == sheets[0].get(rel)]
+            if len(links) != 1 or links[0].get('TargetMode', '').lower() == 'external':
+                raise ValueError('Не найден внутренний лист реестра.')
+            target = links[0].get('Target', '').replace('\\', '/')
+            name = posixpath.normpath(target.lstrip('/') if target.startswith('/') else 'xl/' + target)
+            sheet = xml(name)
+            shared = []
+            if 'xl/sharedStrings.xml' in book.namelist():
+                shared = [''.join(t.text or '' for t in si.iter(ns + 't')) for si in xml('xl/sharedStrings.xml')]
+            found = {}
+            for cell in sheet.findall(ns + 'sheetData/' + ns + "row[@r='1']/" + ns + 'c'):
+                if cell.find(ns + 'f') is not None:
+                    raise ValueError('Формула вместо заголовка реестра.')
+                value = cell.findtext(ns + 'v', '')
+                if cell.get('t') == 's':
+                    value = shared[int(value)]
+                elif cell.get('t') == 'inlineStr':
+                    value = ''.join(t.text or '' for t in cell.iter(ns + 't'))
+                found[cell.get('r')] = value
+            if tuple(found.get(chr(65 + col) + '1', '') for col in range(9)) != headers:
+                raise ValueError('Столбцы не соответствуют формату реестра нумерации.')
+    except (KeyError, IndexError, ET.ParseError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise ValueError('Не удалось прочитать Excel-реестр: ' + str(exc)) from exc
+
+
+def prepare_numbering_setup(row, mode, registry_path='', prefix='', start='', end='', fetcher=None):
+    """An explicit, separate data transaction. Never replaces an existing workbook."""
+    if mode not in ('existing', 'new'):
+        raise ValueError('Выберите существующий реестр или новую нумерацию.')
+    fetcher = fetcher or download_bytes
+    config = row['remote']['config']
+    ini = _companion_target(config, row['path'])
+    folder = os.path.dirname(ini)
+    raw, guard = _data_snapshot(ini, MAX_CONFIG_SIZE) if os.path.lexists(ini) else (None, None)
+    if raw is not None:
+        values = _numbering_values(raw)
+        prefix, start, end = values['prefix'], values['startnumber'], values['endnumber']
+    prefix, start, end = _numbering_range(prefix, start, end)
+    jobs, dependencies = [], []
+    if mode == 'existing':
+        registry_path = registry_path.strip()
+        if not registry_path or not os.path.isabs(registry_path) or ntpath.splitext(registry_path)[1].lower() != '.xlsx':
+            raise ValueError('Выберите существующий Excel-реестр .xlsx с полным путём.')
+        registry_path = os.path.abspath(registry_path)
+        book, book_guard = _data_snapshot(registry_path)
+        _validate_numbering_book(book)
+        dependencies.append(book_guard)
+        if os.path.lexists(registry_path + '.lock'):
+            _, lock_guard = _data_snapshot(registry_path + '.lock')
+            dependencies.append(lock_guard)
+    else:
+        additions = row['remote'].get('install_files', [])
+        if raw is not None and os.path.lexists(_numbering_registry(ini, raw)):
+            raise ValueError('В INI уже указан существующий реестр. Новая нумерация не заменяет историю.')
+        if len(additions) != 1:
+            raise ValueError('В каталоге отсутствует шаблон Excel-реестра.')
+        registry_path = _companion_target(additions[0], row['path'])
+        if any(os.path.lexists(registry_path + suffix) for suffix in ('', '.bak', '.lock')):
+            raise ValueError('В папке уже есть реестр или следы прежней нумерации. Подключите/восстановите историю.')
+        book = _verified_download(additions[0], MAX_SCRIPT_SIZE, fetcher)
+        _validate_numbering_book(book)
+        jobs.append(dict(path=registry_path, data=book, expected=None, create=True, is_self=False))
+    filename = os.path.basename(registry_path) if path_key(os.path.dirname(registry_path)) == path_key(folder) else registry_path
+    if raw is None:
+        template = _verified_download(config, MAX_CONFIG_SIZE, fetcher)
+        _numbering_values(template)
+        # New settings are deliberate; never carry the example's 1–1000 into a working INI.
+        updated = ('; Настройки нумерации. Существующий реестр не заменяйте пустым.\n'
+                   '[Numbering]\nPrefix={}\nStartNumber={}\nEndNumber={}\nRegistryFile={}\n').format(
+                       prefix, start, end, filename).encode('utf-8')
+    else:
+        updated = _relocated_numbering_ini(raw, filename)
+    if updated != raw:
+        jobs.append(dict(path=ini, data=updated, expected=guard['sha256'] if guard else None,
+                         create=raw is None, is_self=False, read_guards=dependencies))
+    if guard and jobs and not any(job['path'] == ini for job in jobs):
+        jobs[0].setdefault('read_guards', []).append(guard)
+    for job in jobs:
+        job['root_identity'] = folder_identity(folder)
     return jobs
 
 
@@ -1317,9 +1441,8 @@ def prepare_jobs(rows, fetcher=None):
         jobs.append(dict(path=row['path'], data=payload, expected=row.get('target_hash'),
                          create=row['operation'] == 'install', is_self=row.get('is_self', False),
                          root_identity=row.get('root_identity') if row['operation'] == 'install' else None))
-        if row.get('origin') == 'github' and row['remote']['id'] == 'NX_Number_Program_Folders':
-            jobs.extend(_numbering_jobs(row, fetcher))
-        elif row.get('origin') == 'github' and row['operation'] == 'install':
+        if (row.get('origin') == 'github' and row['remote']['id'] != 'NX_Number_Program_Folders'
+                and row['operation'] == 'install'):
             config = row['remote'].get('config')
             config_existed = config is not None and os.path.lexists(_companion_target(config, row['path']))
             companions = [] if config is None or config_existed else [config]
@@ -1510,7 +1633,157 @@ def apply_updates(rows, fetcher=None, replace=None, defer_self=False):
         raise ValueError('Самообновление выполняется только после закрытия окна')
     regular = [job for job in jobs if not job['is_self']]
     commit_jobs(regular, replace)
+    # Code is already committed. Missing/locked/conflicting data or failed
+    # migration may postpone setup, but must never roll back a script update.
+    for row in rows:
+        if row.get('origin') == 'github' and row['remote']['id'] == 'NX_Number_Program_Folders':
+            row.pop('numbering_notice', None)
+            try:
+                commit_jobs(_numbering_jobs(row, fetcher or download_bytes))
+                if _numbering_files_missing(row['remote'], row['path']):
+                    raise ValueError('Проверьте INI нумерации и путь к Excel-реестру.')
+            except Exception as exc:
+                row['numbering_notice'] = str(exc)
     return pending[0] if pending else None
+
+
+def _numbering_dialog_template():
+    """Dialog units let Windows scale the native modal window for its font/DPI."""
+    def wide(value):
+        return (value + '\0').encode('utf-16-le')
+
+    controls = [
+        (0x82, 100, '', 12, 10, 476, 32, 0),
+        (0x82, 101, 'Существующий Excel-реестр:', 12, 46, 380, 10, 0),
+        (0x81, 102, '', 12, 60, 385, 15, 0x00810080),
+        (0x80, 103, 'Обзор…', 403, 59, 85, 18, 0x10000),
+        (0x82, 104, '', 12, 85, 476, 20, 0),
+        (0x82, 120, 'Prefix:', 12, 112, 30, 10, 0),
+        (0x81, 105, 'O', 46, 109, 42, 15, 0x00810080),
+        (0x82, 121, 'Начало:', 110, 112, 38, 10, 0),
+        (0x81, 106, '', 152, 109, 100, 15, 0x00812080),
+        (0x82, 122, 'Конец:', 275, 112, 34, 10, 0),
+        (0x81, 107, '', 314, 109, 100, 15, 0x00812080),
+        (0x82, 108, 'Пустой реестр — только для новой нумерации. Для потерянной истории откройте инструкцию восстановления.', 12, 134, 476, 22, 0),
+        (0x80, 110, 'Подключить существующий реестр', 12, 163, 232, 23, 0x10001),
+        (0x80, 111, 'Новая нумерация', 252, 163, 236, 23, 0x10000),
+        (0x80, 112, 'Восстановление из NX…', 12, 197, 232, 22, 0x10000),
+        (0x80, 2, 'Отложить', 380, 197, 108, 22, 0x10000),
+    ]
+    data = struct.pack('<LLHhhhh', 0x80C808C0, 0, len(controls), 0, 0, 500, 231)
+    data += b'\0\0\0\0' + wide(window_title('Настройка нумерации')) + struct.pack('<H', 9) + wide('Segoe UI')
+    for kind, identity, caption, x, y, width, height, style in controls:
+        data += b'\0' * (-len(data) % 4)
+        data += struct.pack('<LLhhhhHHH', 0x50000000 | style, 0, x, y, width, height, identity, 0xFFFF, kind)
+        data += wide(caption) + b'\0\0'
+    return data
+
+
+def run_numbering_setup(parent, row):
+    from ctypes import wintypes as W
+    U = ctypes.WinDLL('user32', use_last_error=True)
+    K = ctypes.WinDLL('kernel32', use_last_error=True)
+    D = ctypes.WinDLL('comdlg32', use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, W.HWND, W.UINT, ctypes.c_size_t, ctypes.c_ssize_t)
+
+    class OPENFILENAME(ctypes.Structure):
+        _fields_ = [('lStructSize', W.DWORD), ('hwndOwner', W.HWND), ('hInstance', W.HINSTANCE),
+                    ('lpstrFilter', W.LPCWSTR), ('lpstrCustomFilter', W.LPWSTR), ('nMaxCustFilter', W.DWORD),
+                    ('nFilterIndex', W.DWORD), ('lpstrFile', W.LPWSTR), ('nMaxFile', W.DWORD),
+                    ('lpstrFileTitle', W.LPWSTR), ('nMaxFileTitle', W.DWORD), ('lpstrInitialDir', W.LPCWSTR),
+                    ('lpstrTitle', W.LPCWSTR), ('Flags', W.DWORD), ('nFileOffset', W.WORD),
+                    ('nFileExtension', W.WORD), ('lpstrDefExt', W.LPCWSTR), ('lCustData', ctypes.c_ssize_t),
+                    ('lpfnHook', ctypes.c_void_p), ('lpTemplateName', W.LPCWSTR), ('pvReserved', ctypes.c_void_p),
+                    ('dwReserved', W.DWORD), ('FlagsEx', W.DWORD)]
+
+    def signature(dll, name, result, *args):
+        fn = getattr(dll, name)
+        fn.restype, fn.argtypes = result, list(args)
+
+    signature(K, 'GetModuleHandleW', W.HMODULE, W.LPCWSTR)
+    signature(U, 'DialogBoxIndirectParamW', ctypes.c_ssize_t, W.HINSTANCE, ctypes.c_void_p, W.HWND, callback_type, ctypes.c_ssize_t)
+    signature(U, 'EndDialog', W.BOOL, W.HWND, ctypes.c_ssize_t)
+    signature(U, 'SetDlgItemTextW', W.BOOL, W.HWND, ctypes.c_int, W.LPCWSTR)
+    signature(U, 'GetDlgItemTextW', W.UINT, W.HWND, ctypes.c_int, W.LPWSTR, ctypes.c_int)
+    signature(U, 'SendDlgItemMessageW', ctypes.c_ssize_t, W.HWND, ctypes.c_int, W.UINT, ctypes.c_size_t, ctypes.c_ssize_t)
+    signature(U, 'MessageBoxW', ctypes.c_int, W.HWND, W.LPCWSTR, W.LPCWSTR, W.UINT)
+    signature(D, 'GetOpenFileNameW', W.BOOL, ctypes.POINTER(OPENFILENAME))
+    signature(D, 'CommDlgExtendedError', W.DWORD)
+
+    def message(hwnd, text, purpose='Настройка нумерации', flags=0x40):
+        return U.MessageBoxW(hwnd, text, window_title(purpose), flags)
+
+    def get(hwnd, identity):
+        buffer = ctypes.create_unicode_buffer(32768)
+        U.GetDlgItemTextW(hwnd, identity, buffer, len(buffer))
+        return buffer.value
+
+    @callback_type
+    def dialog(hwnd, msg, wparam, lparam):
+        try:
+            if msg == 0x110:  # WM_INITDIALOG
+                U.SetDlgItemTextW(hwnd, 100, 'Скрипт установлен/обновлён. Осталось настроить данные нумерации.\n'
+                                 'Можно продолжить сейчас или отложить — обновление уже сохранено.')
+                U.SetDlgItemTextW(hwnd, 104, 'Укажите выделенный вам диапазон; он не должен пересекаться с номерами других программистов.')
+                ini = _companion_target(row['remote']['config'], row['path'])
+                if os.path.lexists(ini):
+                    raw, _ = _data_snapshot(ini, MAX_CONFIG_SIZE)
+                    values = _numbering_values(raw)
+                    U.SetDlgItemTextW(hwnd, 102, _numbering_registry(ini, raw))
+                    for identity, key in ((105, 'prefix'), (106, 'startnumber'), (107, 'endnumber')):
+                        U.SetDlgItemTextW(hwnd, identity, values[key])
+                        U.SendDlgItemMessageW(hwnd, identity, 0xCF, 1, 0)  # EM_SETREADONLY
+                    U.SetDlgItemTextW(hwnd, 104, 'Диапазон взят из вашего INI и будет сохранён. При подключении изменится только путь к реестру.')
+                return 1
+            if msg == 0x10:  # WM_CLOSE
+                U.EndDialog(hwnd, 0)
+                return 1
+            if msg != 0x111:  # WM_COMMAND
+                return 0
+            identity = wparam & 0xFFFF
+            if identity == 2:
+                U.EndDialog(hwnd, 0)
+            elif identity == 103:
+                buffer = ctypes.create_unicode_buffer(32768)
+                value = get(hwnd, 102)
+                if os.path.isfile(value):
+                    buffer.value = value
+                request = OPENFILENAME(lStructSize=ctypes.sizeof(OPENFILENAME), hwndOwner=hwnd,
+                    lpstrFilter='Excel-реестр (*.xlsx)\0*.xlsx\0\0', nFilterIndex=1,
+                    lpstrFile=ctypes.cast(buffer, W.LPWSTR), nMaxFile=len(buffer),
+                    lpstrInitialDir=os.path.dirname(row['path']), lpstrTitle=window_title('Выбор Excel-реестра'),
+                    Flags=0x80000 | 0x1000 | 0x800 | 0x8, lpstrDefExt='xlsx')
+                if D.GetOpenFileNameW(ctypes.byref(request)):
+                    U.SetDlgItemTextW(hwnd, 102, buffer.value)
+                elif D.CommDlgExtendedError():
+                    raise OSError('Не удалось открыть окно выбора файла.')
+            elif identity == 112:
+                webbrowser.open('https://github.com/TonyFoxxxx/NXOpen-SCRIPTS/blob/main/docs/number-program-folders.md#recovery')
+            elif identity in (110, 111):
+                if identity == 111 and message(hwnd,
+                    'Создать пустой реестр для новой нумерации в папке скрипта?\n\n'
+                    'Если номера выдавались раньше, сначала восстановите историю из прежнего Excel или проектов NX.\n'
+                    'Новый реестр не содержит ранее выданных номеров.', 'Новая нумерация', 0x124) != 6:
+                    return 1
+                jobs = prepare_numbering_setup(row, 'existing' if identity == 110 else 'new',
+                    get(hwnd, 102), get(hwnd, 105), get(hwnd, 106), get(hwnd, 107))
+                commit_jobs(jobs)
+                message(hwnd, 'Данные нумерации настроены. Существующие строки Excel сохранены.')
+                U.EndDialog(hwnd, 1)
+            else:
+                return 0
+            return 1
+        except Exception as exc:
+            message(hwnd, 'Скрипт уже обновлён. Настройка данных не завершена.\n\n' + str(exc), 'Ошибка', 0x10)
+            if msg == 0x110:
+                U.EndDialog(hwnd, 0)  # Correct malformed existing settings; never replace them silently.
+            return 1
+
+    template = ctypes.create_string_buffer(_numbering_dialog_template())
+    result = U.DialogBoxIndirectParamW(K.GetModuleHandleW(None), template, parent, dialog, 0)
+    if result == -1:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return bool(result)
 
 
 def configured_source(settings):
@@ -2100,8 +2373,8 @@ def run_window():
         unknown_versions = sum(row['operation'] == 'update' and row['identity'][1] is None for row in selected)
         question = ('Установить новых скриптов: {}.\nОбновить существующих: {}.\n\nРабочая папка:\n{}\n\n'
                     'Новые файлы получат имена без версии. Кнопки и команды NX не создаются.\n'
-                    'Существующие INI и реестры сохраняются. При новой установке создаются отсутствующие настройки.\n'
-                    'Новый нумератор с отсутствующим INI может получить пустой реестр; это только для первого запуска.\n'
+                    'Существующие INI и реестры сохраняются.\n'
+                    'Для нумератора без данных после обновления откроется отдельная настройка. Её можно отложить.\n'
                     'Самообновление закроет окно; новая редакция заработает при следующем запуске.\n\nПродолжить?').format(
                         installs, updates, state['settings']['working_folder'])
         if unknown_versions:
@@ -2110,6 +2383,7 @@ def run_window():
         if U.MessageBoxW(hwnd_holder['value'], question, window_title('Подтверждение'), 0x124) != 6:
             return  # MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2
         state["applying"] = True
+        state['numbering_selection'] = selected
         busy(True)
         U.EnableWindow(controls["close"], False)
         U.SetWindowTextW(controls["status"], "Установка и обновление выбранных скриптов... Дождитесь завершения.")
@@ -2136,6 +2410,13 @@ def run_window():
             state["inputs"] = None
             message(error, True)
         else:
+            for row in state.pop('numbering_selection', []):
+                if row.get('numbering_notice'):
+                    message('Скрипт установлен/обновлён. Данные требуют настройки.\n\n' + row['numbering_notice'])
+                    try:
+                        run_numbering_setup(hwnd_holder['value'], row)
+                    except Exception as exc:
+                        message('Обновление сохранено. Настройку данных можно повторить после проверки.\n\n' + str(exc), True)
             if pending is not None:
                 state['pending_self'] = pending
                 message('Выбранные файлы подготовлены. Окно закроется для замены апдейтера.\n'

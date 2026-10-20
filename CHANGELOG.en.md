@@ -2,6 +2,15 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-20 — Numbering V1.05 and updater V1.19
+
+- Numbering now includes deleted folders when restoring tree order. Confirmed unused allocations are reused only in their original project; the unused tail stays reserved with an XLSX note.
+- Retained protection of foreign, cancelled and unconfirmed allocations, CAM name checks, manual renames, repeat-run stability and failure rollback.
+- Missing/invalid INI and missing Excel no longer block code updates. Data migration follows the code transaction; migration errors cannot roll back the script.
+- Added separate setup: connect an existing register, start new numbering with an explicit range, or defer. Empty templates require an explicit choice; existing workbooks are never overwritten.
+- Added recovery instructions and the separate V1 journal for available saved PRT attributes. The updater opens the instructions without executing that journal.
+- Updated the catalog and Russian/English guides; added real-XLSX, folder-deletion and native Windows setup-dialog checks.
+
 ## 2026-10-16 — Setup sheets V2.58
 
 - Removed automatic font fitting to operation and tool table contents, including the two-space reserve. Existing sliders set the scale manually.
