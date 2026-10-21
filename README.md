@@ -20,7 +20,7 @@
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Заполнение описаний инструментов диаметром и номерами T, H, D. | [Все функции](docs/tool-description.md) |
-| [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.37 | Оформление рамки, основной надписи и аннотаций чертежа по ЕСКД. | [Все функции](docs/eskd.md) |
+| [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.38 | Оформление рамки, основной надписи и аннотаций чертежа по ЕСКД. | [Все функции](docs/eskd.md) |
 | [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.11 | Экспорт текущего листа в PDF с настройкой толщин линий. | [Все функции](docs/export-pdf.md) |
 | [NX_Export_Current_View_To_DXF.cs](scripts/NX_Export_Current_View_To_DXF.cs) | V1.08 | Экспорт рёбер, внешнего контура или выбранных кривых в DXF. | [Все функции](docs/export-dxf.md) |
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Переименование файлов деталей и сборок с обновлением ссылок компонентов. | [Все функции](docs/rename-assemblies.md) |
@@ -30,11 +30,11 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Нумератор V1.05 и апдейтер V1.19 · 21.10.2026
+### Последнее обновление — ЕСКД V1.38 · 21.10.2026
 
-- После удаления папки нумератор восстанавливает порядок: `O1690 → O1689`. Свободный хвост остаётся в резерве того же проекта.
-- Апдейтер обновляет код без Excel/INI. Подключение реестра, новая нумерация и перенос данных выполняются отдельно; настройку можно отложить.
-- Подробности: [Нумератор](docs/number-program-folders.md#изменения-последней-версии), [Апдейтер](docs/updater.md#изменения-последней-версии).
+- Уменьшены интервалы вокруг «x» в размере фаски: коэффициент 1/7 высоты текста.
+- Для допусков установлены 3 знака после запятой у существующих и будущих размеров текущей детали.
+- [Все изменения](docs/eskd.md#изменения-последней-версии).
 
 ## Установка
 

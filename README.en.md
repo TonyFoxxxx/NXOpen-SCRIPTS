@@ -20,7 +20,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Fill tool descriptions with diameter and T, H, D numbers. | [All features](docs/en/tool-description.md) |
-| [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.37 | ESKD drawing borders, title blocks and annotation formatting. | [All features](docs/en/eskd.md) |
+| [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.38 | ESKD drawing borders, title blocks and annotation formatting. | [All features](docs/en/eskd.md) |
 | [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.11 | Export the current sheet to PDF with adjustable line weights. | [All features](docs/en/export-pdf.md) |
 | [NX_Export_Current_View_To_DXF.cs](scripts/NX_Export_Current_View_To_DXF.cs) | V1.08 | Export edges, the outer outline or selected curves to DXF. | [All features](docs/en/export-dxf.md) |
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Rename part and assembly files and update component references. | [All features](docs/en/rename-assemblies.md) |
@@ -30,11 +30,11 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Numbering V1.05 and updater V1.19 · 2026-10-21
+### Latest update — ESKD V1.38 · 2026-10-21
 
-- Deleting a folder now restores numbering order: `O1690 → O1689`. The unused tail stays reserved for the same project.
-- The updater updates code without Excel/INI. Register connection, new numbering and data migration are separate; setup can be deferred.
-- Details: [Numbering](docs/en/number-program-folders.md#latest-release), [Updater](docs/en/updater.md#latest-release).
+- Compact spacing around the chamfer “x” separator: 1/7 of text height.
+- Tolerances use 3 decimal places for existing and future dimensions in the current part.
+- [All changes](docs/en/eskd.md#latest-release).
 
 ## Installation
 

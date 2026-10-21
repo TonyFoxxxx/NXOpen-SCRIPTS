@@ -1,5 +1,7 @@
 // NX_ESKD_Format_GOST_A.cs — Оформление чертежа ЕСКД
-// SCRIPT_VERSION: V1.37
+// SCRIPT_VERSION: V1.38
+// Chamfer separator spacing: h/7 on either side; tolerance precision: 3 places.
+// Apply to part defaults and existing dimensions on every drawing sheet.
 // Delete previous current-sheet frames, title/auxiliary tables and their labels.
 // Material grade and standard use explicit wrapped lines before reducing text.
 // Upper duplicate designation stays horizontal on every supported sheet.
@@ -81,7 +83,7 @@ using NXOpen.UF;
 
 public class NX_ESKD_Format_GOST_A
 {
-    private const string SCRIPT_VERSION = "V1.37";
+    private const string SCRIPT_VERSION = "V1.38";
     private static readonly string Title = "ЕСКД: GOST type A Italic — " + SCRIPT_VERSION +
         " — " + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private const string FontName = "NX_ESKD_GOST_A_Italic_v110";
@@ -962,6 +964,10 @@ public class NX_ESKD_Format_GOST_A
     private const double StackedToleranceHeight = 2.5;
     private const double DimensionLineGap = 1.0;
     private const double AppendedTextGapFactor = 1.0 / 7.0;
+    // Chamfer spacing is an independent native factor of text height, not
+    // the font-dependent CharacterSpacingFactor below. h/7 = 0.5 mm at h=3.5.
+    private const double ChamferTextGapFactor = 1.0 / 7.0;
+    private const int ToleranceDisplayPrecision = 3;
     // GOST 2.304-81, table 1: type A has a=2d=h/7, d=h/14.
     // NX exposes a font-dependent multiplier, NOT a distance in millimeters.
     // Calibrate against the supplied font's H and M advances before applying it.
@@ -1146,8 +1152,14 @@ public class NX_ESKD_Format_GOST_A
         b.DimensionStyle.DimZeroToleranceDisplayStyle = ZeroToleranceDisplayStyle.Omitted;
         b.UnitsStyle.DecimalPointCharacter = DecimalPointCharacter.Comma;
         // Dimension > Text > Units > Decimal Places (the user's screenshot).
-        // Angular and tolerance precision are independent and remain unchanged.
+        // Tolerance precision has separate primary, dual and angular controls.
         b.DimensionStyle.DimensionValuePrecision = 3;
+        b.DimensionStyle.ToleranceValuePrecision = ToleranceDisplayPrecision;
+        b.DimensionStyle.DualToleranceValuePrecision = ToleranceDisplayPrecision;
+        b.DimensionStyle.AngularToleranceValuePrecision = ToleranceDisplayPrecision;
+        // Compact equal gaps around the existing chamfer separator (x).
+        // Keep the native dimension, its form, values, angle and separator.
+        b.DimensionStyle.ChamferSpaceFactor = ChamferTextGapFactor;
         b.UnitsStyle.DisplayLeadingDimensionZeros = true;
         b.UnitsStyle.DisplayTrailingZeros = false;
         // Preserve tolerance values/type, unit conversion and associativity.
@@ -1156,8 +1168,16 @@ public class NX_ESKD_Format_GOST_A
     private static bool DimensionPrecisionMatches(StyleBuilder b)
     {
         return b.DimensionStyle.DimensionValuePrecision == 3 &&
+            b.DimensionStyle.ToleranceValuePrecision == ToleranceDisplayPrecision &&
+            b.DimensionStyle.DualToleranceValuePrecision == ToleranceDisplayPrecision &&
+            b.DimensionStyle.AngularToleranceValuePrecision == ToleranceDisplayPrecision &&
             b.UnitsStyle.DecimalPointCharacter == DecimalPointCharacter.Comma &&
             b.UnitsStyle.DisplayLeadingDimensionZeros && !b.UnitsStyle.DisplayTrailingZeros;
+    }
+
+    private static bool ChamferSpacingMatches(DimensionStyleBuilder b)
+    {
+        return Math.Abs(b.ChamferSpaceFactor - ChamferTextGapFactor) < 0.0001;
     }
 
     private static bool DimensionArrowStyleMatches(LineArrowStyleBuilder b, bool existing = false)
@@ -2570,7 +2590,9 @@ public class NX_ESKD_Format_GOST_A
                                 if (!DimensionSpacingMatches(check.AnnotationStyle.LetteringStyle))
                                     throw new InvalidOperationException("NX не подтвердил межбуквенный интервал или отступы префикса и отклонений.");
                                 if (!DimensionPrecisionMatches(check.AnnotationStyle))
-                                    throw new InvalidOperationException("NX не подтвердил три знака после запятой у размера.");
+                                    throw new InvalidOperationException("NX не подтвердил три знака после запятой у размера и допусков.");
+                                if (fresh is BaseChamferDimension && !ChamferSpacingMatches(check.AnnotationStyle.DimensionStyle))
+                                    throw new InvalidOperationException("NX не подтвердил интервалы вокруг x в Chamfer Dimension (Размере фаски).");
                             }
                             finally { check.Destroy(); }
                             StyledDimensions++;
@@ -2649,7 +2671,9 @@ public class NX_ESKD_Format_GOST_A
             if (!DimensionArrowStyleMatches(b.AnnotationStyle.LineArrowStyle))
                 throw new InvalidOperationException("NX не сохранил настройки стрелок для новых размеров.");
             if (!DimensionPrecisionMatches(b.AnnotationStyle))
-                throw new InvalidOperationException("NX не сохранил Decimal Places (Знаков после запятой) = 3 для новых размеров.");
+                throw new InvalidOperationException("NX не сохранил Decimal Places (Знаков после запятой) = 3 для новых размеров и допусков.");
+            if (!ChamferSpacingMatches(b.AnnotationStyle.DimensionStyle))
+                throw new InvalidOperationException("NX не сохранил интервалы вокруг x для новых Chamfer Dimension (Размеров фасок).");
             if (!SectionLabelStyleMatches(b.ViewSectionLabel))
                 throw new InvalidOperationException("NX не сохранил подпись новых разрезов А-А без SECTION.");
             savedHatchDistance = b.AnnotationStyle.HatchStyle.HatchDistance;

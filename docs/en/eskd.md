@@ -8,15 +8,14 @@ Creates an ESKD border and title block on the current metric drawing sheet and u
 
 ## Latest release
 
-**V1.37 · 2026-10-09**
+**V1.38 · 2026-10-21**
 
-- After Apply, the script deletes the previous border, title block, auxiliary boxes and their text on the current sheet, including hidden old Siemens template elements and formatting from earlier runs.
-- It collects formatting objects first, then deletes containers, tables and remaining loose lines/labels. Cleanup after sheet refreshes finishes before the new border is created; a deletion failure rolls back this run.
-- In the Material cell, the grade and GOST/OST/TU standard start on separate explicit lines. Longer entries, including strings without spaces, wrap further to fit the cell width; the font shrinks when the complete block is too tall.
-- The final sheet check verifies that explicit line breaks survived. The 185 × 55 mm title block and 70 × 15 mm Material cell retain their sizes.
-- Cancel remains read-only. INI handling, the external-font workflow and section geometry are retained; no new service files are created.
+- Chamfer Dimension uses a dedicated spacing factor around its “x” separator: 1/7 of text height, corresponding to a nominal 0.5 mm at 3.5 mm text height. The chamfer form, angle, dimension value and selected separator are retained.
+- Tolerance display precision is set to 3 decimal places for primary, dual and angular dimensions. Stored deviation values are unchanged; the trailing-zero display setting is retained.
+- Settings apply to new dimensions in the current part and existing dimensions on its drawing sheets. Read-back checks verify precision and chamfer spacing after application.
+- INI handling, the font, borders and section geometry are unchanged; no new settings files or reports are created.
 
-Checked C# syntax, short/long material wrapping, nonbreaking spaces and Unicode, border recognition on A4/A3/A2, deletion order and failure handling. Algorithm checks run without NX; actual object deletion and table rendering in the target NX / Designcenter builds still require in-application verification.
+Checked C# syntax, property names against NXOpen documentation, the catalog version and checksum, and ran the existing repository checks. NX / Designcenter execution and visual dimension checks in the target builds were not performed here.
 
 ## Features
 
@@ -31,6 +30,7 @@ Checked C# syntax, short/long material wrapping, nonbreaking spaces and Unicode,
 - Optional numbered technical requirements. Each launch starts with three default items; base values can be reloaded from INI. An existing requirements block is updated.
 - General surface roughness with Ra and a choice of parenthesized symbol.
 - GOST A Italic text, sizes and spacing; line weights, dimension arrows/leaders, tables, view and section labels.
+- Chamfer-separator spacing is 1/7 of text height. Linear nominal values and tolerances use 3 decimal places; stored tolerances are retained.
 - Checks section letters, lines and arrow positions; retains hatch spacing/directions and supports symmetric tolerances.
 
 Annotation style changes affect existing annotations on all sheets and future annotations in the part. The border and title block are created on the current sheet only.

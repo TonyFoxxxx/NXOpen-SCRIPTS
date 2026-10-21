@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-21 — ESKD V1.38
+
+- Chamfer Dimension now sets separator spacing independently: 1/7 of text height, nominally 0.5 mm at 3.5 mm. Chamfer form, angle and values are retained.
+- Added 3-place tolerance precision for primary, dual and angular dimensions. Settings cover existing dimensions on drawing sheets and future dimensions in the current part; stored deviations and the trailing-zero setting are retained.
+- Extended read-back verification after application. Updated the updater catalog and both documentation languages. INI handling, the font and other formatting are retained.
+- Checked syntax, API properties, catalog consistency and the existing repository test suite. Execution and visual verification in NX / Designcenter remain necessary.
+
 ## 2026-10-21 — Numbering V1.05 and updater V1.19
 
 - Numbering now includes deleted folders when restoring tree order. Confirmed unused allocations are reused only in their original project; the unused tail stays reserved with an XLSX note.
