@@ -1,7 +1,7 @@
 // Экспорт в PDF
-// SCRIPT_VERSION: V1.11
+// SCRIPT_VERSION: V1.13
 // Рабочий файл: NX_Export_Drawing_To_PDF.cs
-// Файл для выдачи: NX_Export_Drawing_To_PDF_V1.11.cs
+// Файл для выдачи: NX_Export_Drawing_To_PDF_V1.13.cs
 // Siemens NX / Designcenter, C# journal (Windows).
 // Запуск: Tools / Сервис -> Journal / Журнал -> Play / Воспроизвести.
 //
@@ -11,6 +11,10 @@
 // Повторный запуск обновляет PDF под тем же именем.
 // Единственный выходной файл — PDF; отчётов, логов и временных PDF нет.
 // Проект .prt должен быть хотя бы один раз сохранён на диск.
+//
+// V1.13: Output Text = Text — сохранены поиск и копирование надписей.
+// Для исправленного шрифта сначала примените NX_ESKD_Format_GOST_A V1.39.
+// V1.12 использовала Polylines как временный обход ошибки шрифта Acrobat.
 //
 // V1.11: восемь независимых групп линий и живой предпросмотр в NX.
 // Контуры видов/разрезов и штриховка настраиваются независимо.
@@ -76,9 +80,10 @@ using NXOpen.Drawings;
 
 public class NX_Export_Drawing_To_PDF
 {
-    private const string SCRIPT_VERSION = "V1.11";
+    private const string SCRIPT_VERSION = "V1.13";
     private const string SCRIPT_NAME = "Экспорт в PDF";
-    private const string Title = SCRIPT_NAME + " — " + SCRIPT_VERSION + " — by Tony_Foxxx";
+    private static readonly string Title = SCRIPT_NAME + " — " + SCRIPT_VERSION + " — " +
+        Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private const string GeneralRoughnessAttribute = "NX_ESKD_GENERAL_ROUGHNESS";
 
     // Every entry ties the displayed physical width to all three NX enum types.
@@ -1113,6 +1118,7 @@ public class NX_Export_Drawing_To_PDF
             pdf.Size = PrintPDFBuilder.SizeOption.ScaleFactor;
             pdf.Scale = 1.0;
             pdf.Units = PrintPDFBuilder.UnitsOption.Metric;
+            // Текст остаётся доступным для поиска и копирования; шрифт задаёт чертёж.
             pdf.OutputText = PrintPDFBuilder.OutputTextOption.Text;
             pdf.AddWatermark = false;
             pdf.Watermark = String.Empty;

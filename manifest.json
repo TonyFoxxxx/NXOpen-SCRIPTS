@@ -86,9 +86,9 @@
       "id": "NX_ESKD_Format_GOST_A",
       "name": "ЕСКД",
       "file": "NX_ESKD_Format_GOST_A.cs",
-      "version": "V1.38",
+      "version": "V1.40",
       "path": "scripts/NX_ESKD_Format_GOST_A.cs",
-      "sha256": "0f967286f623af9991c379a894ee79e8cf4f28788a2233be0e67459e3e19969f",
+      "sha256": "a5d60961d7e5f16ad3ed48742a1f9b3ec82a24dd6e206090002909f7fcdc71b1",
       "description": "Оформление рамки, основной надписи и аннотаций чертежа по ЕСКД. Нужен совместимый внешний шрифт.",
       "config": {
         "path": "config/NX_ESKD_Settings.example.ini",
@@ -101,9 +101,9 @@
       "id": "NX_Export_Drawing_To_PDF",
       "name": "Экспорт чертежа PDF",
       "file": "NX_Export_Drawing_To_PDF.cs",
-      "version": "V1.11",
+      "version": "V1.13",
       "path": "scripts/NX_Export_Drawing_To_PDF.cs",
-      "sha256": "660c62e77123f047a0498bc3a8426798c4308916ad9ab664a5ef3908d5c29f98",
+      "sha256": "f28704cb00f63cc03b8f0182d33ab94fc31aa7a07eb553fad111765476b2fc60",
       "description": "Экспорт текущего листа в PDF с настройкой толщин линий."
     },
     {

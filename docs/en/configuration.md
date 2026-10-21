@@ -58,16 +58,22 @@ Place `NX_ESKD_Settings.ini` beside the script. [Example](../../config/NX_ESKD_S
 
 ### External font
 
-The required family is `NX_ESKD_GOST_A_Italic_v110`, supplied by `NX_ESKD_GOST_A_Italic_v110.ttf`. Its file is **not included** in the repository; supply a compatible copy you are lawfully entitled to use.
+The active family is `NX_ESKD_GOST_A_Italic_v111`. The earlier compatible `NX_ESKD_GOST_A_Italic_v110.ttf` is also accepted: the journal repairs its metadata in memory and installs a separate `v111` copy while retaining the original file. Glyph outlines, advance widths, hinting and the character map are retained. An already corrected `v111` is reused.
 
-The script searches beside its `.cs` file, in `UGII_STANDARD_FONT_DIR`, NX/user font locations and `%WINDIR%\Fonts`. Numbered filename variants `_1` through `_99` are supported. User locations include:
+**The font file is not included**; supply a compatible copy you are lawfully entitled to use. The source-code repair recipe contains no glyph outlines and cannot create a font without the original file. Other GOST fonts are not substituted automatically.
 
-- `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
-- `%LOCALAPPDATA%\Siemens\NX_ESKD\Fonts`
+The script searches both family filenames, including numbered variants `_1` through `_99`, beside the `.cs` file, in `UGII_STANDARD_FONT_DIR`, NX/user font locations and `%WINDIR%\Fonts`.
 
-The expected edition is checked by size (57,764 bytes), CRC32 (`582A8BB4`) and actual font tables. These checks do not grant permission to redistribute the font. A corporate NX font directory may be used. NX may need restarting after the font becomes available.
+| Edition | Size, bytes | CRC32 | SHA-256 |
+| --- | --- | --- | --- |
+| `v110` — original | 57,764 | `582A8BB4` | `648fa9e071903291a0e707312aa44f1f4638309440087363ff752989eb9e0c7b` |
+| `v111` — corrected | 57,764 | `4DD73259` | `373668d649781dc756f7a623f3e411cb4532f0d51e243e583f4a65fffbee368b` |
 
-Without a compatible font, formatting stops instead of substituting a similar one. See [third-party notices](../../THIRD_PARTY_NOTICES.en.md) and the [ESKD guide](eskd.md).
+Size, CRC32 and SHA-256 are verified before installation; the Windows-selected face is checked by its actual font tables afterward. The distinct family name avoids matching the old family in NX's cache. Compatibility checks do not grant redistribution rights.
+
+Compatible copies may already exist in `%LOCALAPPDATA%\Microsoft\Windows\Fonts` or `%LOCALAPPDATA%\Siemens\NX_ESKD\Fonts`. The corrected file uses the same installation mechanism and retains an existing `UGII_STANDARD_FONT_DIR` setting. Neither the repository nor the updater downloads the font itself. If no compatible file is available, formatting stops with a message. See [third-party notices](../../THIRD_PARTY_NOTICES.en.md).
+
+After updating, apply ESKD to the drawing and export the PDF again. If NX requests a restart, save your work, restart NX and apply ESKD again. No manual INI changes or deletion of old fonts are required.
 
 ## Program-folder numbering
 

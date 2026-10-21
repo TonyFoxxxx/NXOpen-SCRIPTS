@@ -2,6 +2,15 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-21 — ESKD V1.40 and PDF export V1.13
+
+- ESKD repairs glyph bounds and associated metrics in the exact compatible external `v110` font, installing `v111` with a distinct family name. Outlines, advance widths, hinting and the character map are retained; the original copy is not overwritten.
+- Added SHA-256 checks before and after repair, reuse of an already corrected `v111`, and lookup of both names in existing font directories. The font itself is not included in the public package.
+- PDF uses `Output Text = Text` with search and copy support; the temporary V1.12 Polylines workaround is removed. Apply ESKD first, then export the PDF again to use the correction.
+- Retained ESKD V1.38 formatting, INI behavior, line-weight settings and drawing restoration. Updated the catalog and both languages of the guides, configuration and home pages.
+- Setup-sheet Zmin checks locate the column by its header after the column reorder; setup-sheet application code is unchanged.
+- Checked syntax, the repair recipe, outline/advance preservation, the font with OpenType Sanitizer and repository checks. A corrected sample PDF opened in Acrobat without the previous error. The new journals were not executed in NX / Designcenter here.
+
 ## 2026-10-21 — Setup sheets V2.60
 
 - Fixed saved setup checkmarks appearing unchecked on first opening: checkbox support is enabled before populating the tree and restoring selections.

@@ -19,7 +19,7 @@ The original graphic was unmodified and scaled for display in the UI. The reposi
 
 The font used by the ESKD formatting script has an ASCON Ltd. copyright notice. Permission to redistribute it has not been established, so the font is not included in this repository.
 
-Users must supply a compatible copy they are lawfully entitled to use. See [font configuration](docs/en/configuration.md#external-font). The repository's MIT License does not apply to this font.
+Users must supply a compatible copy they are lawfully entitled to use. The `v110` → `v111` metadata repair runs locally; its published recipe contains no glyph outlines and requires the original external file. See [font configuration](docs/en/configuration.md#external-font). The repository's MIT License does not apply to this font.
 
 ## Siemens NX / NXOpen
 

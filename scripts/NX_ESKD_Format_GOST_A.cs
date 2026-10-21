@@ -1,5 +1,8 @@
 // NX_ESKD_Format_GOST_A.cs — Оформление чертежа ЕСКД
-// SCRIPT_VERSION: V1.38
+// SCRIPT_VERSION: V1.40
+// V1.40: repair metadata of the compatible external v110 font to the v111 face.
+// Corrected glyph bounds/metrics preserve outlines and searchable PDF text.
+// Distribution filename: NX_ESKD_Format_GOST_A_V1.40.cs.
 // Chamfer separator spacing: h/7 on either side; tolerance precision: 3 places.
 // Apply to part defaults and existing dimensions on every drawing sheet.
 // Delete previous current-sheet frames, title/auxiliary tables and their labels.
@@ -83,11 +86,11 @@ using NXOpen.UF;
 
 public class NX_ESKD_Format_GOST_A
 {
-    private const string SCRIPT_VERSION = "V1.38";
+    private const string SCRIPT_VERSION = "V1.40";
     private static readonly string Title = "ЕСКД: GOST type A Italic — " + SCRIPT_VERSION +
         " — " + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
-    private const string FontName = "NX_ESKD_GOST_A_Italic_v110";
-    private const string FontFaceName = "NX_ESKD_GOST_A_Italic_v110";
+    private const string FontName = "NX_ESKD_GOST_A_Italic_v111";
+    private const string FontFaceName = "NX_ESKD_GOST_A_Italic_v111";
     private const string OwnerAttribute = "NX_ESKD_FORMAT_OWNER";
     private const string SettingsFileName = "NX_ESKD_Settings.ini";
     private static string SettingsPath;
@@ -4830,17 +4833,22 @@ public class NX_ESKD_Format_GOST_A
     // User-supplied GOST type A Italic.ttf. Glyph outlines and effective metrics are preserved.
     // Internal family name matches InstalledStem; the only face has Regular style metadata.
     // It is visually inclined by the original outlines, without synthetic italics.
-    // Unused trailing loca/hmtx records removed; SFNT alignment/checksums normalized.
+    // Bounds and horizontal bearings are repaired without altering glyph programs.
+    // The repair recipe contains metadata only; the external font is still required.
     // Original SHA-256: 2dc556a737c16eb93f0776b753a58f123fbadaff8aea5d00e1fad8008e09f3bd
-    // Embedded SHA-256: 648fa9e071903291a0e707312aa44f1f4638309440087363ff752989eb9e0c7b
+    // Repaired SHA-256: 373668d649781dc756f7a623f3e411cb4532f0d51e243e583f4a65fffbee368b
     // https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-getfontdata
     private static class ExternalFontInstaller
     {
-        private const string InstalledStem = "NX_ESKD_GOST_A_Italic_v110";
-        private const string LoadedMarker = "NX_ESKD_FONT_648fa9e071903291a0e707312aa44f1f4638309440087363ff752989eb9e0c7b";
+        private const string InstalledStem = "NX_ESKD_GOST_A_Italic_v111";
+        private const string FontSha256 = "373668d649781dc756f7a623f3e411cb4532f0d51e243e583f4a65fffbee368b";
+        private const string LegacyFontSha256 = "648fa9e071903291a0e707312aa44f1f4638309440087363ff752989eb9e0c7b";
+        private const string LegacyStem = "NX_ESKD_GOST_A_Italic_v110";
+        private const string LoadedMarker = "NX_ESKD_FONT_" + FontSha256;
         private const string RegistryPath = @"Software\Microsoft\Windows NT\CurrentVersion\Fonts";
-        private const string RegistryName = "NX_ESKD_GOST_A_Italic_v110 (TrueType)";
-        private const uint FontCrc32 = 0x582A8BB4u;
+        private const string RegistryName = "NX_ESKD_GOST_A_Italic_v111 (TrueType)";
+        private const uint FontCrc32 = 0x4DD73259u;
+        private const uint LegacyFontCrc32 = 0x582A8BB4u;
         private const int FontByteCount = 57764;
         private const uint FrPrivate = 0x10u;
 
@@ -4887,10 +4895,10 @@ public class NX_ESKD_Format_GOST_A
         public static string Install()
         {
             if (Environment.OSVersion.Platform != PlatformID.Win32NT)
-                throw new InvalidOperationException("Подключение внешнего шрифта рассчитана на Windows.");
+                throw new InvalidOperationException("Подключение внешнего шрифта рассчитано на Windows.");
 
             byte[] fontBytes = ReadExternalFont();
-            if (fontBytes.Length != FontByteCount || Crc32(fontBytes) != FontCrc32)
+            if (fontBytes.Length != FontByteCount || Crc32(fontBytes) != FontCrc32 || !FontDigestMatches(fontBytes, FontSha256))
                 throw new InvalidOperationException("Файл шрифта не соответствует ожидаемой редакции.");
 
             string localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -5095,8 +5103,95 @@ public class NX_ESKD_Format_GOST_A
             return ~crc;
         }
 
+        private static bool FontDigestMatches(byte[] bytes, string expected)
+        {
+            using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+            {
+                string digest = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "");
+                return String.Equals(digest, expected, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        private static byte[] TryNormalizeExternalFont(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length != FontByteCount) return null;
+            uint crc = Crc32(bytes);
+            if (crc == FontCrc32 && FontDigestMatches(bytes, FontSha256)) return bytes;
+            if (crc != LegacyFontCrc32 || !FontDigestMatches(bytes, LegacyFontSha256)) return null;
+
+            byte[] corrected = ApplyFontMetadataRepair(bytes, Convert.FromBase64String(FontMetadataRepair));
+            if (Crc32(corrected) != FontCrc32 || !FontDigestMatches(corrected, FontSha256))
+                throw new InvalidOperationException("Не удалось проверить исправленную редакцию шрифта.");
+            return corrected;
+        }
+
+        private static byte[] ApplyFontMetadataRepair(byte[] original, byte[] recipe)
+        {
+            // Big-endian: record count, then offset/length/payload for each record.
+            // Only the exact SHA-256-matched legacy font reaches this method.
+            if (recipe == null || recipe.Length < 2)
+                throw new InvalidOperationException("Повреждены данные исправления шрифта.");
+            int count = ReadFontUInt16(recipe, 0), cursor = 2, previousEnd = 0;
+            byte[] corrected = (byte[])original.Clone();
+            for (int i = 0; i < count; i++)
+            {
+                if (cursor > recipe.Length - 4)
+                    throw new InvalidOperationException("Повреждены данные исправления шрифта.");
+                int offset = ReadFontUInt16(recipe, cursor), length = ReadFontUInt16(recipe, cursor + 2);
+                cursor += 4;
+                if (length == 0 || offset < previousEnd || offset > corrected.Length - length || cursor > recipe.Length - length)
+                    throw new InvalidOperationException("Недопустимые границы исправления шрифта.");
+                Buffer.BlockCopy(recipe, cursor, corrected, offset, length);
+                cursor += length; previousEnd = offset + length;
+            }
+            if (cursor != recipe.Length)
+                throw new InvalidOperationException("Лишние данные в исправлении шрифта.");
+            return corrected;
+        }
+
+        // Numeric bounds/bearings, family-name and SFNT checksum corrections only.
+        // No outlines, contours, hinting, advance widths, character map or font file.
+        private const string FontMetadataRepair =
+            "AnkAUAAEKWLYAwBhAAFwAGMAAVkAcQADIAR0AIEAA/xNGADAAALI/AhLAAGfCK8AATMIsgACARwJLQABsAkwAAIBggmnAAFjCakAAf4JqwABlQr6AAICPQyG" +
+            "AAIDTw4mAAICNw9ZAAGiD1wAAgEeD6kAAWAQNQABJxA4AAIBJxCrAAH5EK4AAgH8EZ0AAVwRoQABjRI+AAL//hJDAAFuEncAAVkSewABvBLLAAEyEs8AAW0T" +
+            "EQABGhMVAAHHExcAAR8TZAACAigUVQABvBRYAAIBshTFAAE3FMgAAgInFaUAATIVqQAB3ha7AAFeFr8AAcEWwQABvxdnAAEyF2oAAgIVGFMAAeMYVQABvhlf" +
+            "AAHMGWEAA/wCTRneAAICEBnhAAG/G0sAAZobTQAD/gIoHE8AAWUcUwAB3xynAAEqHKsAAd0dBwAByR1ZAAFIHV0AAaEd7QABUh3xAAGmHkMAAbQeRgACAhAf" +
+            "QwAD/gNYIPsAATUg/wABySGZAAEyIZwAAgIQIq4AAgIVI2sAATIjbgACAigkHwABMiQiAAICFSTLAAE1JM4AAgIVJWAAAgJHJkkAATUmTQABSCbnAAE1JuoA" +
+            "AgEcJzcAATInOwAB5CexAAE1J7UAAUgoTwABMihSAAIBNSi3AAE1KLsAAawpPwABNSlDAAFIKc4AAgIoKr8AATUqwgACAikriAACAigsvQABNSzAAAICKC2y" +
+            "AAICPS7BAAHLLsQAAgJHLzwAAgJIL/oAAgJ6L/0AAb4wcAACA0QxBwABNjELAAF7MbMAAeUxtgACAnsyLQABMjIxAAFPMr8AASUywwABczNCAAEBM3sAAQ8z" +
+            "fwABXzP6AAIA/zP+AAIB/jQBAAFUNGUAAYM0kwAB3jVNAAEyNVEAAc01+QAB3zaaAAICFjdFAAHNOA8AAWY4EwABsTjdAAEAOOEAAeQ5qQABNTmtAAHNOksA" +
+            "ATU6TgACARw61wABlDrbAAEdO3kAATU7fQAB4jwUAAIBHDyLAAE1PI8AAWM9QQABNT1FAAHNPdEAAc0+gwABAD6HAAHNPzEAAeQ/2QABNT/dAAGdQFMAAdVB" +
+            "YQABZ0FlAAF7QgsAAeFCnQAB5EMVAAGoQ7cAATZDuQAB/EO7AAHgQ70AAfhETgAC//9EUwAB30TvAAEwRPMAAeZFfwABkkZVAAE1RlgAAgEcRqUAAQ5GqQAB" +
+            "OUd5AAFyR30AAdZIEAAC//5IFQABBUhxAAEySHUAAZhJIgACAm1J6wABxkwvAAE5TDMAAa5MsQAB905FAAEyTkgAAgIVT2AAAgJFUEkAAe9Q4QABwlFDAAGA" +
+            "UUcAActR/wABOFIDAAGxUtMAATVS1gACARxTIwABNVMmAAIBHFOyAAICrVRVAAF2VFkAAbJUnwAB41XXAAE1VdoAAgMvVtcAAeRXoQABQ1elAAG5WDcAAYFY" +
+            "OwABsVk1AAE1WTkAAclZ0wABMlnWAAICLlqpAAEyWqwAAgIQW7sAATVbvgACAhVcIwABKFwnAAFLXOMAATJc5gACAhVdjwABNV2RAAH9XZMAAaxeaAACAiZf" +
+            "1QABN1/ZAAFKYDsAATVgPwABSGDpAAE1YO0AAUhhhwABNWGLAAF9YgMAATViBwABrGKJAAE1Yo0AAUhjKgACAihkGwABNWQfAAFLZJMAATVklgACAihlXAAC" +
+            "AhVmGQABy2YcAAICR2aRAAFkZpQAAgJIZ3kAAcpo3QABNmjhAAF7aYkAATJpjQABSGouAAICSGrlAAEyaukAAaxrjQABMmuRAAGsbF0AAZZsYAACAjxtNwAB" +
+            "Mm07AAF6biMAATJuJwAB2W7jAAEybuYAAgIob8cAATVvywABXHDzAAE2cPcAAUtx5QAB5HKmAAICFXOlAAHNdL0AAcx1nAACAgJ2eQABzXdDAAE2d0UAAf53" +
+            "RwABRHghAAGzeU0AAeF53wAB4XqvAAE1erMAAeF7OwABNns/AAHke7UAATV7uAACAhJ8QwABNXxHAAHhfOMAAc19lQABNX2ZAAHNfiEAAQB+JQABzX7PAAHf" +
+            "f20AATV/cQABY4AjAAEZgCcAAeGA8wABV4JdAAE2gl8AAfyCYQAB4IJjAAH4gvkAAeGDsQAB4YRVAAF3hRUAAXeF9wABloX7AAH1hq0AATKGsAACAhOHfQAB" +
+            "MoeBAAGRiB8AATKIIwABzYjlAAE1iOkAAf+J5wABNonpAAH8iesAAeSKtwABMoq6AAICFYvSAAICRYy3AAGAjLsAAcuNcwABNY12AAIBHI3DAAE1jcYAAgEc" +
+            "jk8AAXaOUwABso6ZAAHjj9EAATWP1AACAy+Q0QAB5JGbAAGBkZ8AAbGSmQABNZKdAAHJkzcAATKTOgACAi6UDQABMpQQAAICEJUfAAE1lSIAAgIVlYcAASiV" +
+            "iwABS5ZHAAEylkoAAgIVlvMAATWW9QAB/Zb3AAGsl8wAAgImmTkAATeZPQABSpmfAAE1maMAAUiaTQABNZpRAAFImusAATWa7wABfZtnAAE1m2sAAayb7QAB" +
+            "NZvxAAFInI4AAgIonX8AATWdgwABS533AAE1nfoAAgIonsAAAgIVn30AAcufgAACAkef9QABZJ/4AAICSKDdAAHKokEAATaiRQABe6LtAAEyovEAAUijkgAC" +
+            "AkikSQABMqRNAAGspPEAATKk9QABrKXBAAGWpcQAAgI8ppsAATKmnwABeqeHAAEyp4sAAdmoRwABMqhKAAICKKkrAAE1qS8AAVyqVwABNqpbAAFLq0kAAeSs" +
+            "CgACAhWtCQABza4hAAHMrwAAAgICr90AAc2wpwABNrCpAAH+sKsAAUSxhQABs7KxAAHhs0MAAeG0EwABNbQXAAHhtJ8AATa0owAB5LUZAAE1tRwAAgIStacA" +
+            "ATW1qwAB4bZHAAHNtvkAATW2/QABzbeFAAEAt4kAAc24MwAB37jRAAE1uNUAAWO5hwABGbmLAAHhulcAAVe7wQABNrvDAAH8u8UAAeC7xwAB+LxdAAHhvRUA" +
+            "AeG9uQABd755AAF3v1sAAZa/XwAB9cARAAEywBQAAgITwOEAATLA5QABkcGDAAEywYcAAc3CSQABNcJNAAH/w0sAATbDTQAB/MNPAAHkxBoAAv/+xB8AAdLE" +
+            "ewABaMR+AAIBZ8UuAAICbcX3AAHGyDsAATnIPwABrsi6AAIA/Mi9AAGTyOwABAWfxMPJCQABlMkPAAFUySYAAgTJySkAAZTJKwABVMlLAAEzyU8AAbDJUwAB" +
+            "Y8ljAAGiyWsAASfJbwAB+clzAAFcyXYAAv/+yXsAAVnJfwABMsmDAAEayYsAAbzJjwABN8mTAAEyyZcAAV7JmwABMsmjAAHMyasAAZrJrwABZcmzAAEqybsA" +
+            "AUjJvwABUsnDAAG0ycsAATXJzwABMsnXAAEyydsAATLJ3wABNcnnAAE1yesAATXJ7wABMsnzAAE1yfcAATLJ+wABNcn/AAE1ygcAATXKDwABNcoXAAHLyicA" +
+            "ATbKKwAB5covAAEyyjMAASXKOwABD8o+AAIA/8pLAAEyylsAAWbKXwABAMpjAAE1ymcAATXKawABlMpvAAE1yncAATXKewABNcqDAAEAyosAATXKkwABZ8qj" +
+            "AAE2yqYAAv//yqsAATDKswABNcq3AAEOyrsAAXLKvgAC//7KwwABMsrPAAE5ytsAATLK6wABgMrvAAE4yvMAATXK9wABNcr/AAF2ywcAATXLDwABQ8sTAAGB" +
+            "yxcAATXLGwABMssfAAEyyyMAATXLJwABKMsrAAEyyy8AATXLNwABN8s7AAE1yz8AATXLQwABNctHAAE1y0sAATXLUwABNctXAAE1y18AAcvLYwABZMtrAAE2" +
+            "y28AATLLdwABMst7AAEyy38AAZbLgwABMsuHAAEyy4sAATLLjwABNcuTAAE2y68AATbLvwABNcvDAAE2y8cAATXLywABNcvTAAE1y9cAAQDL3wABNcvjAAEZ" +
+            "y+sAATbL/wABlswDAAEyzAcAATLMCwABMswPAAE1zBMAATbMFwABMswfAAGAzCMAATXMJwABNcwrAAF2zDMAATXMOwABgcw/AAE1zEMAATLMRwABMsxLAAE1" +
+            "zE8AASjMUwABMsxXAAE1zF8AATfMYwABNcxnAAE1zGsAATXMbwABNcxzAAE1zHsAATXMfwABNcyHAAHLzIsAAWTMkwABNsyXAAEyzJ8AATLMowABMsynAAGW" +
+            "zKsAATLMrwABMsyzAAEyzLcAATXMuwABNszXAAE2zOcAATXM6wABNszvAAE1zPMAATXM+wABNcz/AAEAzQcAATXNCwABGc0TAAE2zScAAZbNKwABMs0vAAEy" +
+            "zTMAATLNNwABNc07AAE2zT4AAv/+zUMAAWjNTwABOdwYAAEx3M0AATE=";
+
         // The public package does not redistribute the ASCON font. Reuse only
-        // an authorized external copy of the exact family/revision used by V1.34.
+        // an authorized external copy: accept v111 or repair the exact v110 revision.
         private static byte[] ReadExternalFont()
         {
             List<string> folders = new List<string>();
@@ -5117,21 +5212,24 @@ public class NX_ESKD_Format_GOST_A
             {
                 string folder = Environment.ExpandEnvironmentVariables(item.Trim().Trim('"'));
                 if (!Path.IsPathRooted(folder) || folder.IndexOf(';') >= 0 || !Directory.Exists(folder)) continue;
-                for (int i = 0; i < 100; i++)
+                foreach (string stem in new string[] { InstalledStem, LegacyStem })
                 {
-                    string suffix = i == 0 ? "" : "_" + i.ToString(CultureInfo.InvariantCulture);
-                    string path = Path.Combine(folder, InstalledStem + suffix + ".ttf");
-                    try
+                    for (int i = 0; i < 100; i++)
                     {
-                        if (!File.Exists(path) || new FileInfo(path).Length != FontByteCount) continue;
-                        byte[] bytes = File.ReadAllBytes(path);
-                        if (bytes.Length == FontByteCount && Crc32(bytes) == FontCrc32) return bytes;
+                        string suffix = i == 0 ? "" : "_" + i.ToString(CultureInfo.InvariantCulture);
+                        string path = Path.Combine(folder, stem + suffix + ".ttf");
+                        try
+                        {
+                            if (!File.Exists(path) || new FileInfo(path).Length != FontByteCount) continue;
+                            byte[] bytes = TryNormalizeExternalFont(File.ReadAllBytes(path));
+                            if (bytes != null) return bytes;
+                        }
+                        catch (IOException) { }
+                        catch (UnauthorizedAccessException) { }
                     }
-                    catch (IOException) { }
-                    catch (UnauthorizedAccessException) { }
                 }
             }
-            throw new InvalidOperationException("Нужен внешний шрифт " + InstalledStem + ".ttf совместимой редакции.\n" +
+            throw new InvalidOperationException("Нужен совместимый внешний шрифт " + InstalledStem + ".ttf или " + LegacyStem + ".ttf.\n" +
                 "Шрифт не входит в публичный комплект. Используйте разрешённую вам копию из прежней установки " +
                 "или обратитесь к автору. Произвольный шрифт с похожим названием не подходит.\n" +
                 "Положите совместимый файл рядом со скриптом и запустите журнал снова. См. docs/configuration.md.");

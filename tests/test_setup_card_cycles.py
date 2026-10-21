@@ -116,7 +116,7 @@ class SetupCardCycleTests(unittest.TestCase):
                     case.op.SetName = Mock(side_effect=AssertionError('Read-only table renamed operation'))
                     row, report = self.table(case)
                     self.assertAlmostEqual(row['zmin'], expected)
-                    self.assertEqual(CARD.operation_cells(row, report)[-1], CARD.zmin_text(expected))
+                    self.assertEqual(CARD.operation_cells(row, report)[CARD.OP_HEADERS.index('Zmin')], CARD.zmin_text(expected))
                     self.assertNotEqual(CARD.zmin_text(row['zmin']), '0')
                     self.assertEqual(row['name'], old)
                     self.assertEqual(case.op.Name, old)
@@ -150,7 +150,7 @@ class SetupCardCycleTests(unittest.TestCase):
                 self.assertEqual(len(skipped), 1)
                 row, report = self.table(case)
                 self.assertIsNone(row['zmin'])
-                self.assertEqual(CARD.operation_cells(row, report)[-1], '')
+                self.assertEqual(CARD.operation_cells(row, report)[CARD.OP_HEADERS.index('Zmin')], '')
                 self.assertEqual(case.op.Name, old)
                 self.assertTrue(any(issue['field'] == 'Zmin' for issue in report['data_issues']))
                 self.assert_released(case, builders=2)
@@ -161,7 +161,7 @@ class SetupCardCycleTests(unittest.TestCase):
         old = case.op.Name
         row, report = self.table(case)
         self.assertIsNone(row['zmin'])
-        self.assertEqual(CARD.operation_cells(row, report)[-1], '')
+        self.assertEqual(CARD.operation_cells(row, report)[CARD.OP_HEADERS.index('Zmin')], '')
         self.assertEqual(case.op.Name, old)
         issues = [issue for issue in report['data_issues'] if issue['field'] == 'Zmin']
         self.assertEqual(len(issues), 1)

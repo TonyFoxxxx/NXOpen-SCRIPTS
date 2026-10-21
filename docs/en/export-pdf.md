@@ -6,6 +6,16 @@ Script: [NX_Export_Drawing_To_PDF.cs](../../scripts/NX_Export_Drawing_To_PDF.cs)
 
 Exports the entire current sheet of the displayed part at its physical size, 1:1 in millimetres.
 
+## Latest release
+
+**V1.13 · 2026-10-21**
+
+- `Output Text = Text` retains searchable, copyable text. The temporary Polylines workaround from V1.12 is no longer used.
+- For drawings using the earlier ESKD font, first apply [ESKD V1.40](eskd.md): it repairs the compatible external font and assigns the corrected family to annotations.
+- Retains full-sheet 1:1 export, eight line-weight groups with live preview, filename entry and formatting restoration. The selected PDF in the PRT folder is the only output.
+
+Checked syntax, version, catalog checksum and repository tests. A corrected sample PDF opened in Acrobat without the previous font error; the exporter itself was not executed in NX / Designcenter here.
+
 ## Features
 
 Live line-weight preview covers eight groups:
@@ -23,7 +33,7 @@ Available weights are 0.13, 0.18, 0.25, 0.35, 0.50, 0.70, 1, 1.4 and 2 mm. Defau
 
 ## Use
 
-1. Save the PRT, open the required sheet of the displayed part and run the journal.
+1. Save the PRT and open the required sheet of the displayed part. If it uses the earlier ESKD font, apply ESKD V1.40 first, then run the PDF journal.
 2. Adjust line weights while inspecting the live preview.
 3. Enter the PDF filename. It defaults to the project name; do not include a path.
 4. Export and check the PDF in the saved project's folder.

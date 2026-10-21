@@ -8,14 +8,14 @@ Creates an ESKD border and title block on the current metric drawing sheet and u
 
 ## Latest release
 
-**V1.38 · 2026-10-21**
+**V1.40 · 2026-10-21**
 
-- Chamfer Dimension uses a dedicated spacing factor around its “x” separator: 1/7 of text height, corresponding to a nominal 0.5 mm at 3.5 mm text height. The chamfer form, angle, dimension value and selected separator are retained.
-- Tolerance display precision is set to 3 decimal places for primary, dual and angular dimensions. Stored deviation values are unchanged; the trailing-zero display setting is retained.
-- Settings apply to new dimensions in the current part and existing dimensions on its drawing sheets. Read-back checks verify precision and chamfer spacing after application.
-- INI handling, the font, borders and section geometry are unchanged; no new settings files or reports are created.
+- Repairs metadata in the compatible external font to correct glyph bounds that could cause Acrobat to report an embedded PDF font extraction error.
+- An existing `NX_ESKD_GOST_A_Italic_v110` installation is converted automatically to `v111`. Glyph outlines, advance widths, hinting and the character map are retained. An already corrected compatible `v111` is reused.
+- Size, CRC32 and SHA-256 checks identify the source; the corrected copy receives a distinct family name and is checked again. The original file is not overwritten. Public source contains only metadata corrections; the font itself must still be supplied separately.
+- Retains V1.38 formatting, material wrapping, old-border cleanup, chamfer spacing and tolerance precision. Paths and INI behavior are retained; no new reports or temporary files are created.
 
-Checked C# syntax, property names against NXOpen documentation, the catalog version and checksum, and ran the existing repository checks. NX / Designcenter execution and visual dimension checks in the target builds were not performed here.
+Checked C# syntax, the repair recipe and checksums, preservation of outlines/advance widths, the catalog and repository tests. The corrected complete font passed OpenType Sanitizer; a corrected sample PDF opened in Acrobat without the previous error. This journal revision was not executed in NX / Designcenter here.
 
 ## Features
 
@@ -50,4 +50,4 @@ Use `NX_ESKD_Settings.ini` beside the script. The exact compatible external font
 
 Cleanup also deletes loose labels and lines within the old title/auxiliary areas. Script-created technical requirements are handled separately; dimensions and view geometry are not deleted. A single Undo operation restores the drawing changes.
 
-The script can register the permitted font for the user and NX; restarting NX may be necessary. If the font is unavailable, formatting does not proceed. Automatic formatting does not verify the engineering correctness of dimensions, technical requirements or drawing layout.
+The script accepts compatible `NX_ESKD_GOST_A_Italic_v111.ttf` or the earlier `NX_ESKD_GOST_A_Italic_v110.ttf`; it repairs and installs `v111` automatically when given `v110`. If neither compatible font is available, formatting does not proceed. After updating, apply ESKD formatting to the drawing before using [PDF exporter V1.13](export-pdf.md). If NX requests a restart, save your work, restart NX and apply ESKD again. Previously created PDFs must be exported again. Automatic formatting does not verify the engineering correctness of dimensions, technical requirements or drawing layout.
