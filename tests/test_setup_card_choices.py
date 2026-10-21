@@ -228,6 +228,40 @@ class NativeChoiceTests(unittest.TestCase):
             self.check_pixels(window, items, tree, image)
         print('PASS native pixels: ' + ('tree' if tree else 'list') + '; theme=' + str(theme), flush=True)
 
+    def test_saved_folders_remain_checked_on_first_show_and_first_click(self):
+        rows = [dict(key='root', name='NC_PROGRAM', parent=None, ancestors=(), operation_count=4),
+                dict(key='first', name='UST1', parent='root', ancestors=('root',), operation_count=2),
+                dict(key='second', name='UST2', parent='root', ancestors=('root',), operation_count=2)]
+
+        def check(parent):
+            self.parent = parent
+            tree = self.u.GetDlgItem(parent, 101)
+            # The test hook can run before DialogBox's first idle/show cycle.
+            # Exercise that first display before inspecting state or clicking.
+            self.u.ShowWindow(parent, 5)
+            self.u.UpdateWindow(parent)
+            self.u.UpdateWindow(tree)
+            self.capture(tree)
+            root = self.u.SendMessageW(tree, 0x110A, 0, 0)
+            first = self.u.SendMessageW(tree, 0x110A, 4, root)
+            second = self.u.SendMessageW(tree, 0x110A, 1, first)
+
+            def checked(handle):
+                item = self.drawers[0].Item(mask=8, hItem=handle, stateMask=0xf000)
+                self.assertTrue(self.u.SendMessageW(tree, 0x113E, 0, c.addressof(item)))
+                return item.state & 0xf000
+
+            self.assertEqual(checked(root), 0x1000)
+            self.assertEqual(checked(first), 0x2000, 'First saved check survives initial paint')
+            self.assertEqual(checked(second), 0x2000, 'Second saved check survives initial paint')
+            self.click(tree, self.point(tree, first, True, 0x40))
+            self.u.UpdateWindow(tree)
+            self.assertEqual(checked(first), 0x1000, 'First click unchecks only the clicked setup')
+            self.assertEqual(checked(second), 0x2000, 'Other restored checks remain selected')
+
+        self.assertEqual(self.dialog(
+            lambda: CARD.show_setup_folders(rows, selected=['first', 'second']), check), ['second'])
+
     def test_folder_dialog_alignment_and_selection(self):
         rows = [dict(key='root', name='NC_PROGRAM', parent=None, ancestors=(), operation_count=80),
                 dict(key='none', name='NONE', parent='root', ancestors=('root',), operation_count=1),

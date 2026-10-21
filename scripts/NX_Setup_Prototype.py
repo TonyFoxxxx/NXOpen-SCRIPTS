@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.59
+# SCRIPT_VERSION: V2.60
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -111,7 +111,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.59"
+SCRIPT_VERSION = "V2.60"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -2299,7 +2299,7 @@ def setup_folders_dialog_template():
         (0x81, 237, '1', 440, 102, 50, 18, 0x810081),
         (0x82, 238, 'Максимальное количество треугольников:', 26, 126, 340, 14, 0),
         (0x81, 239, format(PROJECT_MODEL_DEFAULT_TRIANGLES, ',').replace(',', ' '), 374, 123, 116, 18, 0x810081),
-        ('SysTreeView32', 101, '', 10, 126, 480, 196, 0x810127),
+        ('SysTreeView32', 101, '', 10, 126, 480, 196, 0x810027),
         (0x82, 102, 'Выбрано установов: 0', 10, 329, 480, 14, 0),
         (0x80, 222, 'Снять все', 10, 352, 74, 22, 0x10000),
         (0x80, 1, 'Далее', 326, 352, 78, 22, 0x30001),
@@ -2357,6 +2357,8 @@ def show_setup_folders(rows, options=None, selected=None):
         'ShowWindow': ([w.HWND, ctypes.c_int], w.BOOL),
         'MapDialogRect': ([w.HWND, ctypes.POINTER(w.RECT)], w.BOOL),
         'MoveWindow': ([w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.BOOL], w.BOOL),
+        'GetWindowLongW': ([w.HWND, ctypes.c_int], w.LONG),
+        'SetWindowLongW': ([w.HWND, ctypes.c_int, w.LONG], w.LONG),
         'SetWindowLongPtrW': ([w.HWND, ctypes.c_int, ctypes.c_ssize_t], ctypes.c_ssize_t),
         'SendMessageW': ([w.HWND, w.UINT, w.WPARAM, w.LPARAM], ctypes.c_ssize_t),
         'InvalidateRect': ([w.HWND, ctypes.POINTER(w.RECT), w.BOOL], w.BOOL),
@@ -2519,6 +2521,14 @@ def show_setup_folders(rows, options=None, selected=None):
         try:
             if message == 0x0110:
                 state['window'], state['tree'] = window, user.GetDlgItem(window, 101)
+                if not state['tree']:
+                    raise RuntimeError('Не удалось создать дерево папок.')
+                # Enable checkboxes after creation, before adding items. Setting
+                # TVS_CHECKBOXES in the template can reset checks on first paint.
+                style = user.GetWindowLongW(state['tree'], -16)
+                if not style or not user.SetWindowLongW(state['tree'], -16, style | 0x100):
+                    raise RuntimeError('Не удалось включить отметки папок.')
+                state['images'] = user.SendMessageW(state['tree'], 0x1108, 2, 0)
                 for ident in (230, 231, 232, 233, 234, 235):
                     control = user.GetDlgItem(window, ident)
                     values = state['options']
@@ -2533,8 +2543,6 @@ def show_setup_folders(rows, options=None, selected=None):
                 user.SetWindowTextW(user.GetDlgItem(window, 237), format(state['options']['project_model_accuracy'], '.15g'))
                 user.SetWindowTextW(user.GetDlgItem(window, 239), str(state['options']['project_model_triangle_limit']))
                 description_formats()
-                if not state['tree']:
-                    raise RuntimeError('Не удалось создать дерево папок.')
                 state['updating'] = True
                 user.SendMessageW(state['tree'], 0x2005, 1, 0)  # Unicode notifications.
                 for row in rows:
@@ -2549,7 +2557,6 @@ def show_setup_folders(rows, options=None, selected=None):
                     if not handle:
                         raise RuntimeError('Не удалось добавить папку: ' + row['name'])
                     state['handles'][row['key']], state['keys'][handle] = handle, row['key']
-                state['images'] = user.SendMessageW(state['tree'], 0x1108, 2, 0)
                 for row in rows:
                     if row['name'].strip().upper() != 'NONE':
                         user.SendMessageW(state['tree'], 0x1102, 2, state['handles'][row['key']])

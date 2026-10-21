@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-21 — Setup sheets V2.60
+
+- Fixed saved setup checkmarks appearing unchecked on first opening: checkbox support is enabled before populating the tree and restoring selections.
+- The first click clears only the clicked checkmark; other saved setups remain checked.
+- Added first-display and first-click regression coverage. Preference storage, component selection and HTML sheets are unchanged.
+
 ## 2026-10-21 — Setup sheets V2.59
 
 - Swapped the «СКС» (MCS) and Zmin columns in the operation table: Zmin follows the operation name, and MCS is the last column.

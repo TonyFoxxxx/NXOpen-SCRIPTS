@@ -8,12 +8,12 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.59 · 2026-10-21**
+**V2.60 · 2026-10-21**
 
-- Swapped the «СКС» (MCS) and Zmin columns in the operation table: Zmin now follows the operation name, and MCS is the last column.
-- Headers, values and widths move together; saved visibility and width settings remain associated with their columns.
+- Fixed the initial display of saved setup selections: checkmarks are visible as soon as the dialog opens.
+- The first click changes only the clicked checkmark; other saved checkmarks remain visible.
 
-Regenerate the HTML sheet with the updated script to apply the new column order. See the [changelog](../../CHANGELOG.en.md).
+Reopen setup selection after updating. Existing saved preferences remain in use. See the [changelog](../../CHANGELOG.en.md).
 
 ## Building the sheet in NX
 

@@ -2,8 +2,10 @@
 from concurrent.futures import ThreadPoolExecutor
 import copy
 import ctypes
+from ctypes import wintypes as w
 import importlib.util
 import json
+import struct
 from pathlib import Path
 import tempfile
 import threading
@@ -63,10 +65,18 @@ class FakeNativeMenu:
     def __init__(self, action):
         self.action, self.ended, self.next_item = action, None, 1000
         self.checks, self.text, self.enabled = {}, {}, {}
+        template = CARD.setup_folders_dialog_template()
+        # DLGITEMTEMPLATE immediately precedes its UTF-16 window class.
+        start = template.index('SysTreeView32\0'.encode('utf-16-le')) - struct.calcsize('<IIhhhhH')
+        self.tree_style = struct.unpack_from('<I', template, start)[0]
+        self.tree_checks, self.subclasses, self.hit_item = {}, {}, None
+        self.checkboxes_initialized = False
         self.user = Mock()
         self.common = Mock()
         self.common.InitCommonControlsEx.return_value = 1
-        self.common.SetWindowSubclass.return_value = 1
+        self.common.SetWindowSubclass.side_effect = lambda handle, callback, ident, data: self.subclasses.update({handle: callback}) or 1
+        self.user.GetWindowLongW.side_effect = lambda handle, index: self.tree_style
+        self.user.SetWindowLongW.side_effect = self.set_style
         self.user.GetActiveWindow.return_value = 1
         self.user.GetDlgItem.side_effect = lambda window, ident: ident
         self.user.SetWindowTextW.side_effect = lambda handle, value: self.text.update({handle: value}) or 1
@@ -76,6 +86,28 @@ class FakeNativeMenu:
         self.user.EndDialog.side_effect = self.end
         self.user.DialogBoxIndirectParamW.side_effect = self.modal
 
+    class TreeItem(ctypes.Structure):
+        _fields_ = [('mask', w.UINT), ('hItem', w.HANDLE), ('state', w.UINT), ('stateMask', w.UINT)]
+
+    class TreeHit(ctypes.Structure):
+        _fields_ = [('pt', w.POINT), ('flags', w.UINT), ('hItem', w.HANDLE)]
+
+    def set_style(self, handle, index, value):
+        old = self.tree_style
+        self.tree_style = value
+        if not old & 0x100 and value & 0x100:
+            self.checkboxes_initialized = True
+        return old
+
+    def click_folder(self, key):
+        index = next(i for i, row in enumerate(setup_rows()) if row['key'] == key)
+        self.hit_item = list(self.tree_checks)[index]
+        self.subclasses[101](101, 0x201, 0, 0, 1, 0)
+
+    def marked_folders(self):
+        return [row['key'] for row, value in zip(setup_rows(), self.tree_checks.values())
+                if value & 0xF000 == 0x2000]
+
     def send(self, handle, message, wp, lp):
         if message == 0xF1:  # BM_SETCHECK
             self.checks[handle] = wp
@@ -83,7 +115,15 @@ class FakeNativeMenu:
             return self.checks.get(handle, 0)
         if message == 0x1132:  # TVM_INSERTITEMW
             self.next_item += 1
+            self.tree_checks[self.next_item] = 0x1000
             return self.next_item
+        if message == 0x113F:  # TVM_SETITEMW
+            item = self.TreeItem.from_address(lp)
+            old = self.tree_checks[item.hItem]
+            self.tree_checks[item.hItem] = (old & ~item.stateMask) | (item.state & item.stateMask)
+        if message == 0x1111:  # TVM_HITTEST
+            hit = self.TreeHit.from_address(lp)
+            hit.hItem, hit.flags = self.hit_item, 0x40
         return 1
 
     def get_text(self, handle, buffer, capacity):
@@ -97,6 +137,12 @@ class FakeNativeMenu:
     def modal(self, instance, template, owner, callback, parameter):
         callback(1, 0x110, 0, 0)
         if self.ended is None:
+            # Win32 initializes a creation-time TVS_CHECKBOXES lazily on first
+            # display, resetting state images without changing our Python model.
+            if self.tree_style & 0x100 and not self.checkboxes_initialized:
+                self.tree_checks = {handle: (value & ~0xF000) | 0x1000
+                                    for handle, value in self.tree_checks.items()}
+                self.checkboxes_initialized = True
             self.action(self, callback)
         return self.ended
 
@@ -122,6 +168,17 @@ class MenuMemoryTests(unittest.TestCase):
     def memory(self, user='domain\\alice', project=None, preferences=None):
         return CARD.MenuMemory(project or self.project, user_key=user,
                                preferences_path=preferences or self.preferences)
+
+    def test_restored_folder_checks_survive_first_show_and_first_click(self):
+        def action(fake, callback):
+            self.assertEqual(fake.marked_folders(), ['2', '4'])
+            self.assertEqual(fake.text[102], 'Выбрано установов: 2')
+            fake.click_folder('2')
+            self.assertEqual(fake.marked_folders(), ['4'])
+            self.assertEqual(fake.text[102], 'Выбрано установов: 1')
+            callback(1, 0x111, 1, 0)
+
+        self.assertEqual(FakeNativeMenu(action).run({}, ['2', '4']), ['4'])
 
     def test_reading_new_project_has_no_filesystem_side_effects(self):
         before = {path.name: path.read_bytes() for path in self.root.iterdir()}
