@@ -18,7 +18,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.47 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.04 | Add minimum Z to operation names, including supported spot-drilling and through-hole drilling cycles. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
-| [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.04 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
+| [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Fill tool descriptions with diameter and T, H, D numbers. | [All features](docs/en/tool-description.md) |
 | [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.37 | ESKD drawing borders, title blocks and annotation formatting. | [All features](docs/en/eskd.md) |
 | [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.11 | Export the current sheet to PDF with adjustable line weights. | [All features](docs/en/export-pdf.md) |
@@ -26,15 +26,15 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Rename part and assembly files and update component references. | [All features](docs/en/rename-assemblies.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.18 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
+| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Setup sheets V2.58 · 2026-10-16
+### Latest update — Numbering V1.05 and updater V1.19 · 2026-10-21
 
-- Removed automatic font fitting from operation and tool tables, including the two-space reserve. Scale is set manually with the sliders.
-- Operation names use a single-line ellipsis unless the sheet's wrapping checkbox is enabled. All other table values stay on one line without ellipses; the table beside the faceted model continues moving in real time.
-- Details: [Setup sheets](docs/en/setup-card.md#latest-release).
+- Deleting a folder now restores numbering order: `O1690 → O1689`. The unused tail stays reserved for the same project.
+- The updater updates code without Excel/INI. Register connection, new numbering and data migration are separate; setup can be deferred.
+- Details: [Numbering](docs/en/number-program-folders.md#latest-release), [Updater](docs/en/updater.md#latest-release).
 
 ## Installation
 

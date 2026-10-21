@@ -18,7 +18,7 @@
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.47 | Вывод управляющих программ и FANUC BIN в папку станка или на носитель. | [Все функции](docs/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.04 | Добавление минимального Z к именам операций, включая поддерживаемые циклы центрования и сквозного сверления. | [Все функции](docs/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |
-| [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.04 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
+| [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Заполнение описаний инструментов диаметром и номерами T, H, D. | [Все функции](docs/tool-description.md) |
 | [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.37 | Оформление рамки, основной надписи и аннотаций чертежа по ЕСКД. | [Все функции](docs/eskd.md) |
 | [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.11 | Экспорт текущего листа в PDF с настройкой толщин линий. | [Все функции](docs/export-pdf.md) |
@@ -26,15 +26,15 @@
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Переименование файлов деталей и сборок с обновлением ссылок компонентов. | [Все функции](docs/rename-assemblies.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Открытие папки текущего PRT в Проводнике. | [Все функции](docs/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Открытие папки карт наладки текущего проекта. | [Все функции](docs/open-setup-cards-folder.md) |
-| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.18 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
+| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Установка и обновление выбранных скриптов из GitHub или папки. | [Все функции](docs/updater.md) |
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Карта наладки V2.58 · 16.10.2026
+### Последнее обновление — Нумератор V1.05 и апдейтер V1.19 · 21.10.2026
 
-- Убран автоматический подбор шрифта в таблицах операций и инструмента, включая запас на два пробела. Масштаб задаётся вручную ползунками.
-- Название операции сокращается многоточием в одной строке или переносится при включённой галочке листа. Все остальные значения таблиц остаются однострочными без многоточий; таблица рядом с фасетной моделью продолжает двигаться в реальном времени.
-- Подробности: [Карта наладки](docs/setup-card.md#изменения-последней-версии).
+- После удаления папки нумератор восстанавливает порядок: `O1690 → O1689`. Свободный хвост остаётся в резерве того же проекта.
+- Апдейтер обновляет код без Excel/INI. Подключение реестра, новая нумерация и перенос данных выполняются отдельно; настройку можно отложить.
+- Подробности: [Нумератор](docs/number-program-folders.md#изменения-последней-версии), [Апдейтер](docs/updater.md#изменения-последней-версии).
 
 ## Установка
 

@@ -193,10 +193,14 @@ class UpdaterTests(unittest.TestCase):
         u.apply_updates(self.scan(), self.fetch)
         self.assertFalse((self.root / 'Example.ini').exists())
 
-    def test_new_numbering_installs_empty_template_only_once(self):
+    def test_new_numbering_requires_explicit_setup_then_preserves_history(self):
         record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
-        u.apply_updates(self.scan(), self.fetch)
+        row = self.scan()[0]
+        u.apply_updates([row], self.fetch)
         register = self.root / 'NX_Numbering_Register_v1.0.xlsx'
+        self.assertFalse(register.exists())
+        self.assertIn('numbering_notice', row)
+        u.commit_jobs(u.prepare_numbering_setup(row, 'new', prefix='O', start='1659', end='5000', fetcher=self.fetch))
         self.assertEqual(register.read_bytes(), self.payloads[record['install_files'][0]['path']])
         self.assertTrue((self.root / 'NX_Numbering_Settings_v1.0.ini').is_file())
         self.assertFalse(self.data.exists())
@@ -210,9 +214,11 @@ class UpdaterTests(unittest.TestCase):
         self.data.mkdir()
         ini = self.root / 'NX_Numbering_Settings_v1.0.ini'
         ini.write_bytes(b'[Numbering]\nRegistryFile=custom_history.xlsx\n')
-        with self.assertRaisesRegex(ValueError, 'Excel'):
-            u.apply_updates(self.scan(), self.fetch)
-        self.assertEqual([p.name for p in self.root.iterdir() if p.is_file()], [ini.name])
+        rows = self.scan()
+        u.apply_updates(rows, self.fetch)
+        self.assertIn('Excel', rows[0]['numbering_notice'])
+        self.assertEqual({p.name for p in self.root.iterdir() if p.is_file()}, {ini.name, 'NX_Number_Program_Folders.cs'})
+        self.assertEqual(ini.read_bytes(), b'[Numbering]\nRegistryFile=custom_history.xlsx\n')
         self.assertEqual(len(self.calls), 2)  # manifest + selected C# source
 
     def legacy_numbering(self, record, filename='NX_Numbering_Register_v1.0.xlsx', absolute=False):
@@ -231,7 +237,9 @@ class UpdaterTests(unittest.TestCase):
         target = self.root / '2. NX_Scripts'
         target.mkdir()
         self.settings['working_folder'] = str(target)
-        u.apply_updates(self.scan(), self.fetch)
+        row = self.scan()[0]
+        u.apply_updates([row], self.fetch)
+        u.commit_jobs(u.prepare_numbering_setup(row, 'new', prefix='O', start='1659', end='5000', fetcher=self.fetch))
         self.assertEqual({p.name for p in target.iterdir()}, {
             record['file'], record['config']['file'], record['install_files'][0]['file']})
         self.assertFalse(self.data.exists())
@@ -276,13 +284,14 @@ class UpdaterTests(unittest.TestCase):
         self.assertFalse((self.root / book.name).exists())
         self.assertEqual(len(self.calls), 2)
 
-    def test_numbering_lost_legacy_registry_blocks_installation_without_blank_history(self):
+    def test_numbering_lost_legacy_registry_allows_installation_without_blank_history(self):
         record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
         ini, book = self.legacy_numbering(record)
         book.unlink()
-        with self.assertRaisesRegex(ValueError, 'прежний Excel'):
-            u.apply_updates(self.scan(), self.fetch)
-        self.assertFalse((self.root / record['file']).exists())
+        rows = self.scan()
+        u.apply_updates(rows, self.fetch)
+        self.assertIn('прежний Excel', rows[0]['numbering_notice'])
+        self.assertTrue((self.root / record['file']).exists())
         self.assertFalse((self.root / ini.name).exists())
 
     def test_numbering_existing_script_without_settings_does_not_reset_history(self):
@@ -290,9 +299,10 @@ class UpdaterTests(unittest.TestCase):
         script = self.root / record['file']
         before = source('V1.03', '.cs')
         script.write_bytes(before)
-        with self.assertRaisesRegex(ValueError, 'прежний INI'):
-            u.apply_updates(self.scan(), self.fetch)
-        self.assertEqual(script.read_bytes(), before)
+        rows = self.scan()
+        u.apply_updates(rows, self.fetch)
+        self.assertIn('numbering_notice', rows[0])
+        self.assertEqual(u.unpack_script(script.read_bytes())[0], self.payloads[record['path']])
         self.assertFalse((self.root / record['install_files'][0]['file']).exists())
 
     def test_numbering_orphaned_legacy_backup_prevents_blank_registry(self):
@@ -300,9 +310,10 @@ class UpdaterTests(unittest.TestCase):
         self.data.mkdir()
         backup = self.data / (record['install_files'][0]['file'] + '.bak')
         backup.write_bytes(b'old history, lost ini')
-        with self.assertRaisesRegex(ValueError, 'прежний INI'):
-            u.apply_updates(self.scan(), self.fetch)
-        self.assertFalse((self.root / record['file']).exists())
+        rows = self.scan()
+        u.apply_updates(rows, self.fetch)
+        self.assertTrue((self.root / record['file']).exists())
+        self.assertFalse((self.root / record['install_files'][0]['file']).exists())
         self.assertEqual(backup.read_bytes(), b'old history, lost ini')
 
     def test_numbering_conflicting_destination_registry_is_not_overwritten(self):
@@ -310,8 +321,9 @@ class UpdaterTests(unittest.TestCase):
         ini, book = self.legacy_numbering(record)
         target = self.root / book.name
         target.write_bytes(b'different history')
-        with self.assertRaisesRegex(ValueError, 'разные Excel'):
-            u.apply_updates(self.scan(), self.fetch)
+        rows = self.scan()
+        u.apply_updates(rows, self.fetch)
+        self.assertIn('разные Excel', rows[0]['numbering_notice'])
         self.assertEqual(target.read_bytes(), b'different history')
         self.assertFalse((self.root / ini.name).exists())
 
@@ -321,16 +333,18 @@ class UpdaterTests(unittest.TestCase):
         script = self.root / record['file']
         before = source('V1.03', '.cs')
         script.write_bytes(before)
-        jobs = u.prepare_jobs(self.scan(), self.fetch)
+        row = self.scan()[0]
+        u.commit_jobs(u.prepare_jobs([row], self.fetch))
+        jobs = u._numbering_jobs(row, self.fetch)
         book.write_bytes(b'another number was just issued')
         with self.assertRaisesRegex(ValueError, 'изменились'):
             u.commit_jobs(jobs)
-        self.assertEqual(script.read_bytes(), before)
+        self.assertEqual(u.unpack_script(script.read_bytes())[0], self.payloads[record['path']])
         self.assertFalse((self.root / ini.name).exists())
         self.assertFalse((self.root / book.name).exists())
         self.assert_no_stages()
 
-    def test_numbering_active_legacy_lock_aborts_before_writes(self):
+    def test_numbering_active_legacy_lock_postpones_only_data(self):
         record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
         ini, book = self.legacy_numbering(record)
         lock = Path(str(book) + '.lock')
@@ -342,9 +356,11 @@ class UpdaterTests(unittest.TestCase):
                 raise PermissionError('legacy numbering is running')
             return original(path)
 
-        with patch.object(u, 'open_replace_guard', side_effect=busy), self.assertRaises(PermissionError):
-            u.apply_updates(self.scan(), self.fetch)
-        self.assertFalse((self.root / record['file']).exists())
+        rows = self.scan()
+        with patch.object(u, 'open_replace_guard', side_effect=busy):
+            u.apply_updates(rows, self.fetch)
+        self.assertIn('legacy numbering is running', rows[0]['numbering_notice'])
+        self.assertTrue((self.root / record['file']).exists())
         self.assertFalse((self.root / ini.name).exists())
         self.assertFalse((self.root / book.name).exists())
 
@@ -353,12 +369,13 @@ class UpdaterTests(unittest.TestCase):
         ini, book = self.legacy_numbering(record)
         changed = ini.read_bytes().replace(b'StartNumber=1659', b'StartNumber=2000')
         (self.root / ini.name).write_bytes(changed)
-        with self.assertRaisesRegex(ValueError, 'диапазон'):
-            u.apply_updates(self.scan(), self.fetch)
+        rows = self.scan()
+        u.apply_updates(rows, self.fetch)
+        self.assertIn('диапазон', rows[0]['numbering_notice'])
         self.assertEqual((self.root / ini.name).read_bytes(), changed)
         self.assertFalse((self.root / book.name).exists())
 
-    def test_numbering_migration_failure_rolls_back_script_and_copied_registry(self):
+    def test_numbering_migration_failure_rolls_back_data_but_keeps_updated_script(self):
         record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
         ini, book = self.legacy_numbering(record)
         script = self.root / record['file']
@@ -371,9 +388,11 @@ class UpdaterTests(unittest.TestCase):
                 raise OSError('simulated disk error')
             return install(stage, target)
 
-        with patch.object(u, '_install_staged', side_effect=fail_ini), self.assertRaises(RuntimeError):
-            u.apply_updates(self.scan(), self.fetch)
-        self.assertEqual(script.read_bytes(), before)
+        rows = self.scan()
+        with patch.object(u, '_install_staged', side_effect=fail_ini):
+            u.apply_updates(rows, self.fetch)
+        self.assertIn('simulated disk error', rows[0]['numbering_notice'])
+        self.assertEqual(u.unpack_script(script.read_bytes())[0], self.payloads[record['path']])
         self.assertFalse((self.root / ini.name).exists())
         self.assertFalse((self.root / book.name).exists())
         self.assertTrue(book.is_file())
@@ -390,12 +409,14 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual((self.root / book.name).read_bytes(), book.read_bytes())
         self.assertFalse(self.scan()[0]['eligible'])
 
-    def test_numbering_template_checksum_failure_leaves_no_installed_files(self):
+    def test_numbering_template_checksum_failure_keeps_installed_script(self):
         record = self.add_script('NX_Number_Program_Folders.cs', config=True, numbering=True)
+        row = self.scan()[0]
+        u.apply_updates([row], self.fetch)
         self.payloads[record['install_files'][0]['path']] += b'broken download'
         with self.assertRaisesRegex(ValueError, 'SHA-256'):
-            u.apply_updates(self.scan(), self.fetch)
-        self.assertEqual(list(self.root.iterdir()), [])
+            u.prepare_numbering_setup(row, 'new', prefix='O', start='1659', end='5000', fetcher=self.fetch)
+        self.assertEqual({p.name for p in self.root.iterdir()}, {record['file']})
 
     def test_concurrent_local_edit_aborts_before_any_write(self):
         self.add_script()

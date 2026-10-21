@@ -81,11 +81,11 @@ C:\ProgramData\2. NX_Scripts\NX_Numbering_Settings_v1.0.ini
 
 `RegistryFile` points to the XLSX history. It can be absolute or relative to the INI. Microsoft Excel is not required. The empty [template](../../templates) contains headers only and is for a first installation.
 
-Updater V1.18 downloads the INI and empty XLSX into the installed numbering script's folder only for a first installation with no previous settings or history.
+Updater V1.19 updates the code even without INI/Excel. It then migrates a compatible old pair from `C:\ProgramData\3_NX_DATA` or offers [separate setup](updater.md#numbering-data-setup). Migration errors do not undo the script update. Original files stay untouched.
 
-Existing files beside the script take precedence. Otherwise, the updater migrates the working pair from the former `C:\ProgramData\3_NX_DATA` folder, preserving the range, comments and allocation history. It places the migrated workbook beside the script and changes only `RegistryFile` in the copied INI if needed. The old files remain untouched. Close Excel and other numbering runs before migration.
+Select an existing `.xlsx`; it stays at its current path with all bytes unchanged. If INI is missing, enter your Prefix, StartNumber and EndNumber. A valid existing INI retains its range and comments; only RegistryFile changes. An empty template is downloaded beside the script only after explicitly choosing and confirming New numbering with your own range. Use [recovery from NX](number-program-folders.md#recovery) for lost history.
 
-Lost settings or history are never replaced with an empty register. Conflicting workbooks are not merged or overwritten. Restore the required INI and XLSX. If the current script version is installed but its data files are absent, manually select the missing-numbering-files row to retry migration of the old pair.
+Defer keeps the updated script without configuring data. A current script with missing data has a manually selectable setup row after another Check. Correct malformed existing INI settings manually. Close Excel and other numbering runs before migration or connection.
 
 `v1.0` is part of the stable INI/register filenames; keep it. See [numbering behavior and file changes](number-program-folders.md).
 

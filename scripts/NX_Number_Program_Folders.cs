@@ -1,7 +1,7 @@
 // Нумерация папок программ — Siemens NX / Designcenter.
-// SCRIPT_VERSION: V1.04
+// SCRIPT_VERSION: V1.05
 // Рабочий файл: NX_Number_Program_Folders.cs
-// Номера следуют порядку дерева; вставка сдвигает последующие папки.
+// Номера следуют порядку дерева; вставка и удаление сдвигают последующие папки.
 // Обрабатываются только папки Program Order с латинской заглавной O.
 // Зависимости: штатные NXOpen и библиотеки .NET среды NX; Microsoft Excel не нужен.
 // Запуск: Tools -> Journal -> Play. Сохраните .prt после успешного выполнения.
@@ -19,7 +19,7 @@ using Path = System.IO.Path;
 
 public class NX_Number_Program_Folders
 {
-    public const string SCRIPT_VERSION = "V1.04";
+    public const string SCRIPT_VERSION = "V1.05";
     private static readonly string Title = "Нумерация папок программ — " + SCRIPT_VERSION + " — " + AuthorCaption();
     private const string SettingsFileName = "NX_Numbering_Settings_v1.0.ini";
     private const string IdAttribute = "NX_NUM_V1_ID";
@@ -28,6 +28,7 @@ public class NX_Number_Program_Folders
     private const string Pending = "Зарезервирован";
     private const string Assigned = "Присвоен";
     private const string Cancelled = "Отменён";
+    private const string ReserveNote = "Резерв этого проекта. ";
 
     public static void Main(string[] args)
     {
@@ -81,8 +82,8 @@ public class NX_Number_Program_Folders
         Settings settings = Settings.Load(settingsPath);
         if (!File.Exists(settings.RegistryPath))
             throw new Exception("Не найден Excel-реестр:\n" + settings.RegistryPath +
-                "\n\nДля первого запуска положите сюда пустой реестр из комплекта. " +
-                "Если номера уже выдавались, восстановите рабочий реестр; не заменяйте его пустым.");
+                "\n\nОткройте настройку нумерации в апдейтере: подключите существующий реестр " +
+                "или восстановите историю из проектов NX. Для первой нумерации выберите создание нового реестра.");
 
         // Отдельная блокировка защищает от двух одновременно запущенных журналов NX.
         FileStream gate;
@@ -91,7 +92,8 @@ public class NX_Number_Program_Folders
         using (gate)
         {
             Registry registry = Registry.Load(settings.RegistryPath);
-            List<PlanItem> plan = BuildPlan(part, projectPath, folders, settings, registry);
+            List<Record> projectReserve;
+            List<PlanItem> plan = BuildPlan(part, projectPath, folders, settings, registry, out projectReserve);
             int newCount = 0, shiftedCount = 0, renameCount = 0;
             List<Record> newRecords = new List<Record>();
             List<RecordSnapshot> snapshots = new List<RecordSnapshot>();
@@ -105,9 +107,13 @@ public class NX_Number_Program_Folders
                     snapshots.Add(new RecordSnapshot(p.Record));
                 if (p.Folder.OriginalName != p.Record.Name) renameCount++;
             }
+            for (int i = 0; i < projectReserve.Count; i++)
+                if (!projectReserve[i].Note.StartsWith(ReserveNote, StringComparison.Ordinal))
+                    snapshots.Add(new RecordSnapshot(projectReserve[i]));
             if (newCount == 0 && renameCount == 0 && snapshots.Count == 0)
                 return "Все подходящие папки уже пронумерованы по порядку дерева.\n" +
-                    "Сохранено номеров: " + plan.Count.ToString() + ". Новых папок нет.\n\nРеестр:\n" + settings.RegistryPath;
+                    "Сохранено номеров: " + plan.Count.ToString() + ". Новых папок нет.\n" +
+                    "Номеров в резерве этого проекта: " + projectReserve.Count.ToString() + ".\n\nРеестр:\n" + settings.RegistryPath;
 
             // Резервирование на диске ПЕРЕД изменением NX предотвращает повторную
             // выдачу даже при аварийном закрытии NX между двумя сохранениями реестра.
@@ -135,6 +141,8 @@ public class NX_Number_Program_Folders
                     else if (p.Record.State == Pending)
                         registry.SetState(p.Record, Assigned, AppendNote(p.Record.Note, "Завершено после прерванного запуска."));
                 }
+                for (int i = 0; i < projectReserve.Count; i++)
+                    registry.ReserveForProject(projectReserve[i], assignedAt);
                 if (metadataChanged) registry.SaveAtomic();
             }
             catch (Exception ex)
@@ -161,6 +169,7 @@ public class NX_Number_Program_Folders
             message.Append("Готово. Новых папок: ").Append(newCount).Append(".\n");
             message.Append("Изменено номеров у прежних папок: ").Append(shiftedCount).Append(".\n");
             message.Append("Прежних папок без смены номера: ").Append(plan.Count - newCount - shiftedCount).Append(".\n");
+            message.Append("Номеров в резерве этого проекта: ").Append(projectReserve.Count).Append(".\n");
             int shown = 0;
             for (int i = 0; i < plan.Count; i++) if (plan[i].AssignmentChanged || plan[i].Folder.OriginalName != plan[i].Record.Name)
             {
@@ -214,14 +223,18 @@ public class NX_Number_Program_Folders
         return obj.GetStringUserAttribute(title, -1) ?? "";
     }
 
-    private static List<PlanItem> BuildPlan(Part part, string projectPath, List<Folder> folders, Settings settings, Registry registry)
+    private static List<PlanItem> BuildPlan(Part part, string projectPath, List<Folder> folders, Settings settings, Registry registry,
+        out List<Record> projectReserve)
     {
         // Копирование папки в NX копирует и атрибуты. Старую отметку учитываем
         // только один раз, предпочитая папку с точным зарегистрированным именем.
         Dictionary<string, Folder> owners = new Dictionary<string, Folder>(StringComparer.Ordinal);
+        Dictionary<string, bool> referencedIds = new Dictionary<string, bool>(StringComparer.Ordinal);
         for (int i = 0; i < folders.Count; i++)
         {
             Folder f = folders[i];
+            // Даже переименованная вручную папка не считается удалённой.
+            if (f.Id.Length > 0) referencedIds[f.Id] = true;
             if (f.Id.Length == 0 || !SamePath(f.Owner, projectPath)) continue;
             Folder owner;
             if (!owners.TryGetValue(f.Id, out owner) ||
@@ -255,12 +268,20 @@ public class NX_Number_Program_Folders
             plan.Add(p);
         }
 
-        // Перераспределяются только номера живых подходящих папок этого проекта.
-        // Чужие, удалённые, отменённые и не подтверждённые атрибутами записи
-        // остаются занятыми. Без вставки/перестановки старые номера сохраняются.
+        // Возвращаем в пул только подтверждённые выдачи ЭТОГО проекта, у которых
+        // больше нет папки в полном дереве. Отменённые/прерванные выдачи и чужие
+        // проекты не участвуют. Номер остаётся занят в общем Excel-реестре.
+        Dictionary<string, bool> unavailable = AllCamNames(part, targets);
+        for (int i = 0; i < registry.Records.Count; i++)
+        {
+            Record r = registry.Records[i];
+            if (r.State == Assigned && SamePath(r.ProjectPath, projectPath) &&
+                !referencedIds.ContainsKey(r.Id) && !unavailable.ContainsKey(r.Name) &&
+                r.Name == settings.Prefix + r.Number.ToString(CultureInfo.InvariantCulture))
+                slots.Add(r);
+        }
         slots.Sort(delegate(Record a, Record b) { return a.Number.CompareTo(b.Number); });
         int existingCount = slots.Count;
-        Dictionary<string, bool> unavailable = AllCamNames(part, targets);
         for (int i = 0; i < slots.Count; i++)
         {
             if (unavailable.ContainsKey(slots[i].Name))
@@ -299,6 +320,9 @@ public class NX_Number_Program_Folders
             p.AssignmentChanged = !Object.ReferenceEquals(p.PreviousRecord, p.Record);
             if (p.IsNewRecord) p.Record.OldName = p.Folder.OriginalName;
         }
+        projectReserve = new List<Record>();
+        for (int i = plan.Count; i < existingCount; i++)
+            if (slots[i].State == Assigned) projectReserve.Add(slots[i]);
         return plan;
     }
 
@@ -374,7 +398,8 @@ public class NX_Number_Program_Folders
         public string Prefix, RegistryPath;
         public static Settings Load(string path)
         {
-            if (!File.Exists(path)) throw new Exception("Не найден файл настроек:\n" + path);
+            if (!File.Exists(path)) throw new Exception("Не найден файл настроек:\n" + path +
+                "\n\nВ апдейтере выберите нумератор и откройте настройку данных после установки/обновления.");
             Dictionary<string, string> values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             string section = "";
             // UTF-8 с BOM — штатная кодировка файлов из комплекта.
@@ -543,9 +568,22 @@ public class NX_Number_Program_Folders
                 ": порядок дерева, «" + oldName + "» → " + r.Name +
                 ". Предыдущее назначение: " + r.When.ToString("dd.MM.yyyy HH:mm:ss", CultureInfo.InvariantCulture) +
                 ", исходное имя «" + r.OldName + "».";
-            r.Note = AppendNote(r.Note, entry);
+            string history = r.Note;
+            if (history.StartsWith(ReserveNote, StringComparison.Ordinal))
+                history = "Предыдущий " + Char.ToLowerInvariant(history[0]) + history.Substring(1);
+            r.Note = AppendNote(history, entry);
             r.OldName = oldName; r.When = when; r.State = Assigned;
             WriteRecord(r);
+        }
+        public void ReserveForProject(Record r, DateTime when)
+        {
+            if (r.Note.StartsWith(ReserveNote, StringComparison.Ordinal)) return;
+            string entry = ReserveNote + when.ToString("dd.MM.yyyy HH:mm:ss", CultureInfo.InvariantCulture) +
+                ": после изменения дерева номер не назначен папке; доступен только этому проекту.";
+            // Состояние остаётся «Присвоен»: схема XLSX совместима с прежними
+            // реестрами и восстановителем. Резерв определяется по дереву и владельцу.
+            r.Note = ShortText(entry + (String.IsNullOrEmpty(r.Note) ? "" : "\n" + r.Note), 32000);
+            Put(r.Row, 8, r.Note, false);
         }
         public void Restore(RecordSnapshot saved)
         {
