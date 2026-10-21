@@ -8,7 +8,7 @@ Numbers program folders using an XLSX register to retain allocation history.
 
 ## Latest release
 
-**V1.05 · 2026-10-20.** Deleted folders' numbers can now restore tree order within the same project. After deleting `O1689`, `O1690` becomes `O1689`; the unused tail remains reserved for that project. Updater V1.19 updates the code even without INI/XLSX and offers data setup afterwards.
+**V1.05 · 2026-10-21.** Deleted folders' numbers can now restore tree order within the same project. After deleting `O1689`, `O1690` becomes `O1689`; the unused tail remains reserved for that project. Updater V1.19 updates the code even without INI/XLSX and offers data setup afterwards.
 
 ## Features
 

@@ -10,7 +10,7 @@ The default working folder is `C:\ProgramData\NX_SCRIPTS`. An existing INI path 
 
 ## Latest release
 
-**V1.19 · 2026-10-20.** Code updates no longer depend on Excel/INI availability. Data migration/setup follows the update, with existing-register connection, new numbering or deferred setup.
+**V1.19 · 2026-10-21.** Code updates no longer depend on Excel/INI availability. Data migration/setup follows the update, with existing-register connection, new numbering or deferred setup.
 
 ## Features
 

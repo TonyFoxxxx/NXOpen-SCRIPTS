@@ -30,7 +30,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Numbering V1.05 and updater V1.19 · 2026-10-20
+### Latest update — Numbering V1.05 and updater V1.19 · 2026-10-21
 
 - Deleting a folder now restores numbering order: `O1690 → O1689`. The unused tail stays reserved for the same project.
 - The updater updates code without Excel/INI. Register connection, new numbering and data migration are separate; setup can be deferred.

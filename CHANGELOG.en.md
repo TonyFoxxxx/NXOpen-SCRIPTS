@@ -2,7 +2,7 @@
 
 [Русский](CHANGELOG.md) | **English**
 
-## 2026-10-20 — Numbering V1.05 and updater V1.19
+## 2026-10-21 — Numbering V1.05 and updater V1.19
 
 - Numbering now includes deleted folders when restoring tree order. Confirmed unused allocations are reused only in their original project; the unused tail stays reserved with an XLSX note.
 - Retained protection of foreign, cancelled and unconfirmed allocations, CAM name checks, manual renames, repeat-run stability and failure rollback.
