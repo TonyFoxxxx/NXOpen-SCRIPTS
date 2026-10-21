@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-21 — Setup sheets V2.61
+
+- Added Ctrl + wheel scaling for the operation table or tool list under the pointer in 5-percentage-point steps, without browser zoom. Table sliders are removed; their 60–300% range is preserved.
+- Separate lists and sheets retain independent scales; both columns of the shared tool catalog keep one common scale. HTML saving, undo and Original view preserve these settings.
+- The faceted-model wheel and +/− keys change scale by 5 percentage points instead of jumps dependent on wheel-delta magnitude and current scale.
+- MCS-arrow, outline and model controls are retained. Regenerate the HTML to apply the new behavior.
+
 ## 2026-10-21 — ESKD V1.40 and PDF export V1.13
 
 - ESKD repairs glyph bounds and associated metrics in the exact compatible external `v110` font, installing `v111` with a distinct family name. Outlines, advance widths, hinting and the character map are retained; the original copy is not overwritten.

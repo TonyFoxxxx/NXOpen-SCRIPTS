@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.60
+# SCRIPT_VERSION: V2.61
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -46,7 +46,8 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 Остальные установы и сохранённые ручные правки переносятся без пересоздания.
 «Инструменты проекта» — всегда один первый лист, при необходимости в две колонки.
 Если двух колонок недостаточно, таблица равномерно уменьшается до размеров листа.
-Размер текста таблиц задаётся ручными ползунками и не подбирается по содержимому.
+Масштаб таблицы под курсором задаётся Ctrl + колесо с шагом 5 процентных пунктов.
+Ползунки таблиц убраны; настройки стрелок СКС, контура и масштаба модели сохранены.
 Названия операций без переноса показываются одной строкой с многоточием; галочка включает перенос.
 Все остальные ячейки списков — одна строка без многоточия, с обрезкой по границе.
 В списках инструмента D содержит используемые корректоры Cutcom: D5 / D12.
@@ -59,7 +60,7 @@ HTML лежит в Карты Наладки / имя текущего .prt бе
 При первом запуске галочка снята; после включения доступны коэффициент 0 < k ≤ 1 и лимит треугольников.
 Без галочки текущий ракурс вписывается в окно NX и снимается для первого листа.
 При повторном выводе снимок заменяет прежнюю модель, а модель — прежний снимок.
-Мышь вращает модель; Shift + мышь сдвигает; колесо меняет масштаб.
+Мышь вращает модель; Shift + мышь сдвигает; колесо меняет масштаб на 5 процентных пунктов.
 Сетка, выбранный ракурс и изображение для печати хранятся в самом HTML.
 При k=1 допуски равны 0.01 мм и 3°; при уменьшении k допуски делятся на k.
 Угловой допуск ограничен 180°; предел всей модели задаётся в меню, по умолчанию 500 000.
@@ -111,7 +112,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.60"
+SCRIPT_VERSION = "V2.61"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -6365,7 +6366,7 @@ table[data-fit-family] td,table[data-fit-family] .numeric{font-size:inherit}
 table[data-fit-family] th{font-size:.85714286em;line-height:1.15}
 table[data-fit-family] .tree-name,table[data-fit-family] .name-cell{white-space:nowrap;overflow-wrap:normal;word-break:normal}
 
-/* Text size follows the manual slider; overflow does not change the font. */
+/* Text size follows the table wheel scale; overflow does not change the font. */
 .rows-area{min-width:0;width:100%}
 table[data-fit-family] th,table[data-fit-family] td{max-width:0}
 table[data-fit-family] td{overflow:hidden}
@@ -6699,6 +6700,11 @@ table[data-fit-family] tbody>tr.operation-selected>td{background:#dcf2ff}
 'use strict';
 const DOC = __DOCUMENT_CONTEXT__;
 const SLIDER_RESET_HINT = "Нажмите дважды для возврата к исходному масштабу";
+const WHEEL_SCALE_STEP = 5;
+function wheelScaleDirection(event){
+ const y=Number(event.deltaY),x=Number(event.deltaX)||0;
+ return Number.isFinite(y)&&y!==0&&Math.abs(y)>=Math.abs(x)?(y<0?1:-1):0;
+}
 // Edit the displayed percentage, including the model's logarithmic range.
 // An unfinished entry is UI only; saved HTML contains the committed value.
 const PercentInput=(()=>{
@@ -7317,14 +7323,14 @@ const ProjectModel=(()=>{
  document.addEventListener('lostpointercapture',event=>{if(drag&&event.pointerId===drag.id)finish(true);});
  document.addEventListener('contextmenu',event=>{if(active&&hit(event))event.preventDefault();});
  document.addEventListener('wheel',event=>{
-  if(!active||!hit(event))return;event.preventDefault();finish();const delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?400:1);
-  ProjectImage.set(ProjectImage.value()*Math.exp(-Math.max(-300,Math.min(300,delta))*.0015));commit();queue(true);
+  if(!active||!hit(event))return;const direction=wheelScaleDirection(event);if(!direction)return;event.preventDefault();finish();
+  ProjectImage.set(ProjectImage.value()+direction*WHEEL_SCALE_STEP);commit();queue(true);
  },{passive:false});
  document.addEventListener('keydown',event=>{
   if(event.key==='Escape'&&drag){event.preventDefault();finish(true);return;}if(event.target!==canvas)return;
   const arrows={ArrowLeft:[-.06,0],ArrowRight:[.06,0],ArrowUp:[0,-.06],ArrowDown:[0,.06]};
   if(arrows[event.key]){event.preventDefault();const [x,y]=arrows[event.key];if(event.shiftKey){view.pan[0]+=x*50;view.pan[1]+=y*50;invalidate();}else rotate(x,y);commit();queue(true);}
-  else if(['+','=','-','Home'].includes(event.key)){event.preventDefault();if(event.key==='Home')reset();else{ProjectImage.set(ProjectImage.value()*(event.key==='-'?1/1.1:1.1));commit();queue(true);}}
+  else if(['+','=','-','Home'].includes(event.key)){event.preventDefault();if(event.key==='Home')reset();else{ProjectImage.set(ProjectImage.value()+(event.key==='-'?-1:1)*WHEEL_SCALE_STEP);commit();queue(true);}}
  });
  document.addEventListener('click',event=>{const button=event.target.closest('[data-project-model-action]');if(button){if(button.dataset.projectModelAction==='fit')fit();else reset();}});
  window.addEventListener('blur',()=>finish(true));window.addEventListener('resize',()=>queue());
@@ -8003,7 +8009,7 @@ const PageScale=(()=>{
  function apply(page,key,controls=false){
   page.dataset.pageKey=key;page.style.setProperty('--data-scale',value(key)/100);
   if(key==='catalog')ProjectImage.apply(page);
-  page.querySelectorAll('table[data-fit-family]').forEach(t=>t.style.fontSize=7*factor(t)+'pt');
+  page.querySelectorAll('table[data-fit-family]').forEach(t=>{t.style.fontSize=7*factor(t)+'pt';t.title='Ctrl + колесо — масштаб таблицы, шаг 5%';});
   page.querySelectorAll('table.ops').forEach(applyWrap);
   if(!controls)return;
   let bar=page.querySelector(':scope>.page-controls');
@@ -8012,8 +8018,8 @@ const PageScale=(()=>{
   // Migrate the old model-only command to one reset button per physical sheet.
   bar.querySelectorAll('[data-project-model-action="reset"]').forEach(button=>button.remove());
   if(key==='cover'){bar.classList.add('setup-panel');const toolbar=scope.querySelector('.toolbar');if(toolbar&&toolbar.parentElement!==bar)bar.prepend(toolbar);}
-  control(bar,'page',key==='cover'?'Операции: строки и текст':'Строки и текст этого листа',value(key));
-  if(key==='cover'&&page.querySelector('table[data-fit-family="cover-tools"]'))control(bar,'tools','Инструменты: текст',toolScale);
+  // Also remove table sliders retained by previously saved HTML.
+  bar.querySelectorAll('input[data-scale-target="page"],input[data-scale-target="tools"]').forEach(input=>input.closest('label')?.remove());
   if(key==='catalog'){
    if(page.querySelector('.project-isometry img,.project-model'))control(bar,'project-image',ProjectModel.active?'Масштаб модели детали':'Масштаб изображения детали',ProjectImage.value());
    else bar.querySelector('input[data-scale-target="project-image"]')?.closest('label')?.remove();
@@ -8042,15 +8048,30 @@ const PageScale=(()=>{
   if(!event.target.matches('.page-controls input[type=range]'))return;
   const target=event.target.dataset.scaleTarget;
   // The shared panel also contains MCS controls; only handle our scale targets.
-  if(!['page','tools','project-image'].includes(target))return;
+  if(target!=='project-image')return;
   const page=event.target.closest('.page'),key=page.dataset.pageKey;
   const percent=PercentInput.value(event.target);
-  if(target==='project-image')ProjectImage.set(percent);else if(target==='tools')toolScale=normalized(percent);else scales[key]=normalized(percent);
+  ProjectImage.set(percent);
   // Operation pages are rebuilt; keep the active slider in the same screen position.
   const rect=page.getBoundingClientRect();
   CardFlow.reflow();markChanged();const next=scope.querySelector('.setup-pages>[data-page-key="'+key+'"]');
   if(next){const after=next.getBoundingClientRect();window.scrollBy(after.left-rect.left,after.top-rect.top);if(!PercentInput.manual(event.target))next.querySelector('.page-controls input[data-scale-target="'+target+'"]')?.focus({preventScroll:true});}
  });
+ scope.addEventListener('wheel',event=>{
+  if(!event.ctrlKey||event.defaultPrevented)return;
+  const table=event.target.closest?.('table[data-fit-family]'),page=table?.closest('.page');
+  if(!page||!scope.contains(page))return;
+  const direction=wheelScaleDirection(event);if(!direction)return;
+  // Cancel native browser zoom even when the table has reached its limit.
+  event.preventDefault();
+  const key=page.dataset.pageKey,tools=table.dataset.fitFamily==='cover-tools';
+  const before=tools?toolScale:value(key),after=normalized(before+direction*WHEEL_SCALE_STEP);
+  if(after===before)return;
+  if(tools)toolScale=after;else scales[key]=after;
+  const rect=page.getBoundingClientRect();CardFlow.reflow();markChanged();
+  const next=scope.querySelector('.setup-pages>[data-page-key="'+key+'"]');
+  if(next){const afterRect=next.getBoundingClientRect();window.scrollBy(afterRect.left-rect.left,afterRect.top-rect.top);}
+ },{passive:false});
  scope.addEventListener('change',event=>{
   if(!event.target.matches('.page-controls [data-page-wrap]'))return;
   const page=event.target.closest('.page'),key=page.dataset.pageKey,rect=page.getBoundingClientRect();wraps[key]=event.target.checked;

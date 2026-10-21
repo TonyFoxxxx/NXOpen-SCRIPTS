@@ -8,12 +8,14 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.60 · 2026-10-21**
+**V2.61 · 2026-10-21**
 
-- Fixed the initial display of saved setup selections: checkmarks are visible as soon as the dialog opens.
-- The first click changes only the clicked checkmark; other saved checkmarks remain visible.
+- Ctrl + wheel over an operation table or tool list changes its scale by 5 percentage points: 100 → 105 → 110%. Tool lists and operation tables on different sheets have independent scales. Both columns of the shared tool catalog retain one common scale.
+- Table text/row sliders are removed. The table range remains 60–300%; this gesture does not zoom the browser page.
+- The wheel over the faceted model changes its scale by 5 percentage points regardless of wheel-delta magnitude. The +/− keys use the same step.
+- MCS-arrow, outline and model-scale controls, HTML saving, undo and Original view are retained.
 
-Reopen setup selection after updating. Existing saved preferences remain in use. See the [changelog](../../CHANGELOG.en.md).
+Regenerate the HTML after updating; an already opened file does not update itself. Confirmed scales from the previous card are preserved when it is updated. See the [changelog](../../CHANGELOG.en.md).
 
 ## Building the sheet in NX
 
@@ -95,7 +97,7 @@ If even one Cycle point has no resolved depth, Zmin stays blank for the whole op
 - Click the enlarged arrow before a Carrier name to collapse it: its heading stays in the list while all tools and nested groups are hidden. Click again to expand. The arrow rotates smoothly over 160 ms, down when expanded and right when collapsed. Only the relevant tool list is updated.
 - The separate «Инструмент» (Tools) block contains only tools outside Carriers. Its arrow hides or shows only those rows, leaving Carriers and their nested groups in their current states.
 - Collapsing is independent in each setup's tool list and the shared project catalog, and is saved with the HTML. Printing omits the entire collapsed Tools block or Carrier, including the heading that remains on screen. **Original view** expands the blocks in the corresponding list.
-- Hide operation columns and set table scale and column widths manually. **«Автоширина» (Auto width)** distributes column widths without changing the font. Sliders set text size; there is no automatic fitting to text length or two-space reserve. Layout of the table block as a whole within its available area is retained.
+- Hide operation columns and set table scale and column widths manually. **«Автоширина» (Auto width)** distributes column widths without changing the font. Ctrl + wheel over the desired table sets row/text scale in 5-percentage-point steps; there is no automatic fitting to text length or two-space reserve. Layout of the table block as a whole within its available area is retained.
 - **Wrap operation names** affects only the operation name: with it off, the name stays on one line with an ellipsis when space runs out; with it on, the name wraps. All other values in operation and tool tables stay on one line without wrapping or ellipses; overflow is clipped at the cell edge. Adjust column width or scale to make room; these settings are saved in HTML.
 - Move selected operations onto the setup's first sheet or back using buttons or drag-and-drop. The optional limit is 25 operations on the first sheet; available space also limits placement.
 - Operations paginate automatically, with repeated group headings and continuous page numbers.
@@ -104,8 +106,8 @@ If even one Cycle point has no resolved depth, Zmin stays blank for the whole op
 - Double-click any slider label to reset only that parameter to 100%, without selecting text. Hover for its tooltip. Click the percentage to type an integer within the control's range; Enter or leaving the field applies it, Esc cancels.
 - Add image cells up to a 6 × 6 grid where space permits. Paste your own images with Ctrl+V; delete, move or swap cells. Multiple cells can be selected. Add/delete/move operations participate in Undo.
 - Resize cell boundaries and image-block height, or align cells.
-- Rotate the overall 3D model with the mouse, pan with Shift and zoom with the wheel. **«Вписать» (Fit)** and **«Исходный вид» (Original view)** are available. Model scale and placement are saved and appear in print.
-- While the model rotates or pans, the tool table's position and available area update in real time. Automatic font fitting runs neither during movement nor after mouse release; use the slider to set the scale.
+- Rotate the overall 3D model with the mouse, pan with Shift and zoom with the wheel in 5-percentage-point steps. **«Вписать» (Fit)** and **«Исходный вид» (Original view)** are available. Model scale and placement are saved and appear in print.
+- While the model rotates or pans, the tool table's position and available area update in real time. Automatic font fitting runs neither during movement nor after mouse release; use Ctrl + wheel over the table to set its scale.
 - **Original view** above a sheet restores that sheet's original elements, sizes, layout and settings. Deleted original images return and subsequently added cells are removed. The project sheet restores its initial model view; a setup sheet also restores MCS arrows, images and operation placement. Notes, locating information, global column settings and other sheets are retained. The original state is embedded in HTML, and the reset can be undone in one step.
 - Use **«Отменить» (Undo)** in the top bar, **«Отменить действие» (Undo action)** by a setup, or Ctrl+Z outside a text field. Up to 100 actions, including image deletion, can be undone in sequence. Saving retains history; closing or reloading the HTML clears it. Inside a text field, Ctrl+Z undoes typing.
 - When opened by NX, the sheet saves back to its source HTML automatically about a second after editing pauses. No initial file selection is needed. **«Сохранить карту» (Save sheet)** or Ctrl+S saves immediately.
