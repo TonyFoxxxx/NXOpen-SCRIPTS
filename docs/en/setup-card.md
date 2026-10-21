@@ -8,14 +8,12 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.58 · 2026-10-16**
+**V2.59 · 2026-10-21**
 
-- Completely removed automatic font fitting to operation and tool table contents, along with the two-space reserve after the longest name. Table scale is controlled manually with the sliders.
-- With «Переносить названия операций» (Wrap operation names) off, an operation name stays on one line and uses an ellipsis if it does not fit. With the checkbox on, only the operation name wraps.
-- All other columns in operation and tool tables stay on one line without wrapping or ellipses; text that does not fit is clipped at the cell edge.
-- The table beside the faceted model continues moving in real time. Carrier and Tools groups, print rules, menu memory, D and Zmin are retained.
+- Swapped the «СКС» (MCS) and Zmin columns in the operation table: Zmin now follows the operation name, and MCS is the last column.
+- Headers, values and widths move together; saved visibility and width settings remain associated with their columns.
 
-Regenerate the HTML sheet with the updated script to apply the new text-display rules. See the [changelog](../../CHANGELOG.en.md).
+Regenerate the HTML sheet with the updated script to apply the new column order. See the [changelog](../../CHANGELOG.en.md).
 
 ## Building the sheet in NX
 
@@ -65,14 +63,14 @@ The operation table retains program-folder hierarchy.
 | Column | Data |
 | --- | --- |
 | Operation | Name and toolpath state: calculated, missing, needs recalculation, suppressed or unavailable. |
-| MCS | Operation machining coordinate system. |
+| Zmin | Minimum calculated toolpath position along the actual tool axis, relative to the operation's MCS origin, in CAM-part units. |
 | Tool change | Marks a transition to a different tool. |
 | Tool / T | Tool name and number. |
 | D | The operation's own Cutcom register. Immediately after T; populated only when the tool number uses two or more distinct D values across the CAM project. |
 | Time | Toolpath time; groups show the total for active toolpaths. |
 | Feed / spindle speed | CAM machining parameters. |
 | Wall / floor stock | Stock values where supported by the operation. |
-| Zmin | Minimum calculated toolpath position along the actual tool axis, relative to the operation's MCS origin, in CAM-part units. |
+| MCS | Operation machining coordinate system. |
 
 The project catalog and setup tool lists show the same complete set of Cutcom registers used by a tool number T across the CAM project, deduplicated and sorted in ascending order: `D5 / D12`. Operations outside the selected setups and suppressed operations are included. Different D values do not create extra rows for the same tool.
 

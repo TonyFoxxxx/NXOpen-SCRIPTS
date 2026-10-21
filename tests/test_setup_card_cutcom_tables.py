@@ -49,11 +49,11 @@ class CutcomTableTests(unittest.TestCase):
 
     def test_operation_columns_and_width_metadata_remain_aligned(self):
         row = dict(kind='operation', tag='op-77', name='MILL', tool_name='MILL_D10', tool_number=5,
-                   cutcom_register=12, show_cutcom=True)
+                   cutcom_register=12, show_cutcom=True, mcs='MCS_MAIN', zmin=-12.5)
         markup = CARD.operations_table([row], dict(operation_rows=[row]))
         parsed = CARD.CardMarkup(markup)
         table = next(n for n in parsed.nodes if n['tag'] == 'table')
-        self.assertEqual(table['attrs']['data-ops-schema'], '4')
+        self.assertEqual(table['attrs']['data-ops-schema'], '5')
         operation = next(n for n in parsed.nodes if n['attrs'].get('data-kind') == 'operation')
         self.assertEqual(operation['attrs']['data-operation-tag'], 'op-77')
         self.assertEqual(len(table['attrs']['data-min-mm'].split(',')), 12)
@@ -61,6 +61,15 @@ class CutcomTableTests(unittest.TestCase):
             cells = [n for n in parsed.nodes if n['tag'] == kind]
             self.assertEqual([n['attrs']['data-column-id'] for n in cells], CARD.OP_KEYS)
         self.assertEqual(CARD.OP_KEYS[4:6], ['number', 'cutcom'])
+        self.assertEqual(CARD.OP_KEYS[1], 'zmin')
+        self.assertEqual(CARD.OP_KEYS[11], 'mcs')
+        cells = [n for n in parsed.nodes if n['tag'] == 'td']
+        self.assertEqual(parsed.text(cells[1]), '-12.5')
+        self.assertEqual(parsed.text(cells[11]), 'MCS_MAIN')
+        self.assertEqual(cells[1]['attrs']['class'], 'numeric')
+        self.assertEqual(cells[11]['attrs']['class'], 'name-cell')
+        floors = table['attrs']['data-min-mm'].split(',')
+        self.assertEqual((floors[1], floors[11]), ('7', '5'))
 
 
 if __name__ == '__main__':

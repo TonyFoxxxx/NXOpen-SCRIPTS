@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.58
+# SCRIPT_VERSION: V2.59
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -111,7 +111,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.58"
+SCRIPT_VERSION = "V2.59"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -6815,7 +6815,7 @@ function setFieldValue(el,value){
  else el.textContent=value;
 }
 
-const OP_COLUMNS=[['name','Операции'],['mcs','СКС'],['change','Смена инструмента'],['tool','Инструмент'],['number','T.'],['cutcom','D'],['time','Время'],['feed','Подача'],['speed','Обороты'],['stock','Припуск на стенки'],['floor_stock','Припуск на пол'],['zmin','Zmin']];
+const OP_COLUMNS=[['name','Операции'],['zmin','Zmin'],['change','Смена инструмента'],['tool','Инструмент'],['number','T.'],['cutcom','D'],['time','Время'],['feed','Подача'],['speed','Обороты'],['stock','Припуск на стенки'],['floor_stock','Припуск на пол'],['mcs','СКС']];
 const ColumnOptions=(()=>{
  const meta=document.querySelector('meta[name="nx-operation-options"]'),list=document.getElementById('operation-column-list');
  let hidden=new Set(),wrapped=false;
@@ -6841,7 +6841,8 @@ function migrateOperationTables(root){
   const head=table.tHead?.rows[0];if(!head)return;
   const hasZmin=[...head.cells].some(c=>c.dataset.columnId==='zmin'),hasCutcom=[...head.cells].some(c=>c.dataset.columnId==='cutcom');
   const legacy=!hasZmin&&Number(table.dataset.opsSchema||0)<3&&head.cells.length===11;
-  operationTableSchemas.set(table,legacy?1:(hasCutcom?4:(hasZmin?3:2)));
+  const swapped=head.cells[1]?.dataset.columnId==='zmin';
+  if(!operationTableSchemas.has(table))operationTableSchemas.set(table,swapped?5:(legacy?1:(hasCutcom?4:(hasZmin?3:2))));
   if(legacy){
    for(const row of table.rows)row.cells[3]?.remove();table.querySelectorAll('colgroup>col')[3]?.remove();
    const floor=table.dataset.minMm?.split(',');if(floor?.length===11){floor.splice(3,1);table.dataset.minMm=floor.join(',');}table.dataset.flexCols='0';
@@ -6855,6 +6856,12 @@ function migrateOperationTables(root){
    const col=document.createElement('col');col.dataset.columnId='cutcom';table.querySelector('colgroup').insertBefore(col,table.querySelectorAll('colgroup>col')[5]);
    for(const row of table.rows){const cell=document.createElement(row.parentElement===table.tHead?'th':'td');cell.dataset.columnId='cutcom';if(cell.tagName==='TD')cell.className='numeric';const span=document.createElement('span');span.className='cell-text';cell.append(span);row.insertBefore(cell,row.cells[5]);}
    const floor=table.dataset.minMm.split(',');floor.splice(5,0,'7');table.dataset.minMm=floor.join(',');
+  }
+  if(!swapped){
+   for(const parent of [table.querySelector('colgroup'),...table.rows]){
+    const mcs=parent.children[1],zmin=parent.children[11];parent.insertBefore(zmin,mcs);parent.append(mcs);
+   }
+   const floor=table.dataset.minMm.split(',');[floor[1],floor[11]]=[floor[11],floor[1]];table.dataset.minMm=floor.join(',');
   }
   [...table.querySelectorAll('colgroup>col')].forEach((col,i)=>col.dataset.columnId=OP_COLUMNS[i][0]);
   [...table.rows].forEach(row=>[...row.cells].forEach((cell,i)=>cell.dataset.columnId=OP_COLUMNS[i][0]));
@@ -6874,7 +6881,7 @@ function migrateOperationTables(root){
     text.textContent=value;text.title=value;cell.title=value;
    }
   }
-  table.dataset.opsSchema='4';table.dataset.flexCols='0';ColumnOptions.apply(table);
+  table.dataset.opsSchema='5';table.dataset.flexCols='0';ColumnOptions.apply(table);
  });
  root.querySelectorAll('template').forEach(t=>migrateOperationTables(t.content));
 }
@@ -7795,10 +7802,11 @@ function readColumnWidths(data){
   if(!source){
    if(family==='operations'){
     const schema=operationTableSchemas.get(table)||Number(table.dataset.opsSchema)||2;
-    if(widths.length===12)source=keys;
+    const legacyKeys=keys.slice();[legacyKeys[1],legacyKeys[11]]=[legacyKeys[11],legacyKeys[1]];
+    if(widths.length===12)source=schema>=5?keys:legacyKeys;
     else if(widths.length===11&&schema===1)source=['name','mcs','change','status','tool','number','time','feed','speed','stock','floor_stock'];
-    else if(widths.length===11)source=keys.filter(k=>k!=='cutcom');
-    else if(widths.length===10)source=keys.filter(k=>k!=='cutcom'&&k!=='zmin');
+    else if(widths.length===11)source=legacyKeys.filter(k=>k!=='cutcom');
+    else if(widths.length===10)source=legacyKeys.filter(k=>k!=='cutcom'&&k!=='zmin');
    }else if(widths.length===2)source=keys.filter(k=>k!=='cutcom');
    else if(widths.length===3)source=keys;
   }
@@ -9439,8 +9447,8 @@ document.getElementById('setup-jump').addEventListener('change',event=>{
 TABLE_ROW_MM = 3.8
 COVER_TOOL_ROW_MM = 3.8
 COVER_TOOL_WIDTH_MM = 77.025
-OP_KEYS = ['name', 'mcs', 'change', 'tool', 'number', 'cutcom', 'time', 'feed', 'speed', 'stock', 'floor_stock', 'zmin']
-OP_HEADERS = ['Операции', 'СКС', '', 'Инструмент', 'T.', 'D', 'Время', 'Подача', 'Обороты', 'Припуск на стенки', 'Припуск на пол', 'Zmin']
+OP_KEYS = ['name', 'zmin', 'change', 'tool', 'number', 'cutcom', 'time', 'feed', 'speed', 'stock', 'floor_stock', 'mcs']
+OP_HEADERS = ['Операции', 'Zmin', '', 'Инструмент', 'T.', 'D', 'Время', 'Подача', 'Обороты', 'Припуск на стенки', 'Припуск на пол', 'СКС']
 TOOL_ICON = '<svg viewBox="0 0 12 18" aria-hidden="true"><rect x="3" y="1" width="6" height="15" rx="1" fill="none" stroke="currentColor"/><path d="M3 8L9 3M3 12L9 7M3 16L9 11" fill="none" stroke="currentColor"/></svg>'
 
 
@@ -9535,12 +9543,12 @@ def operation_layout(report):
                     extra += 4.5
                     value = str(value) + ' · продолжение'
             samples[i].append((text_width_em(value, row['kind'] == 'group' or i == 3 or (i == 0 and bool(re.search(r'(?<![^\W_])R0(?![^\W_]|[.,][0-9])', str(value), re.IGNORECASE)))), extra))
-    minima = (8, 5, 4, 8, 4, 7, 7, 7, 7, 7, 7, 7)
+    minima = (8, 7, 4, 8, 4, 7, 7, 7, 7, 7, 7, 5)
     widths = column_layout_widths(samples, 193.4, 7, minima, (0,))
     attrs, cols = layout_attributes('operations', 7, widths, 7, minima, (0,))
     for key in OP_KEYS:
         cols = cols.replace('<col style=', '<col data-column-id="%s" style=' % key, 1)
-    return attrs + ' data-ops-schema="4"', cols
+    return attrs + ' data-ops-schema="5"', cols
 
 
 def tool_layout(tools, width_mm, base_pt, family, name_first=True, name_header=None, fit_scale=1.0):
@@ -9613,13 +9621,13 @@ def zmin_text(value):
 def operation_cells(row, report):
     if row['kind'] == 'group':
         return [row['name'], '', '', '', '', '', time_text(row.get('seconds')), '', '', '', '', '']
-    return [row['name'], row.get('mcs', ''), '', row.get('tool_name') or '—',
+    return [row['name'], zmin_text(row.get('zmin')), '', row.get('tool_name') or '—',
             number_text(row.get('tool_number')),
             cutcom_cell_text(row.get('cutcom_register')) if row.get('show_cutcom') else '',
             time_text(row.get('seconds')),
             feed_text(row, report), number_text(row.get('speed')) + (' об/мин' if row.get('speed') is not None else ''),
             stock_text(row.get('stock')), '' if row.get('floor_stock_mode') == 'not_applicable' else stock_text(row.get('floor_stock')),
-            zmin_text(row.get('zmin'))]
+            row.get('mcs', '')]
 
 
 def path_symbol(row):
@@ -9642,7 +9650,7 @@ def operation_row_html(row, report):
     classes = 'group-row' if group else ('suppressed-row' if row.get('suppressed') else '')
     cells = []
     for index, value in enumerate(values):
-        css = 'name-cell' if index in (0, 1, 3) else 'numeric'
+        css = 'name-cell' if index in (0, 3, 11) else 'numeric'
         content = escaped(value)
         if index == 0:
             if not group:

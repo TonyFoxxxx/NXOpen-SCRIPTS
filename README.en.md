@@ -14,7 +14,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 | File | Version | Purpose | Guide |
 | --- | --- | --- | --- |
-| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.58 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
+| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.59 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.47 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.04 | Add minimum Z to operation names, including supported spot-drilling and through-hole drilling cycles. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
@@ -30,11 +30,10 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — ESKD V1.38 · 2026-10-21
+### Latest update — Setup sheets V2.59 · 2026-10-21
 
-- Compact spacing around the chamfer “x” separator: 1/7 of text height.
-- Tolerances use 3 decimal places for existing and future dimensions in the current part.
-- [All changes](docs/en/eskd.md#latest-release).
+- Swapped the «СКС» (MCS) and Zmin columns in the operation table: Zmin follows the operation name, and MCS is the last column.
+- [All changes](docs/en/setup-card.md#latest-release).
 
 ## Installation
 

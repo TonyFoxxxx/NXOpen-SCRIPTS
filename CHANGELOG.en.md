@@ -2,6 +2,11 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-21 — Setup sheets V2.59
+
+- Swapped the «СКС» (MCS) and Zmin columns in the operation table: Zmin follows the operation name, and MCS is the last column.
+- Headers, values and widths move together. Saved visibility and width settings follow the new order when updating a sheet.
+
 ## 2026-10-21 — ESKD V1.38
 
 - Chamfer Dimension now sets separator spacing independently: 1/7 of text height, nominally 0.5 mm at 3.5 mm. Chamfer form, angle and values are retained.
