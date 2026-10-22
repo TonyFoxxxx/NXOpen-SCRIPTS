@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.61
+# SCRIPT_VERSION: V2.62
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -16,7 +16,10 @@ Zmin использует выделение до открытия меню
 или все операции проекта, если выделение пустое, как отдельный журнал Zmin.
 Каждый ракурс вписывается по геометрии IPW и видимой оснастки и сразу снимается.
 Одна выбранная папка — один установ со всеми её операциями и вложенными папками.
-Имя, ракурсы и IPW — от MCS первой операции внутри выбранной папки.
+Имя установа и заготовка — от MCS первой операции внутри выбранной папки.
+Кнопка «Выводить несколько MCS» открывает выбор привязок всех выбранных установов.
+Каждая отмеченная MCS даёт три пары IPW / NO IPW со своими осями и полным названием.
+Первый набор видов — на основном листе, остальные — на отдельных листах того же установа.
 Таблицы карты содержат выбранные операции, независимо от источника IPW.
 Zmin — минимум рассчитанной траектории по фактической оси ToolAxis каждого движения,
 относительно начала СКС операции, в единицах CAM-детали.
@@ -112,7 +115,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.61"
+SCRIPT_VERSION = "V2.62"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -1838,7 +1841,7 @@ class ExportCancelled(Exception):
 
 def confirm_mixed_mcs(nx, groups, reference, report):
     """Confirm mixed setups before changing the view or creating any files."""
-    different = len({mcs_number_key(group.Name) for group in groups}) > 1
+    different = len({object_key(group) for group in groups}) > 1
     decision = report['mixed_mcs'] = {
         'present': different,
         'names': [str(group.Name) for group in groups],
@@ -1849,13 +1852,17 @@ def confirm_mixed_mcs(nx, groups, reference, report):
     if not different:
         return
     answer = ask_warning(nx,
-        'В установе присутствуют разные MCS. Продолжить создание карты наладки?')
+        'В установе присутствует несколько MCS. Продолжить создание карты наладки?',
+        allow_multiple_mcs=True)
+    if answer == 'multiple':
+        decision['decision'] = 'multiple'
+        return 'multiple'
     decision['decision'] = 'yes' if answer is True else ('no' if answer is False else 'closed')
     if answer is not True:
         raise ExportCancelled('Создание карты наладки отменено пользователем.')
 
 
-def resolve_context(nx, ui, part, report, selected=None):
+def resolve_context(nx, ui, part, report, selected=None, confirm=True):
     """Члены папки берутся рекурсивно, порядок — из ветки ProgramOrder."""
     selected = cam_selection(nx, ui, part, report) if selected is None else list(selected)
     source = "selected"
@@ -1912,11 +1919,14 @@ def resolve_context(nx, ui, part, report, selected=None):
     report["selected_nodes"] = [obj.Name for obj in selected]
     report["mcs_names"] = [g.Name for g in groups.values()]
     report["operation_count"] = len(operations)
-    confirm_mixed_mcs(nx, list(groups.values()), group, report)
     first_project_op = next((n['object'] for n in tree_nodes(program) if n['children'] is None), None)
     first_project_mcs = nearest_mcs(nx, first_project_op) if first_project_op is not None else None
-    return {"mcs": group, "source": source, "tree": tree, "operations": operations,
-            "selected_objects": selected, "project_first_mcs": first_project_mcs, "program_tree": program}
+    context = {"mcs": group, "mcs_groups": list(groups.values()), "source": source,
+               "tree": tree, "operations": operations, "selected_objects": selected,
+               "project_first_mcs": first_project_mcs, "program_tree": program}
+    if confirm:
+        choose_setup_mcs(nx, [{'context': context, 'report': report}])
+    return context
 
 
 def navigator_folder_path(tree, target, prefix=()):
@@ -1958,7 +1968,8 @@ def resolve_ipw_source(nx, part, context, report):
                   'operation_scope': 'selected_first_mcs_operations'}
         context['ipw_source'] = source
     report['ipw_source'] = {
-        'method': 'first_operation_mcs_in_selected_folder',
+        'method': ('selected_mcs_in_selected_folder' if source['operation_scope'] == 'selected_mcs_operations'
+                   else 'first_operation_mcs_in_selected_folder'),
         'reference_mcs_name': str(context['mcs'].Name),
         'mcs_name': str(source['mcs'].Name), 'mcs_tag': object_key(source['mcs']),
         'operation_scope': source['operation_scope'],
@@ -2284,6 +2295,140 @@ def parse_project_model_triangle_limit(value):
     return int(text)
 
 
+
+class SetupMcsChoices:
+    """Independent MCS choices; every selected setup must retain at least one."""
+    def __init__(self, rows, selected=None):
+        self.rows = rows
+        self.by_key = {row['key']: row for row in rows}
+        self.selected = {key for key in (selected or ()) if key in self.by_key and not self.disabled(key)}
+
+    def disabled(self, key):
+        return self.by_key[key]['parent'] is None
+
+    def toggle(self, key, checked):
+        if self.disabled(key):
+            return False
+        if checked:
+            self.selected.add(key)
+        else:
+            self.selected.discard(key)
+        return True
+
+    def values(self):
+        return [[row['object'] for row in self.rows
+                 if row['parent'] == setup['key'] and row['key'] in self.selected]
+                for setup in self.rows if setup['parent'] is None]
+
+    def complete(self):
+        return bool(self.values()) and all(self.values())
+
+
+def setup_mcs_rows(jobs):
+    rows, selected = [], []
+    for index, job in enumerate(jobs, 1):
+        context, report = job['context'], job['report']
+        key = 'setup-%d' % index
+        name = setup_label(report) or str(context['mcs'].Name)
+        folder = ' / '.join(report.get('selected_folder_path', ())) or report.get('selected_folder', '')
+        rows.append(dict(key=key, parent=None, name='Установ «%s»%s' % (
+            name, ' — ' + folder if folder else ''), object=None, operation_count=1))
+        groups = context.get('mcs_groups', [context['mcs']])
+        names = [str(group.Name) for group in groups]
+        for group in groups:
+            child = key + ':' + object_key(group)
+            label = str(group.Name)
+            if names.count(label) > 1:
+                label += ' [ID %s]' % object_key(group)
+            rows.append(dict(key=child, parent=key, name=label, object=group, operation_count=1))
+            if object_key(group) == object_key(context['mcs']):
+                selected.append(child)
+    return rows, selected
+
+
+def ask_setup_mcs(nx, jobs):
+    rows, selected = setup_mcs_rows(jobs)
+    uf_ui = nx.UF.UFSession.GetUFSession().Ui
+    lock_source = nx.UF.UFConstants.UF_UI_FROM_CUSTOM
+    uf_ui.LockUgAccess(lock_source)
+    try:
+        values = show_setup_folders(rows, selected=selected, mcs_mode=True)
+    finally:
+        uf_ui.UnlockUgAccess(lock_source)
+    if values is None:
+        raise ExportCancelled('Выбор MCS отменён пользователем.')
+    return values
+
+
+def choose_setup_mcs(nx, jobs):
+    """Resolve the batch first so the new dialog can show every chosen setup."""
+    choices = [[job['context']['mcs']] for job in jobs]
+    for job in jobs:
+        context, report = job['context'], job['report']
+        if confirm_mixed_mcs(nx, context.get('mcs_groups', [context['mcs']]),
+                             context['mcs'], report) == 'multiple':
+            choices = ask_setup_mcs(nx, jobs)
+            break
+    if len(choices) != len(jobs) or any(not selected for selected in choices):
+        raise ValueError('Выберите хотя бы одну MCS для каждого установа.')
+    for job, selected in zip(jobs, choices):
+        context, report = job['context'], job['report']
+        available = context.get('mcs_groups', [context['mcs']])
+        keys = {object_key(group) for group in selected}
+        if not keys <= {object_key(group) for group in available}:
+            raise ValueError('Выбранная MCS не принадлежит установу.')
+        context['capture_mcs'] = [group for group in available if object_key(group) in keys]
+        report['selected_mcs'] = [{'name': str(group.Name), 'tag': object_key(group)}
+                                  for group in context['capture_mcs']]
+        context['view_contexts'] = setup_view_contexts(nx, context)
+
+
+def setup_view_contexts(nx, context):
+    """Keep operation tables intact; isolate capture/IPW sources by actual MCS."""
+    groups = context.get('mcs_groups', [context['mcs']])
+    selected = context.get('capture_mcs', [context['mcs']])
+    owners = [(op, nearest_mcs(nx, op)) for op in context['operations']]
+    result = []
+    for group in selected:
+        operations = [op for op, owner in owners
+                      if owner is not None and object_key(owner) == object_key(group)]
+        if not operations:
+            raise RuntimeError('Для MCS «%s» в выбранном установе нет операций.' % group.Name)
+        primary = object_key(group) == object_key(context['mcs'])
+        duplicate = [object_key(g) for g in groups if str(g.Name) == str(group.Name)].index(object_key(group))
+        token = hashlib.sha256((str(group.Name) + '\0' + str(duplicate)).encode('utf-8')).hexdigest()[:12]
+        prefix = '' if primary else 'mcs_' + token + '_'
+        source = dict(mcs=group, operations=operations, operation_scope='selected_mcs_operations')
+        item = dict(context, mcs=group, operations=operations, ipw_source=source,
+                    capture_file_prefix=prefix, capture_mcs_key='primary' if primary else token)
+        item.pop('_resolved_workpiece_groups', None)
+        result.append(item)
+    return result
+
+
+def setup_mcs_dialog_template():
+    def text(value):
+        return (value + '\0').encode('utf-16-le')
+    controls = [
+        (0x82, 100, 'Отметьте нужные привязки под каждым установом. Для каждой MCS будут созданы отдельные виды IPW / NO IPW.', 10, 9, 480, 28, 0),
+        ('SysTreeView32', 101, '', 10, 42, 480, 280, 0x810027),
+        (0x82, 102, '', 10, 329, 480, 14, 0),
+        (0x80, 221, 'Выбрать все', 10, 352, 82, 22, 0x10000),
+        (0x80, 222, 'Снять все', 100, 352, 74, 22, 0x10000),
+        (0x80, 1, 'Далее', 326, 352, 78, 22, 0x30001),
+        (0x80, 2, 'Отмена', 412, 352, 78, 22, 0x10000),
+    ]
+    data = bytearray(struct.pack('<IIHhhhh', 0x80C808C0, 0, len(controls), 0, 0, 500, 385))
+    data += struct.pack('<HH', 0, 0) + text(TITLE + ' — Выбор MCS')
+    data += struct.pack('<H', 9) + text('Segoe UI')
+    for cls, ident, label, x, y, width, height, style in controls:
+        data += b'\0' * (-len(data) % 4)
+        data += struct.pack('<IIhhhhH', 0x50000000 | style, 0, x, y, width, height, ident)
+        data += struct.pack('<HH', 0xFFFF, cls) if isinstance(cls, int) else text(cls)
+        data += text(label) + struct.pack('<H', 0)
+    return bytes(data)
+
+
 def setup_folders_dialog_template():
     def text(value):
         return (value + '\0').encode('utf-16-le')
@@ -2317,7 +2462,7 @@ def setup_folders_dialog_template():
     return bytes(data)
 
 
-def show_setup_folders(rows, options=None, selected=None):
+def show_setup_folders(rows, options=None, selected=None, mcs_mode=False):
     """Native modal tree; restore choices without creating resource files."""
     import ctypes
     from ctypes import wintypes as w
@@ -2381,18 +2526,22 @@ def show_setup_folders(rows, options=None, selected=None):
     init = INITCOMMONCONTROLSEX(ctypes.sizeof(INITCOMMONCONTROLSEX), 0x2)
     if not common.InitCommonControlsEx(ctypes.byref(init)):
         raise ctypes.WinError(ctypes.get_last_error())
-    model = SetupFolderChoices(rows, selected)
+    model = (SetupMcsChoices if mcs_mode else SetupFolderChoices)(rows, selected)
     state = {'window': None, 'tree': None, 'updating': False, 'error': None,
              'handles': {}, 'keys': {}, 'images': None, 'options': normalized_preparation_options(options), 'double_click': set()}
     labels = {row['key']: row['name'] + (' — нет операций' if not row['operation_count'] else '') for row in rows}
 
     def item_info(handle):
         key = state['keys'].get(handle)
+        if mcs_mode and key is not None and model.disabled(key):
+            return None
         return (labels[key], model.disabled(key)) if key is not None else None
 
     choice_rows = NativeChoiceRows(True, item_info)
 
     def description_formats():
+        if mcs_mode:
+            return
         shown = user.SendMessageW(user.GetDlgItem(state['window'], 231), 0xF0, 0, 0) == 1
         for ident in (232, 233):
             user.ShowWindow(user.GetDlgItem(state['window'], ident), 5 if shown else 0)
@@ -2424,6 +2573,14 @@ def show_setup_folders(rows, options=None, selected=None):
         return parse_project_model_triangle_limit(value.value)
 
     def option_feedback():
+        if mcs_mode:
+            complete = model.complete()
+            label = 'Выбрано MCS: %d' % len(model.selected)
+            if not complete:
+                label += ' · Выберите хотя бы одну привязку в каждом установе'
+            user.SetWindowTextW(user.GetDlgItem(state['window'], 102), label)
+            user.EnableWindow(user.GetDlgItem(state['window'], 1), complete)
+            return complete
         enabled = user.SendMessageW(user.GetDlgItem(state['window'], 235), 0xF0, 0, 0) == 1
         error = ''
         if enabled:
@@ -2458,8 +2615,10 @@ def show_setup_folders(rows, options=None, selected=None):
             for row in rows:
                 key = row['key']
                 item = TVITEMW()
-                item.mask, item.hItem, item.stateMask = 0x8, state['handles'][key], 0xF004
+                item.mask, item.hItem, item.stateMask = 0x8, state['handles'][key], 0xF014
                 item.state = (0x2000 if key in model.selected else 0x1000) | (4 if model.disabled(key) else 0)
+                if mcs_mode and model.disabled(key):
+                    item.state = 0x10  # Bold setup heading, without a checkbox.
                 if not user.SendMessageW(state['tree'], 0x113F, 0, ctypes.addressof(item)):
                     raise RuntimeError('Не удалось обновить папку: ' + row['name'])
             option_feedback()
@@ -2530,7 +2689,7 @@ def show_setup_folders(rows, options=None, selected=None):
                 if not style or not user.SetWindowLongW(state['tree'], -16, style | 0x100):
                     raise RuntimeError('Не удалось включить отметки папок.')
                 state['images'] = user.SendMessageW(state['tree'], 0x1108, 2, 0)
-                for ident in (230, 231, 232, 233, 234, 235):
+                for ident in (() if mcs_mode else (230, 231, 232, 233, 234, 235)):
                     control = user.GetDlgItem(window, ident)
                     values = state['options']
                     checked = {230: values['number_operations'], 231: values['update_descriptions'],
@@ -2597,6 +2756,11 @@ def show_setup_folders(rows, options=None, selected=None):
                     option_feedback()
                     return 1
                 if ident == 2 or (ident == 1 and model.selected):
+                    if ident == 1 and mcs_mode:
+                        if not option_feedback():
+                            return 1
+                        user.EndDialog(window, 1)
+                        return 1
                     if ident == 1:
                         if not option_feedback():
                             try:
@@ -2620,6 +2784,10 @@ def show_setup_folders(rows, options=None, selected=None):
                                     raise
                     user.EndDialog(window, ident)
                     return 1
+                if ident == 221 and mcs_mode:
+                    model.selected = {row['key'] for row in rows if not model.disabled(row['key'])}
+                    sync()
+                    return 1
                 if ident == 222:
                     model.selected.clear()
                     sync()
@@ -2630,7 +2798,7 @@ def show_setup_folders(rows, options=None, selected=None):
             return 1
         return 0
 
-    template = ctypes.create_string_buffer(setup_folders_dialog_template())
+    template = ctypes.create_string_buffer(setup_mcs_dialog_template() if mcs_mode else setup_folders_dialog_template())
     try:
         owner = user.GetActiveWindow() or user.GetForegroundWindow()
         result = user.DialogBoxIndirectParamW(None, ctypes.cast(template, ctypes.c_void_p), owner, callback, 0)
@@ -2642,7 +2810,7 @@ def show_setup_folders(rows, options=None, selected=None):
         raise state['error']
     if result not in (1, 2):
         raise RuntimeError('Не удалось открыть выбор установов: ' + str(ctypes.WinError(ctypes.get_last_error())))
-    if result == 1 and options is not None:
+    if result == 1 and options is not None and not mcs_mode:
         options.update(state['options'])
     return model.values() if result == 1 else None
 
@@ -2686,7 +2854,7 @@ def resolve_setup_jobs(nx, ui, part, report, memory=None):
         item = new_report()
         item['selection_source'] = report.get('selection_source')
         try:
-            context = resolve_context(nx, ui, part, item, selected=selection)
+            context = resolve_context(nx, ui, part, item, selected=selection, confirm=False)
             name = record_setup_identity(context, item)
             resolve_ipw_source(nx, part, context, item)
         except ExportCancelled:
@@ -2700,6 +2868,7 @@ def resolve_setup_jobs(nx, ui, part, report, memory=None):
         item['selected_folder_tag'] = object_key(selection[0])
         item['selected_folder_path'] = navigator_folder_path(program, selection[0]) or []
         jobs.append({'context': context, 'report': item, 'output': None})
+    choose_setup_mcs(nx, jobs)
     return jobs
 
 
@@ -5756,7 +5925,7 @@ def display_ipw(part, context, report):
     diagnostic_event('stage', stage=report['current_stage'])
     source = context.get('ipw_source')
     if source is None:
-        raise RuntimeError('Источник IPW первой MCS установа не определён до съёмки.')
+        raise RuntimeError('Источник IPW выбранной MCS установа не определён до съёмки.')
     operations = list(source['operations'])
     source_name = str(source['mcs'].Name)
     info = report.setdefault("ipw", {})
@@ -5772,7 +5941,7 @@ def display_ipw(part, context, report):
         info.update(status="displayed", activation_count=info.get("activation_count", 0) + 1)
     except Exception as exc:
         info.update(status="error", message=str(exc))
-        raise RuntimeError('Не удалось выполнить Display IPW от первой MCS «%s» установа. '
+        raise RuntimeError('Не удалось выполнить Display IPW от выбранной MCS «%s» установа. '
                            'Пара снимков не завершена. %s' % (source_name, exc)) from exc
 
 
@@ -5932,8 +6101,12 @@ def capture_views(nx, part, view, basis, output, report, ipw_context=None):
             clear_ipw()
             create_fit_geometry()
         # Same one-pass view order as v2.05. Never replay a saved fit camera.
-        for view_index, (filename, label, eye, up) in enumerate(VIEW_PRESETS, 1):
-            diagnostic_event('capture.view.begin', index=view_index, count=len(VIEW_PRESETS), label=label)
+        for view_index, (preset_file, label, eye, up) in enumerate(VIEW_PRESETS, 1):
+            filename = (ipw_context or {}).get('capture_file_prefix', '') + preset_file
+            progress_index = report.get('_capture_index', 0) * len(VIEW_PRESETS) + view_index
+            progress_count = report.get('_capture_count', 1) * len(VIEW_PRESETS)
+            progress_label = str(report.get('mcs_name', '')) + ' · ' + label
+            diagnostic_event('capture.view.begin', index=progress_index, count=progress_count, label=progress_label)
             report['current_stage'] = label
             diagnostic_event('stage', stage=report['current_stage'])
             expected = camera_axes(basis, eye, up)
@@ -5953,10 +6126,13 @@ def capture_views(nx, part, view, basis, output, report, ipw_context=None):
                 report['ipw']['fit_count'] += 1
                 report['ipw']['events'].append({'action': 'fit_geometry', 'view': filename,
                                               'margin': FRAME_MARGIN})
-            capture({'file': filename, 'label': label,
+            capture({'file': filename, 'preset_file': preset_file, 'label': label,
+                     'mcs_key': (ipw_context or {}).get('capture_mcs_key', 'primary'),
+                     'mcs_name': report.get('mcs_name', ''), 'mcs_axes_absolute': basis,
+                     'mcs_origin_absolute': report.get('mcs_origin_absolute'),
                      'eye_direction_mcs': eye, 'up_hint_mcs': up,
                      'camera_axes_absolute': expected, 'nx_matrix_layout': layout}, fitted_camera)
-            diagnostic_event('capture.view.end', index=view_index, count=len(VIEW_PRESETS), label=label)
+            diagnostic_event('capture.view.end', index=progress_index, count=progress_count, label=progress_label)
         if ipw_requested:
             report["ipw"]["status"] = "pairs_created"
     except Exception as exc:
@@ -6032,13 +6208,13 @@ def project_name_from_part(part):
     return name
 
 
-def warning_dialog_template(question, include_details=False):
+def warning_dialog_template(question, include_details=False, allow_multiple_mcs=False):
     """A native modal dialog with our own red title band, independent of theme."""
     def text(value):
         return (value + '\0').encode('utf-16-le')
     # WS_POPUP | WS_SYSMENU | DS_MODALFRAME | DS_SETFONT | DS_CENTER.
     # No WS_CAPTION: Windows' accent colour cannot replace the red band.
-    data = bytearray(struct.pack('<IIHhhhh', 0x800808C0, 0, 6 if include_details else 5, 0, 0, 360, 160))
+    data = bytearray(struct.pack('<IIHhhhh', 0x800808C0, 0, 5 + int(include_details) + int(allow_multiple_mcs), 0, 0, 360, 160))
     data += struct.pack('<HH', 0, 0) + text(TITLE + ' — Предупреждение')
     data += struct.pack('<H', 9) + text('Segoe UI')
     controls = [
@@ -6049,6 +6225,8 @@ def warning_dialog_template(question, include_details=False):
         # EDIT: border, vertical scroll, tab stop, multiline, auto vertical scroll,
         # read-only. Without ES_AUTOHSCROLL, full names wrap instead of clipping.
         controls.append((0x81, 105, '', 12, 90, 336, 30, 0xA10844))
+    if allow_multiple_mcs:
+        controls.append((0x80, 4, 'Выводить несколько MCS', 12, 128, 160, 20, 0x10000))
     controls.extend((
         (0x80, 1, 'Да', 218, 128, 60, 20, 0x10000),
         (0x80, 2, 'Нет', 286, 128, 60, 20, 0x10001),
@@ -6061,7 +6239,7 @@ def warning_dialog_template(question, include_details=False):
     return bytes(data)
 
 
-def show_warning_dialog(question, details=''):
+def show_warning_dialog(question, details='', allow_multiple_mcs=False):
     """Win32 only; body uses exactly 3x the dialog font height and FW_BOLD."""
     import ctypes
     from ctypes import wintypes as w
@@ -6186,6 +6364,8 @@ def show_warning_dialog(question, details=''):
             2: (width - gap - button_w, height - gap - button_h, button_w, button_h),
             3: (width - header, 3, header - 6, header - 6),
         }
+        if allow_multiple_mcs:
+            controls[4] = (gap, height - gap - button_h, width - 4 * gap - 2 * button_w, button_h)
         if details:
             controls[105] = (gap, header + 2 * gap + text_h, width - 2 * gap, detail_h)
         for control_id, rect in controls.items():
@@ -6215,7 +6395,7 @@ def show_warning_dialog(question, details=''):
             if message == 0x0010:  # WM_CLOSE / Alt+F4.
                 user.EndDialog(window, 3)
                 return 1
-            if message == 0x0111 and (wparam & 0xFFFF) in (1, 2, 3):
+            if message == 0x0111 and (wparam & 0xFFFF) in ((1, 2, 3, 4) if allow_multiple_mcs else (1, 2, 3)):
                 user.EndDialog(window, wparam & 0xFFFF)
                 return 1
         except Exception as exc:
@@ -6230,23 +6410,25 @@ def show_warning_dialog(question, details=''):
             brush = checked(gdi.CreateSolidBrush(color))
             resources.append(brush)
             brushes[name] = brush
-        template = ctypes.create_string_buffer(warning_dialog_template(question, bool(details)))
+        template = ctypes.create_string_buffer(warning_dialog_template(question, bool(details), allow_multiple_mcs))
         result = user.DialogBoxIndirectParamW(None, ctypes.cast(template, ctypes.c_void_p), owner, callback, 0)
         if state['error'] is not None:
             raise state['error']
-        if result not in (1, 2, 3):
+        if result not in ((1, 2, 3, 4) if allow_multiple_mcs else (1, 2, 3)):
             raise RuntimeError('Не удалось открыть предупреждение: ' + str(ctypes.WinError(ctypes.get_last_error())))
-        return result == 1 if result in (1, 2) else None
+        return 'multiple' if result == 4 else (result == 1 if result in (1, 2) else None)
     finally:
         for resource in reversed(resources):
             gdi.DeleteObject(resource)
 
 
-def ask_warning(nx, question, details=''):
+def ask_warning(nx, question, details='', allow_multiple_mcs=False):
     uf_ui = nx.UF.UFSession.GetUFSession().Ui
     lock_source = nx.UF.UFConstants.UF_UI_FROM_CUSTOM
     uf_ui.LockUgAccess(lock_source)
     try:
+        if allow_multiple_mcs:
+            return show_warning_dialog(question, details, allow_multiple_mcs=True)
         return show_warning_dialog(question, details) if details else show_warning_dialog(question)
     finally:
         uf_ui.UnlockUgAccess(lock_source)
@@ -6271,9 +6453,11 @@ def prepare_capture_folders(staging, jobs, project_view=False):
         output = io_path(staging) / str(index)
         output.mkdir()
         job['output'] = output
-        for filename, _label, _eye, _up in VIEW_PRESETS:
-            nx_image_file_name(output / filename)
-            nx_image_file_name(output / (Path(filename).stem + '_no_ipw.png'))
+        for context in job.get('context', {}).get('view_contexts', [{}]):
+            for filename, _label, _eye, _up in VIEW_PRESETS:
+                filename = context.get('capture_file_prefix', '') + filename
+                nx_image_file_name(output / filename)
+                nx_image_file_name(output / (Path(filename).stem + '_no_ipw.png'))
 
 
 def axes_svg(axes, basis):
@@ -6499,7 +6683,14 @@ table[data-fit-family="cover-tools"] .cell-text{height:calc(var(--cover-row,3.8m
 /* Paper contains manufacturing data; editor guidance lives in control tooltips. */
 [data-editor-id="operations-status"]:empty{display:none}
 
-.gallery .photo-stage,.gallery .user-photo .photo-stage{top:8mm;bottom:8mm}
+.gallery .photo-stage,.gallery .user-photo .photo-stage,.mcs-view-grid .photo-stage{top:8mm;bottom:8mm}
+.mcs-name{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.15}
+.mcs-view-title{flex:none;font-size:10pt;font-weight:700;margin:0 0 2mm;overflow-wrap:anywhere}
+.mcs-view-grid{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:48% 52%;border:.25mm solid #363e43}
+.mcs-view-grid>.photo{border:.15mm solid #363e43}
+.mcs-view-grid>.iso-photo{grid-column:1 / 3;grid-row:1}
+.mcs-view-grid>.top-photo{grid-column:1;grid-row:2}
+.mcs-view-grid>.side-photo{grid-column:2;grid-row:2}
 .project-tools-page .continuation-header.no-note{height:var(--project-header-height,39mm);display:grid;grid-template-columns:minmax(0,1fr) var(--project-image-width,44mm);grid-template-rows:var(--project-meta-height,14mm) var(--project-legend-height,20.85mm);gap:2mm 4mm;align-items:start}
 .project-tools-page .legends{grid-column:1;grid-row:2;height:var(--project-legend-height,20.85mm)}.project-tools-page .legends col:first-child{width:12mm!important}.project-tools-page .project-isometry{grid-column:2;grid-row:1 / span 2}
 .project-tools-page .continuation-header.no-note .metadata{height:var(--project-meta-height,14mm)}
@@ -7630,7 +7821,7 @@ const NoteLayout=(()=>{
  function restore(data){
   heights=Object.create(null);
   if(data&&typeof data==='object'&&!Array.isArray(data))for(const [key,value] of Object.entries(data))
-   if(/^(cover|operations-[1-9][0-9]*)$/.test(key)&&typeof value==='number'&&Number.isFinite(value))heights[key]=Math.max(base,Math.min(270,value));
+   if(/^(cover|operations-[1-9][0-9]*|mcs-[A-Za-z0-9_-]+)$/.test(key)&&typeof value==='number'&&Number.isFinite(value))heights[key]=Math.max(base,Math.min(270,value));
  }
  try{restore(JSON.parse(scope.dataset.noteHeights||'{}'));}catch(e){}
  function value(key){return heights[key]??base;}
@@ -8030,8 +8221,8 @@ const PageScale=(()=>{
    }
    if(ProjectModel.active)ProjectModel.layout(page);
   }
-  page.classList.toggle('has-operation-controls',key!=='catalog');
-  if(key!=='catalog'){
+  page.classList.toggle('has-operation-controls',key!=='catalog'&&!key.startsWith('mcs-'));
+  if(key!=='catalog'&&!key.startsWith('mcs-')){
    let input=bar.querySelector('[data-page-wrap]');
    if(!input){const group=document.createElement('label');group.className='page-wrap-control';input=document.createElement('input');input.type='checkbox';input.dataset.pageWrap='true';group.append(input,document.createTextNode('Переносить названия операций'));bar.append(group);}
    input.checked=wrapValue(key);
@@ -8041,7 +8232,7 @@ const PageScale=(()=>{
   reset.title='Восстановить исходные элементы, компоновку и оформление этого листа';
  }
  function refresh(){
-  let index=0;scope.querySelectorAll('.setup-pages>.page').forEach(page=>apply(page,page.classList.contains('project-tools-page')?'catalog':page.classList.contains('cover-page')?'cover':'operations-'+(++index),true));
+  let index=0;scope.querySelectorAll('.setup-pages>.page').forEach(page=>apply(page,page.classList.contains('project-tools-page')?'catalog':page.classList.contains('cover-page')?'cover':page.classList.contains('mcs-view-page')?'mcs-'+page.dataset.mcsKey:'operations-'+(++index),true));
   scope.dataset.pageScales=JSON.stringify({...scales});scope.dataset.coverToolScale=String(toolScale);scope.dataset.pageWraps=JSON.stringify(wrapState());
  }
  scope.addEventListener('input',event=>{
@@ -8080,7 +8271,7 @@ const PageScale=(()=>{
  });
  function state(){const result={...scales};scope.querySelectorAll('.setup-pages>.page').forEach(p=>result[p.dataset.pageKey]=value(p.dataset.pageKey));return result;}
  function wrapState(){const result={...wraps};scope.querySelectorAll('.setup-pages>.page:not(.project-tools-page)').forEach(p=>result[p.dataset.pageKey]=wrapValue(p.dataset.pageKey));return result;}
- function reset(key,saved){scales[key]=normalized(saved?.pageScales?.[key]??100);if(key==='cover')toolScale=normalized(saved?.coverToolScale??100);if(key!=='catalog')wraps[key]=saved?.pageWraps?.[key]??false;}
+ function reset(key,saved){if(key.startsWith('mcs-'))return;scales[key]=normalized(saved?.pageScales?.[key]??100);if(key==='cover')toolScale=normalized(saved?.coverToolScale??100);if(key!=='catalog')wraps[key]=saved?.pageWraps?.[key]??false;}
  function save(copy){copy.dataset.pageScales=JSON.stringify(state());copy.dataset.pageWraps=JSON.stringify(wrapState());copy.dataset.coverToolScale=String(toolScale);copy.querySelectorAll('.page-controls input[type=range]').forEach(input=>input.setAttribute('value',input.value));copy.querySelectorAll('.page-controls [data-page-wrap]').forEach(input=>input.toggleAttribute('checked',input.checked));}
  return{apply,refresh,factor,value,restore,state,save,reset,applyWrap,wrapValue,wrapState,toolsValue:()=>toolScale};
 })();
@@ -9204,7 +9395,7 @@ const CardFlow=(()=>{
   if(!drag?.moved||pages.querySelector('.operation-page'))return;
   const page=template.content.firstElementChild.cloneNode(true);page.classList.add('operation-drop-page');
   page.querySelector('.ops tbody').replaceChildren();const hint=document.createElement('p');hint.className='operation-drop-hint';
-  hint.textContent='Отпустите операции на этом листе, чтобы убрать их с первого листа.';page.querySelector('.rows-area').append(hint);cover.after(page);
+  hint.textContent='Отпустите операции на этом листе, чтобы убрать их с первого листа.';page.querySelector('.rows-area').append(hint);([...pages.querySelectorAll('.mcs-view-page')].at(-1)||cover).after(page);
  }
  function highlightDrop(target,valid){
   pages.querySelectorAll('.operation-drop-active').forEach(p=>p.classList.remove('operation-drop-active'));
@@ -9227,7 +9418,7 @@ const CardFlow=(()=>{
    }
    const height=coverHeight(chosen,m);area.hidden=!height;area.style.height=height+'mm';area.querySelector('.ops tbody').replaceChildren(...subset(chosen));
    const rows=subset(new Set(opIds.filter(id=>!chosen.has(id)))),repeated=rows.map(r=>r.dataset.kind==='group'?repeatGroup(r):r.cloneNode(true));
-   let previous=cover;
+   let previous=[...pages.querySelectorAll('.mcs-view-page')].at(-1)||cover;
    for(const {key,items} of operationSheets(rows,measured?.pageMetrics)){
     const page=oldPages.get(key)||template.content.firstElementChild.cloneNode(true);oldPages.delete(key);page.classList.remove('operation-drop-page');page.querySelector('.operation-drop-hint')?.remove();
     PageScale.apply(page,key);page.querySelector('.ops tbody').replaceChildren(...items.map(([i,repeat])=>(repeat?repeated[i]:rows[i]).cloneNode(true)));
@@ -9387,16 +9578,23 @@ local('mcs-outline-width').addEventListener('input',event=>setMcsOutline(local('
 setMcsOutline(local('mcs-outline-color').value,local('mcs-outline-width').value);
 local('mcs-size').addEventListener('input',event=>setMcsSize(event.target.value,true));
 setMcsSize(local('mcs-size').value);
+function resetPagePhotos(page,saved){
+ page.querySelectorAll(".photo[data-image]").forEach(photo=>{
+  const id=photo.dataset.image,pan=saved.photoPans?.[id];
+  setPhotoZoom(photo,saved.photoZooms?.[id]??100);setPhotoPan(photo,pan?.x??0,pan?.y??0);
+  setVariant(photo,saved.variants?.[id]==="no-ipw");
+ });
+}
 scope.addEventListener('click',event=>{
  const button=event.target.closest('[data-page-reset]');if(!button)return;
  const page=button.closest('.page'),key=page.dataset.pageKey,rect=page.getBoundingClientRect();
  cancel();captureInitial();const saved=initialView.state;PageScale.reset(key,saved);NoteLayout.reset(key,saved);ToolGroups.reset(key);
  if(key==='catalog'){ProjectModel.cancel();ProjectModel.reset(false);}
+ else if(key.startsWith('mcs-'))resetPagePhotos(page,saved);
  else if(key==='cover'){
   GalleryLayout.restore(saved.galleryLayout,true);
   setMcsSize(saved.axesSize);setMcsOutline(saved.outlineColor,saved.outlineWidth);
-  applyPhotoZoomValues(saved.photoZooms);applyPhotoPanValues(saved.photoPans);
-  page.querySelectorAll('.photo[data-paired]').forEach(photo=>setVariant(photo,saved.variants?.[photo.dataset.image]==='no-ipw'));
+  resetPagePhotos(page,saved);
   CardFlow.restore(saved.coverOperations,saved.coverPlacement,saved.operationLimit);
  }
  // Shared project data and other sheets' settings survive. Reflow accounts
@@ -9787,7 +9985,7 @@ def card_header(report, compact=False, note=True):
 
 def projected_mcs_axes(item, report, variant='ipw'):
     """Оси именно MCS в проекции камеры: +X экрана вправо, +Y экрана вниз."""
-    basis = report.get('mcs_axes_absolute')
+    basis = item.get('mcs_axes_absolute', report.get('mcs_axes_absolute'))
     camera = item.get(variant.replace('-', '_') + '_camera_axes_absolute', item.get('camera_axes_absolute'))
     if basis is None or camera is None:
         return None  # Не подменяем неизвестную ориентацию глобальными осями.
@@ -9807,7 +10005,7 @@ def mcs_axes_svg(item, report, variant='ipw', on_part=False):
     directions = projected_mcs_axes(item, report, variant)
     if directions is None:
         return ''
-    title = ('Начало СКС на детали' if on_part else 'Оси СКС') + ' %s · %s' % (report.get('mcs_name', ''), item['label'])
+    title = ('Начало СКС на детали' if on_part else 'Оси СКС') + ' %s · %s' % (item.get('mcs_name', report.get('mcs_name', '')), item['label'])
     parts = ['<svg class="%s" data-variant="%s" viewBox="0 0 100 100" '
              'xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s"%s><title>%s</title>' % (
                  'mcs-onpart' if on_part else 'mcs-axes', variant, escaped(title), ' hidden' if variant == 'no-ipw' else '', escaped(title)),
@@ -9925,7 +10123,8 @@ def image_slot(item, output, css, report):
     return ('<figure class="photo %s" data-image="%s" data-variant="ipw" data-label="%s" data-zoom="100" data-pan-x="0" data-pan-y="0"%s>'
             '%s</figure>') % (
         css, escaped(item['file']), escaped(item['label']), control,
-        '<div class="photo-stage">' + images + on_part + '</div>' + toggle + zoom)
+        '<div class="photo-stage">' + images + on_part + '</div>' + toggle + zoom +
+        '<span class="mcs-name">%s</span>' % escaped(item.get('mcs_name', report.get('mcs_name', ''))))
 
 
 def cover_tools_scale(count, width_mm, height_mm):
@@ -9961,8 +10160,33 @@ def sorted_tools(tools):
     return sorted(tools, key=key)
 
 
+
+def setup_view_groups(report):
+    """Program-order groups, with compatibility for cards predating MCS selection."""
+    groups = {}
+    for item in report.get('views', []):
+        key = item.get('mcs_key', 'primary')
+        groups.setdefault(key, []).append(item)
+    return list(groups.items())
+
+
+def additional_mcs_pages(output, report):
+    pages = []
+    for key, items in setup_view_groups(report)[1:]:
+        views = {item.get('preset_file', item.get('logical_file', item['file'])): item for item in items}
+        pictures = ''.join(image_slot(views.get(name), output, css, report) for name, css in (
+            ('03_iso.png', 'iso-photo'), ('01_top.png', 'top-photo'), ('02_side.png', 'side-photo')))
+        heading = '<div class="mcs-view-title">MCS: %s</div>' % escaped(items[0].get('mcs_name', ''))
+        pages.append('<article class="page mcs-view-page" data-mcs-key="%s"><div class="page-content">%s%s'
+                     '<div class="mcs-view-grid">%s</div><footer class="page-footer">'
+                     '<span class="page-number"></span> / <span class="page-count"></span></footer></div></article>' % (
+                         escaped(key), card_header(report, compact=True), heading, pictures))
+    return pages
+
+
 def gallery_html(output, report):
-    views = {v.get('logical_file', v['file']): v for v in report.get('views', [])}
+    groups = setup_view_groups(report)
+    views = {v.get('preset_file', v.get('logical_file', v['file'])): v for v in (groups[0][1] if groups else [])}
     # Every setup tool stays on the cover. Row and font sizing follows its panel.
     setup_tools = sorted_tools(report.get('tools', []))
     height_mm = 225.5 * .47 - 3
@@ -10664,7 +10888,7 @@ def retain_setup_annotations(markup, saved_markup):
         try:
             stored = json.loads(saved_scope['attrs'].get('data-note-heights', '{}'))
             heights = {key: max(14.2, min(270, value)) for key, value in stored.items()
-                       if re.fullmatch(r'cover|operations-[1-9][0-9]*', key)
+                       if re.fullmatch(r'cover|operations-[1-9][0-9]*|mcs-[A-Za-z0-9_-]+', key)
                        and type(value) in (int, float) and math.isfinite(value)} if isinstance(stored, dict) else {}
         except (ValueError, TypeError, OverflowError):
             heights = {}
@@ -10916,6 +11140,49 @@ def cleanup_work_files(staging, created_directories):
     return errors
 
 
+
+def capture_setup_views(nx, part, view, output, report, context):
+    contexts = context.get('view_contexts') or setup_view_contexts(nx, context)
+    report['mcs_captures'] = []
+    report['views'] = []
+    for index, capture_context in enumerate(contexts):
+        group = capture_context['mcs']
+        capture_report = new_report()
+        capture_report.update(
+            mcs_name=str(group.Name), part_units=report.get('part_units'),
+            _capture_index=index, _capture_count=len(contexts))
+        report['mcs_captures'].append(capture_report)
+        try:
+            if (object_key(group) == object_key(context['mcs'])
+                    and report.get('mcs_activation')):
+                capture_report['mcs_activation'] = report['mcs_activation']
+            else:
+                activate_first_mcs(nx, part, capture_context, capture_report)
+            basis, origin = read_mcs(part, group)
+            capture_report.update(mcs_axes_absolute=basis, mcs_origin_absolute=origin)
+            resolve_ipw_source(nx, part, capture_context, capture_report)
+            capture_views(nx, part, view, basis, output, capture_report, ipw_context=capture_context)
+            capture_report['status'] = 'warning' if (
+                capture_report['restore_errors'] or capture_report.get('mcs_anchor_issues')
+                or capture_report.get('mcs_activation', {}).get('status') == 'warning') else 'ok'
+            report['views'].extend(capture_report['views'])
+            if capture_report['restore_errors']:
+                raise RuntimeError('Не удалось восстановить вид после MCS «%s»: %s' % (
+                    group.Name, '; '.join(capture_report['restore_errors'])))
+        except Exception as exc:
+            report['capture_failed'] = True
+            capture_report.update(status='error', error=str(exc))
+            raise RuntimeError('MCS «%s»: %s' % (group.Name, exc)) from exc
+        finally:
+            report['restore_errors'].extend(capture_report['restore_errors'])
+            report['data_issues'].extend(capture_report['data_issues'])
+    # Retain the legacy summary for single-MCS consumers and diagnostics.
+    if report['mcs_captures']:
+        for key in ('ipw', 'original_view', 'capture_projection', 'view_restored'):
+            if key in report['mcs_captures'][0]:
+                report[key] = report['mcs_captures'][0][key]
+
+
 def run(nx, ui, output, report, context=None):
     session = nx.Session.GetSession()
     part, display_part = session.Parts.Work, session.Parts.Display
@@ -10939,12 +11206,13 @@ def run(nx, ui, output, report, context=None):
     report["current_stage"] = "Чтение заготовки Workpiece"
     diagnostic_event('stage', stage=report['current_stage'])
     read_workpiece_blank(nx, part, ipw_source, report)
-    capture_views(nx, display_part, view, basis, output, report, ipw_context=context)
+    capture_setup_views(nx, display_part, view, output, report, context)
     report["current_stage"] = "Чтение таблицы операций"
     diagnostic_event('stage', stage=report['current_stage'])
     read_operation_data(nx, part, context, report)
     report["status"] = ("warning" if report["restore_errors"] or report.get('mcs_anchor_issues') or
                         report.get('mcs_activation', {}).get('status') == 'warning' or
+                        any(item['status'] == 'warning' for item in report.get('mcs_captures', ())) or
                         report.get('tool_number_check', {}).get('complete') is False or report.get('blank', {}).get('message') else "ok")
     report["current_stage"] = "Завершено"
     diagnostic_event('stage', stage=report['current_stage'])
@@ -11240,7 +11508,7 @@ def render_setup(output, report, key, counter):
     # Первый лист содержит только шапку, виды и инструменты.
     cover = '<article class="page cover-page"><div class="page-content">' + card_header(report) + gallery
     cover += '<footer class="page-footer"><span class="page-number"></span> / <span class="page-count"></span></footer></div></article>'
-    body, chunks = [cover], paginate_operations(report)
+    body, chunks = [cover] + additional_mcs_pages(output, report), paginate_operations(report)
     for index, rows in enumerate(chunks):
         content = card_header(report, compact=True)
         content += '<div class="rows-area">%s</div>' % operations_table(rows, report)

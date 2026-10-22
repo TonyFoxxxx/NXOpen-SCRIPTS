@@ -8,25 +8,40 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.61 · 2026-10-21**
+**V2.62 · 2026-10-22**
 
-- Ctrl + wheel over an operation table or tool list changes its scale by 5 percentage points: 100 → 105 → 110%. Tool lists and operation tables on different sheets have independent scales. Both columns of the shared tool catalog retain one common scale.
-- Table text/row sliders are removed. The table range remains 60–300%; this gesture does not zoom the browser page.
-- The wheel over the faceted model changes its scale by 5 percentage points regardless of wheel-delta magnitude. The +/− keys use the same step.
-- MCS-arrow, outline and model-scale controls, HTML saving, undo and Original view are retained.
+- The multiple-MCS warning now includes «Выводить несколько MCS» (Output multiple MCS).
+- A tree lists every selected setup with independent MCS checkboxes. Keep at least one MCS per setup; Select all and Clear all are available.
+- Each checked MCS gets top, side and isometric views with paired IPW / NO IPW variants, its own axes and its full name in the image's upper-left corner.
+- The first selected view set appears on the setup cover; further sets use additional sheets before operation continuations. Operations and the setup tool list remain shared.
+- Additional views support IPW switching, zoom, pan, Original view, HTML saving and printing. Distinct MCS objects are separate choices, including `1` and `1S`.
 
-Regenerate the HTML after updating; an already opened file does not update itself. Confirmed scales from the previous card are preserved when it is updated. See the [changelog](../../CHANGELOG.en.md).
+Regenerate the HTML after updating. See the [changelog](../../CHANGELOG.en.md).
 
 ## Building the sheet in NX
 
 - Select one or more setups in the script's Program Order tree. A selected folder includes all its operations and nested folders. A parent and its descendant cannot both be selected. Preselection in the NX navigator does not select setups; only the Zmin naming option uses it.
-- The setup name, view orientation and IPW source come from the first operation's MCS in the selected folder.
+- The setup name comes from the first operation's MCS in the selected folder. Views and IPW use that MCS by default; the multiple-MCS mode lets you select further coordinate systems independently for each setup.
 - Choose visible part and fixture components separately for each setup. NX immediately previews the selection. Original visibility is restored after selection and capture.
 - Top, side and isometric views are created relative to the MCS, each with matching-camera IPW and NO IPW variants.
 - X/Y/Z arrows are anchored at the MCS origin. Geometry is fitted with margins.
 - The document includes tools for each setup and a project-wide tool catalog. Duplicate T numbers trigger a warning and are marked.
 - The first sheet contains the project tool catalog. Enabling the startup option adds a rotatable 3D model of the initially visible project geometry in the original NX view. Images and model geometry are embedded in the HTML.
 - Progress shows the current stage and percentage. If generation is incomplete, the previously completed HTML is retained.
+
+### Multiple MCS in one setup
+
+When operations in a selected folder belong to several MCS objects, the warning offers three actions:
+
+- «Да» (Yes): the existing mode, using the first operation's MCS for views and IPW.
+- «Выводить несколько MCS» (Output multiple MCS): select coordinate systems for all checked setups together.
+- «Нет» (No) or closing the dialog: cancel generation.
+
+The MCS selection tree lists each setup, its folder path and the MCS objects used by its operations. The first MCS of each setup is checked initially; you can clear it and select others. Checkboxes are independent, including when the same MCS occurs in multiple setups. Different objects with identical names show their IDs in the list. Next is disabled if any setup has no checked MCS. MCS selection applies to the current run.
+
+Each checked MCS produces three views. Its IPW uses only its own operations inside the selected folder, in Program Order. The setup's selected components are used for all its view sets. The full MCS name remains in the upper-left corner when switching IPW, zooming, panning, saving and printing.
+
+Sets follow MCS order in the operation tree. The first appears on the setup cover with its tool list; every further set occupies a separate sheet with three images. The setup name and blank data continue to come from its first operation. Additional MCS do not duplicate operations or tools. If any image pair fails, the new card does not replace the previously completed HTML.
 
 ### Remembering selections
 

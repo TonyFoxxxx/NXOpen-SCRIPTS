@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-22 — Setup sheets V2.62
+
+- The multiple-MCS warning now includes «Выводить несколько MCS» (Output multiple MCS).
+- A tree lists every selected setup with independent MCS checkboxes. Keep at least one MCS per setup; Select all and Clear all are available.
+- Each checked MCS gets top, side and isometric views with paired IPW / NO IPW variants, its own axes and its full name in the image's upper-left corner.
+- The first selected view set appears on the setup cover; further sets use additional sheets before operation continuations. Operations and the setup tool list remain shared.
+- Additional views support IPW switching, zoom, pan, Original view, HTML saving and printing. Distinct MCS objects are separate choices, including `1` and `1S`.
+
 ## 2026-10-21 — Setup sheets V2.61
 
 - Added Ctrl + wheel scaling for the operation table or tool list under the pointer in 5-percentage-point steps, without browser zoom. Table sliders are removed; their 60–300% range is preserved.
