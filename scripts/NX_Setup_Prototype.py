@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.63
+# SCRIPT_VERSION: V2.64
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -116,7 +116,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.63"
+SCRIPT_VERSION = "V2.64"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -6695,6 +6695,7 @@ table[data-fit-family="cover-tools"] .cell-text{height:calc(var(--cover-row,3.8m
 .mcs-name{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.15}
 .mcs-datum-header{display:grid;grid-template-columns:57.52% 40.48%;gap:2%;align-items:start}
 .mcs-datum-header .metadata col:first-child{width:25.23%!important}
+.mcs-header-name{min-height:6.45mm;padding:.6mm 0;font-weight:700;line-height:1.1;white-space:pre-wrap;overflow-wrap:anywhere}
 .mcs-view-title{flex:none;font-size:10pt;font-weight:700;margin:0 0 2mm;overflow-wrap:anywhere}
 .mcs-view-grid{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:48% 52%;border:.25mm solid #363e43}
 .mcs-view-grid>.photo{border:.15mm solid #363e43}
@@ -9984,10 +9985,14 @@ def card_header(report, compact=False, note=True, mcs_item=None):
             field('note', '', 'Особенности закрепления и обработки', 'red bold center'))) if note else ''
         axes = datum_table(report, mcs_item) if mcs_item is not None else ''
         css = ' mcs-datum-header' if mcs_item is not None else ('' if note else ' no-note')
+        row_label, row_value = 'Установ:', setup
+        if mcs_item is not None:
+            row_label = 'MCS:'
+            row_value = '<div class="mcs-header-name">%s</div>' % escaped(mcs_item.get('mcs_name', ''))
         return ('<header class="continuation-header%s"><table class="metadata">'
                 '<colgroup><col style="width:15.5%%"><col></colgroup>'
-                '<tr><th>Деталь:</th><td>%s</td></tr><tr><th>Установ:</th><td>%s</td></tr>'
-                '%s</table>%s</header>') % (css, part, setup, note_row, axes)
+                '<tr><th>Деталь:</th><td>%s</td></tr><tr><th>%s</th><td>%s</td></tr>'
+                '%s</table>%s</header>') % (css, part, row_label, row_value, note_row, axes)
     # new_report freezes the local Windows clock; retain its wall time, not UTC or browser time.
     created_at = report.get('created_at') or datetime.datetime.now().astimezone().isoformat()
     date = datetime.datetime.fromisoformat(created_at).strftime('%d.%m.%Y %H:%M')

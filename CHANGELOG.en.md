@@ -2,6 +2,11 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-22 — Setup sheets V2.64
+
+- On additional setup sheets, the Setup row is replaced by MCS and shows the full name of the coordinate system used for that sheet's views.
+- This row has no setup counter. Long MCS names wrap, and the name is retained when editing the setup number, saving HTML and printing.
+
 ## 2026-10-22 — Setup sheets V2.63
 
 - Additional MCS sheets now include X, Y and Z datum fields with the same suggestions and free-text input as the setup cover.

@@ -8,12 +8,10 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.63 · 2026-10-22**
+**V2.64 · 2026-10-22**
 
-- Additional MCS sheets now include X, Y and Z datum fields with the same suggestions and free-text input as the setup cover.
-- XYZ values belong to each setup/MCS pair and are restored from saved HTML when the script runs again, including reordered sheets or a different MCS on the cover.
-- Values for a temporarily unchecked MCS remain inside the HTML and return when it is selected again. Deliberately cleared fields stay empty.
-- When updating a V2.62 card, existing XYZ values follow the MCS shown on the cover, even when the first operation's MCS was unchecked.
+- On additional setup sheets, the Setup row is replaced by MCS and shows the full name of the coordinate system used for that sheet's views.
+- This row has no setup counter. Long MCS names wrap, and the name is retained when editing the setup number, saving HTML and printing.
 
 Regenerate the HTML after updating. See the [changelog](../../CHANGELOG.en.md).
 
@@ -42,7 +40,7 @@ Each checked MCS produces three views. Its IPW uses only its own operations insi
 
 Sets follow MCS order in the operation tree. The first appears on the setup cover with its tool list; every further set occupies a separate sheet with three images. The setup name and blank data continue to come from its first operation. Additional MCS do not duplicate operations or tools. If any image pair fails, the new card does not replace the previously completed HTML.
 
-The setup cover and every additional MCS sheet have their own XYZ fields. Choose a suggestion or enter custom text. Editing one MCS does not change another MCS, including in a different setup. Saved HTML retains each setup/MCS association: regeneration restores values after sheet reordering, moving an MCS to the cover, or temporarily excluding and later selecting it again. An empty field is preserved too. When using an ordinary local HTML file, click Save sheet before regenerating; cards opened through the helper save automatically. Regenerate the same card in the same output folder.
+Each additional sheet identifies its coordinate system in the MCS row of the header, using its full name without a setup counter. The setup cover and every additional MCS sheet have their own XYZ fields. Choose a suggestion or enter custom text. Editing one MCS does not change another MCS, including in a different setup. Saved HTML retains each setup/MCS association: regeneration restores values after sheet reordering, moving an MCS to the cover, or temporarily excluding and later selecting it again. An empty field is preserved too. When using an ordinary local HTML file, click Save sheet before regenerating; cards opened through the helper save automatically. Regenerate the same card in the same output folder.
 
 ### Remembering selections
 
