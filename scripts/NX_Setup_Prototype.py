@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.62
+# SCRIPT_VERSION: V2.63
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -20,6 +20,7 @@ Zmin использует выделение до открытия меню
 Кнопка «Выводить несколько MCS» открывает выбор привязок всех выбранных установов.
 Каждая отмеченная MCS даёт три пары IPW / NO IPW со своими осями и полным названием.
 Первый набор видов — на основном листе, остальные — на отдельных листах того же установа.
+У каждой MCS свои редактируемые привязки XYZ, сохраняемые при повторном выводе карты.
 Таблицы карты содержат выбранные операции, независимо от источника IPW.
 Zmin — минимум рассчитанной траектории по фактической оси ToolAxis каждого движения,
 относительно начала СКС операции, в единицах CAM-детали.
@@ -115,7 +116,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.62"
+SCRIPT_VERSION = "V2.63"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -2383,6 +2384,11 @@ def choose_setup_mcs(nx, jobs):
         context['view_contexts'] = setup_view_contexts(nx, context)
 
 
+def mcs_datum_key(name, duplicate=0):
+    """Persistent within a setup: independent of NX session tags and sheet position."""
+    return hashlib.sha256((str(name) + '\0' + str(duplicate)).encode('utf-8')).hexdigest()[:12]
+
+
 def setup_view_contexts(nx, context):
     """Keep operation tables intact; isolate capture/IPW sources by actual MCS."""
     groups = context.get('mcs_groups', [context['mcs']])
@@ -2396,11 +2402,12 @@ def setup_view_contexts(nx, context):
             raise RuntimeError('Для MCS «%s» в выбранном установе нет операций.' % group.Name)
         primary = object_key(group) == object_key(context['mcs'])
         duplicate = [object_key(g) for g in groups if str(g.Name) == str(group.Name)].index(object_key(group))
-        token = hashlib.sha256((str(group.Name) + '\0' + str(duplicate)).encode('utf-8')).hexdigest()[:12]
+        token = mcs_datum_key(group.Name, duplicate)
         prefix = '' if primary else 'mcs_' + token + '_'
         source = dict(mcs=group, operations=operations, operation_scope='selected_mcs_operations')
         item = dict(context, mcs=group, operations=operations, ipw_source=source,
-                    capture_file_prefix=prefix, capture_mcs_key='primary' if primary else token)
+                    capture_file_prefix=prefix, capture_mcs_key='primary' if primary else token,
+                    capture_datum_key=token)
         item.pop('_resolved_workpiece_groups', None)
         result.append(item)
     return result
@@ -6128,6 +6135,7 @@ def capture_views(nx, part, view, basis, output, report, ipw_context=None):
                                               'margin': FRAME_MARGIN})
             capture({'file': filename, 'preset_file': preset_file, 'label': label,
                      'mcs_key': (ipw_context or {}).get('capture_mcs_key', 'primary'),
+                     'mcs_datum_key': (ipw_context or {}).get('capture_datum_key'),
                      'mcs_name': report.get('mcs_name', ''), 'mcs_axes_absolute': basis,
                      'mcs_origin_absolute': report.get('mcs_origin_absolute'),
                      'eye_direction_mcs': eye, 'up_hint_mcs': up,
@@ -6685,6 +6693,8 @@ table[data-fit-family="cover-tools"] .cell-text{height:calc(var(--cover-row,3.8m
 
 .gallery .photo-stage,.gallery .user-photo .photo-stage,.mcs-view-grid .photo-stage{top:8mm;bottom:8mm}
 .mcs-name{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.15}
+.mcs-datum-header{display:grid;grid-template-columns:57.52% 40.48%;gap:2%;align-items:start}
+.mcs-datum-header .metadata col:first-child{width:25.23%!important}
 .mcs-view-title{flex:none;font-size:10pt;font-weight:700;margin:0 0 2mm;overflow-wrap:anywhere}
 .mcs-view-grid{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:48% 52%;border:.25mm solid #363e43}
 .mcs-view-grid>.photo{border:.15mm solid #363e43}
@@ -9927,16 +9937,17 @@ DATUM_CHOICES = {
 }
 
 
-def datum_field(axis):
+def datum_field(axis, mcs_key=''):
     return ('<div class="datum-editor" data-choices="%s">'
-            '<input class="datum-input" type="text" data-field="datum_%s" value="" '
+            '<input class="datum-input" type="text" data-field="datum_%s%s" value="" '
             'placeholder="Привязка %s" aria-label="Привязка %s" role="combobox" '
             'aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" '
             'autocomplete="off" spellcheck="false">'
             '<button class="datum-toggle" type="button" tabindex="-1" '
             'aria-label="Варианты привязки %s" title="Выбрать привязку">▾</button></div>'
             '<div class="datum-print field center" aria-hidden="true"></div>') % (
-                escaped(json.dumps(DATUM_CHOICES[axis], ensure_ascii=False)), axis, axis, axis, axis)
+                escaped(json.dumps(DATUM_CHOICES[axis], ensure_ascii=False)), axis,
+                '_' + escaped(mcs_key) if mcs_key else '', axis, axis, axis)
 
 
 def tool_legend_table(locked=False):
@@ -9949,7 +9960,19 @@ def tool_legend_table(locked=False):
     return legends
 
 
-def card_header(report, compact=False, note=True):
+def datum_table(report, item=None):
+    if item is None:
+        item = next(iter(report.get('views', [])), {})
+    name = item.get('mcs_name', report.get('mcs_name', setup_label(report)))
+    key = item.get('mcs_datum_key') or mcs_datum_key(name)
+    rows = ''.join('<tr><th>%s</th><td>%s</td></tr>' % (axis, datum_field(axis, key))
+                   for axis in 'XYZ')
+    return ('<table class="coordinates" data-mcs-datum-key="%s" data-mcs-name="%s">'
+            '<colgroup><col style="width:22.15%%"><col></colgroup>%s</table>') % (
+                escaped(key), escaped(name), rows)
+
+
+def card_header(report, compact=False, note=True, mcs_item=None):
     part = field('part', report.get('project_name', report.get('part_name', '')), 'Деталь', 'bold')
     label = setup_label(report)
     named = ' named-setup' if not re.fullmatch(r'[0-9]{1,3}', label) else ''
@@ -9959,10 +9982,12 @@ def card_header(report, compact=False, note=True):
         note_row = ('<tr class="note-row"><th class="white">%s</th><td>%s</td></tr>' % (
             field('note_label', 'Примечание:', '', 'bold center'),
             field('note', '', 'Особенности закрепления и обработки', 'red bold center'))) if note else ''
+        axes = datum_table(report, mcs_item) if mcs_item is not None else ''
+        css = ' mcs-datum-header' if mcs_item is not None else ('' if note else ' no-note')
         return ('<header class="continuation-header%s"><table class="metadata">'
                 '<colgroup><col style="width:15.5%%"><col></colgroup>'
                 '<tr><th>Деталь:</th><td>%s</td></tr><tr><th>Установ:</th><td>%s</td></tr>'
-                '%s</table></header>') % ('' if note else ' no-note', part, setup, note_row)
+                '%s</table>%s</header>') % (css, part, setup, note_row, axes)
     # new_report freezes the local Windows clock; retain its wall time, not UTC or browser time.
     created_at = report.get('created_at') or datetime.datetime.now().astimezone().isoformat()
     date = datetime.datetime.fromisoformat(created_at).strftime('%d.%m.%Y %H:%M')
@@ -9975,10 +10000,7 @@ def card_header(report, compact=False, note=True):
     left += '<tr><th>ЗАГОТОВКА</th><td>%s</td></tr>' % field('stock_blank', blank_text, 'Размеры заготовки', 'red bold center')
     left += '<tr class="note-row"><th class="white">%s</th><td>%s</td></tr></table>' % (
         field('note_label', 'Примечание:', '', 'bold center'), field('note', '', 'Особенности закрепления и обработки', 'red bold center'))
-    axes = '<table class="coordinates"><colgroup><col style="width:22.15%"><col></colgroup>'
-    for axis in 'XYZ':
-        axes += '<tr><th>%s</th><td>%s</td></tr>' % (axis, datum_field(axis))
-    axes += '</table>'
+    axes = datum_table(report)
     legends = tool_legend_table()
     return '<header class="card-header"><div>%s</div><div class="header-right">%s<div class="locked-spacer"></div>%s</div></header>' % (left, axes, legends)
 
@@ -10180,7 +10202,7 @@ def additional_mcs_pages(output, report):
         pages.append('<article class="page mcs-view-page" data-mcs-key="%s"><div class="page-content">%s%s'
                      '<div class="mcs-view-grid">%s</div><footer class="page-footer">'
                      '<span class="page-number"></span> / <span class="page-count"></span></footer></div></article>' % (
-                         escaped(key), card_header(report, compact=True), heading, pictures))
+                         escaped(key), card_header(report, compact=True, mcs_item=items[0]), heading, pictures))
     return pages
 
 
@@ -10840,15 +10862,43 @@ def retain_setup_annotations(markup, saved_markup):
         return markup
     saved, current = CardMarkup(saved_markup), CardMarkup(markup)
 
-    def field_name(node):
+    def legacy_datum_key(parsed, node):
+        # V2.62 stored one XYZ set on the cover, even if the first operation's
+        # MCS was unchecked. Its actual photos, not the setup label, own XYZ.
+        page = node
+        while page is not None and not parsed.has_class(page, 'page'):
+            page = page['parent']
+        if page is not None:
+            contents = [n for n in parsed.nodes
+                        if page['open_end'] <= n['start'] < page['content_end']]
+            for photo in contents:
+                if parsed.has_class(photo, 'photo'):
+                    token = re.search(r'(?:^|_)mcs_([0-9a-f]{12})_', photo['attrs'].get('data-image', ''))
+                    if token:
+                        return token[1]
+            names = [parsed.text(n) for n in contents if parsed.has_class(n, 'mcs-name')]
+            if names:
+                return mcs_datum_key(names[0])
+        scope = next((n for n in parsed.nodes if parsed.has_class(n, 'setup-document')), None)
+        try:
+            identity = json.loads(scope['attrs'].get('data-nx-setup-identity', '{}')) if scope else {}
+            return mcs_datum_key(identity['mcs']) if identity.get('mcs') else ''
+        except (ValueError, TypeError, AttributeError):
+            return ''
+
+    def field_name(parsed, node):
         name = node['attrs'].get('data-field', '')
         if name in ('note', 'note_label'):
             return name
-        return 'datum_' + name[-1].upper() if re.fullmatch(r'datum_[XYZxyz]', name) else None
+        match = re.fullmatch(r'datum_([XYZxyz])(?:_([0-9a-f]{12}))?', name)
+        if match:
+            key = match[2] or legacy_datum_key(parsed, node)
+            return 'datum_' + match[1].upper() + ('_' + key if key else '')
+        return None
 
-    def in_cover(node):
+    def in_cover(parsed, node):
         while node is not None:
-            if saved.has_class(node, 'cover-page'):
+            if parsed.has_class(node, 'cover-page'):
                 return True
             node = node['parent']
         return False
@@ -10856,13 +10906,24 @@ def retain_setup_annotations(markup, saved_markup):
     # Live cover fields take precedence over continuation pages. Templates may
     # still contain defaults; an intentionally cleared live value is authoritative.
     sources = sorted((node for node in saved.nodes
-                      if field_name(node) and not saved.in_template(node)),
-                     key=lambda node: (not in_cover(node), node['start']))
-    values = {}
+                      if field_name(saved, node) and not saved.in_template(node)),
+                     key=lambda node: (not in_cover(saved, node), node['start']))
+    saved_scope = next((node for node in saved.nodes if saved.has_class(node, 'setup-document')), None)
+    current_scope = next((node for node in current.nodes if current.has_class(node, 'setup-document')), None)
+    # Keep values for temporarily unchecked MCS in the same HTML. Visible live
+    # fields override this cache, including deliberately cleared strings.
+    try:
+        stored = json.loads(saved_scope['attrs'].get('data-mcs-datums', '{}')) if saved_scope else {}
+        values = {key: value for key, value in stored.items()
+                  if re.fullmatch(r'datum_[XYZ]_[0-9a-f]{12}', key) and isinstance(value, str)} if isinstance(stored, dict) else {}
+    except (ValueError, TypeError):
+        values = {}
+    seen = set()
     for node in sources:
-        name = field_name(node)
-        if name in values:
+        name = field_name(saved, node)
+        if name in seen:
             continue
+        seen.add(name)
         if node['tag'] == 'input':
             value = node['attrs'].get('value', '')
         elif node['tag'] == 'select':
@@ -10882,8 +10943,6 @@ def retain_setup_annotations(markup, saved_markup):
             values[name] = value
 
     edits = []
-    saved_scope = next((node for node in saved.nodes if saved.has_class(node, 'setup-document')), None)
-    current_scope = next((node for node in current.nodes if current.has_class(node, 'setup-document')), None)
     if saved_scope is not None and current_scope is not None:
         try:
             stored = json.loads(saved_scope['attrs'].get('data-note-heights', '{}'))
@@ -10892,9 +10951,18 @@ def retain_setup_annotations(markup, saved_markup):
                        and type(value) in (int, float) and math.isfinite(value)} if isinstance(stored, dict) else {}
         except (ValueError, TypeError, OverflowError):
             heights = {}
+        datums = {key: value for key, value in values.items()
+                  if re.fullmatch(r'datum_[XYZ]_[0-9a-f]{12}', key)}
+        attrs = {}
         if heights:
+            attrs['data-note-heights'] = json.dumps(heights)
+        if datums:
+            attrs['data-mcs-datums'] = json.dumps(datums, ensure_ascii=False)
+        if attrs:
             opening = markup[current_scope['start']:current_scope['open_end']]
-            opening = opening[:-1] + ' data-note-heights="%s">' % escaped(json.dumps(heights))
+            for key, value in attrs.items():
+                opening = re.sub(r'\s' + key + r'="[^"]*"', '', opening)
+                opening = opening[:-1] + ' %s="%s">' % (key, escaped(value))
             edits.append((current_scope['start'], current_scope['open_end'], opening))
     for family in ('cover-tools', 'project-tools'):
         saved_tools = [node for node in saved.nodes
@@ -10922,7 +10990,7 @@ def retain_setup_annotations(markup, saved_markup):
                 opening = opening[:-1] + ' data-collapsed-carriers="%s">' % escaped(json.dumps(collapsed, ensure_ascii=False))
                 edits.append((node['start'], node['open_end'], opening))
     for node in current.nodes:
-        name = field_name(node)
+        name = field_name(current, node)
         if name not in values:
             continue
         value = values[name]

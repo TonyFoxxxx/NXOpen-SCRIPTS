@@ -8,13 +8,12 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.62 · 2026-10-22**
+**V2.63 · 2026-10-22**
 
-- The multiple-MCS warning now includes «Выводить несколько MCS» (Output multiple MCS).
-- A tree lists every selected setup with independent MCS checkboxes. Keep at least one MCS per setup; Select all and Clear all are available.
-- Each checked MCS gets top, side and isometric views with paired IPW / NO IPW variants, its own axes and its full name in the image's upper-left corner.
-- The first selected view set appears on the setup cover; further sets use additional sheets before operation continuations. Operations and the setup tool list remain shared.
-- Additional views support IPW switching, zoom, pan, Original view, HTML saving and printing. Distinct MCS objects are separate choices, including `1` and `1S`.
+- Additional MCS sheets now include X, Y and Z datum fields with the same suggestions and free-text input as the setup cover.
+- XYZ values belong to each setup/MCS pair and are restored from saved HTML when the script runs again, including reordered sheets or a different MCS on the cover.
+- Values for a temporarily unchecked MCS remain inside the HTML and return when it is selected again. Deliberately cleared fields stay empty.
+- When updating a V2.62 card, existing XYZ values follow the MCS shown on the cover, even when the first operation's MCS was unchecked.
 
 Regenerate the HTML after updating. See the [changelog](../../CHANGELOG.en.md).
 
@@ -42,6 +41,8 @@ The MCS selection tree lists each setup, its folder path and the MCS objects use
 Each checked MCS produces three views. Its IPW uses only its own operations inside the selected folder, in Program Order. The setup's selected components are used for all its view sets. The full MCS name remains in the upper-left corner when switching IPW, zooming, panning, saving and printing.
 
 Sets follow MCS order in the operation tree. The first appears on the setup cover with its tool list; every further set occupies a separate sheet with three images. The setup name and blank data continue to come from its first operation. Additional MCS do not duplicate operations or tools. If any image pair fails, the new card does not replace the previously completed HTML.
+
+The setup cover and every additional MCS sheet have their own XYZ fields. Choose a suggestion or enter custom text. Editing one MCS does not change another MCS, including in a different setup. Saved HTML retains each setup/MCS association: regeneration restores values after sheet reordering, moving an MCS to the cover, or temporarily excluding and later selecting it again. An empty field is preserved too. When using an ordinary local HTML file, click Save sheet before regenerating; cards opened through the helper save automatically. Regenerate the same card in the same output folder.
 
 ### Remembering selections
 

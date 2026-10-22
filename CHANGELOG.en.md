@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-22 — Setup sheets V2.63
+
+- Additional MCS sheets now include X, Y and Z datum fields with the same suggestions and free-text input as the setup cover.
+- XYZ values belong to each setup/MCS pair and are restored from saved HTML when the script runs again, including reordered sheets or a different MCS on the cover.
+- Values for a temporarily unchecked MCS remain inside the HTML and return when it is selected again. Deliberately cleared fields stay empty.
+- When updating a V2.62 card, existing XYZ values follow the MCS shown on the cover, even when the first operation's MCS was unchecked.
+
 ## 2026-10-22 — Setup sheets V2.62
 
 - The multiple-MCS warning now includes «Выводить несколько MCS» (Output multiple MCS).
