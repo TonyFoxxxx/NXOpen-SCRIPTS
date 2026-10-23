@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-10-23 — ESKD V1.41
+
+- Fixed the NX journal `SHA256` compilation error: the system algorithm is resolved at runtime without an additional assembly reference.
+- Retained SHA-256 and CRC32 checks for original and corrected external-font copies, `v110` → `v111` metadata repair and rejection of invalid data. Formatting, chamfer spacing, tolerance precision, paths and INI behavior are unchanged.
+- Extended font checks with known SHA-256 values and compilation without cryptographic assembly references. Updated the updater catalog and both documentation languages. This revision was not executed in NX / Designcenter here.
+
 ## 2026-10-22 — Setup sheets V2.64
 
 - On additional setup sheets, the Setup row is replaced by MCS and shows the full name of the coordinate system used for that sheet's views.

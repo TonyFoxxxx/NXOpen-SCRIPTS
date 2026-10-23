@@ -86,9 +86,9 @@
       "id": "NX_ESKD_Format_GOST_A",
       "name": "ЕСКД",
       "file": "NX_ESKD_Format_GOST_A.cs",
-      "version": "V1.40",
+      "version": "V1.41",
       "path": "scripts/NX_ESKD_Format_GOST_A.cs",
-      "sha256": "a5d60961d7e5f16ad3ed48742a1f9b3ec82a24dd6e206090002909f7fcdc71b1",
+      "sha256": "8f604bf0aa580184be4757daed707a0973ce58461681e6bf1caceb6bd9908ac3",
       "description": "Оформление рамки, основной надписи и аннотаций чертежа по ЕСКД. Нужен совместимый внешний шрифт.",
       "config": {
         "path": "config/NX_ESKD_Settings.example.ini",

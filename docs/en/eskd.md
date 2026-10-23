@@ -8,14 +8,14 @@ Creates an ESKD border and title block on the current metric drawing sheet and u
 
 ## Latest release
 
-**V1.40 · 2026-10-21**
+**V1.41 · 2026-10-23**
 
-- Repairs metadata in the compatible external font to correct glyph bounds that could cause Acrobat to report an embedded PDF font extraction error.
-- An existing `NX_ESKD_GOST_A_Italic_v110` installation is converted automatically to `v111`. Glyph outlines, advance widths, hinting and the character map are retained. An already corrected compatible `v111` is reused.
-- Size, CRC32 and SHA-256 checks identify the source; the corrected copy receives a distinct family name and is checked again. The original file is not overwritten. Public source contains only metadata corrections; the font itself must still be supplied separately.
-- Retains V1.38 formatting, material wrapping, old-border cleanup, chamfer spacing and tolerance precision. Paths and INI behavior are retained; no new reports or temporary files are created.
+- Fixed the journal compilation error `SHA256 does not exist in the namespace System.Security.Cryptography`. Font verification resolves the system SHA-256 implementation at runtime without an additional NX compiler assembly reference.
+- Retained size, CRC32 and SHA-256 checks before and after font repair. An unavailable system algorithm stops processing with an explicit error; verification is never skipped.
+- Retained external `v110` to `v111` font metadata repair and reuse of an already corrected `v111`. Outlines, advance widths, hinting and the character map remain unchanged; the source copy is not overwritten. The font itself is not included in the public package.
+- Formatting, chamfer spacing, three-place tolerances, paths and INI behavior are unchanged. No additional files, reports or logs are created.
 
-Checked C# syntax, the repair recipe and checksums, preservation of outlines/advance widths, the catalog and repository tests. The corrected complete font passed OpenType Sanitizer; a corrected sample PDF opened in Acrobat without the previous error. This journal revision was not executed in NX / Designcenter here.
+Checked C# syntax, the catalog, SHA-256 execution without compiler references to cryptographic assemblies, font migration with synthetic data and rejection of damaged data. This revision was not executed in NX / Designcenter here. NX warnings about the obsolete surface-finish API may remain; this release does not change that API usage.
 
 ## Features
 

@@ -1,8 +1,9 @@
 // NX_ESKD_Format_GOST_A.cs — Оформление чертежа ЕСКД
-// SCRIPT_VERSION: V1.40
-// V1.40: repair metadata of the compatible external v110 font to the v111 face.
+// SCRIPT_VERSION: V1.41
+// V1.41: resolve system SHA-256 at runtime without extra journal compiler refs.
+// Repair metadata of the compatible external v110 font to the v111 face.
 // Corrected glyph bounds/metrics preserve outlines and searchable PDF text.
-// Distribution filename: NX_ESKD_Format_GOST_A_V1.40.cs.
+// Distribution filename: NX_ESKD_Format_GOST_A_V1.41.cs.
 // Chamfer separator spacing: h/7 on either side; tolerance precision: 3 places.
 // Apply to part defaults and existing dimensions on every drawing sheet.
 // Delete previous current-sheet frames, title/auxiliary tables and their labels.
@@ -86,7 +87,7 @@ using NXOpen.UF;
 
 public class NX_ESKD_Format_GOST_A
 {
-    private const string SCRIPT_VERSION = "V1.40";
+    private const string SCRIPT_VERSION = "V1.41";
     private static readonly string Title = "ЕСКД: GOST type A Italic — " + SCRIPT_VERSION +
         " — " + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private const string FontName = "NX_ESKD_GOST_A_Italic_v111";
@@ -5105,9 +5106,27 @@ public class NX_ESKD_Format_GOST_A
 
         private static bool FontDigestMatches(byte[] bytes, string expected)
         {
-            using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+            // NX journal references differ between .NET Framework and .NET 10.
+            // Use the installed system implementation without a compile-time
+            // dependency on its assembly; never skip the font identity check.
+            Type type = typeof(object).Assembly.GetType("System.Security.Cryptography.SHA256", false);
+            if (type == null) type = Type.GetType("System.Security.Cryptography.SHA256, System.Security.Cryptography", false);
+            if (type == null) type = Type.GetType("System.Security.Cryptography.SHA256, System.Security.Cryptography.Algorithms", false);
+            if (type == null)
+                throw new InvalidOperationException("В среде NX не найден системный SHA-256 для проверки шрифта.");
+            System.Reflection.MethodInfo factory = type.GetMethod("Create",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly,
+                null, Type.EmptyTypes, null);
+            if (factory == null) throw new MissingMethodException(type.FullName, "Create");
+            System.Reflection.MethodInfo compute = type.GetMethod("ComputeHash", new Type[] { typeof(byte[]) });
+            if (compute == null) throw new MissingMethodException(type.FullName, "ComputeHash");
+            object algorithm = factory.Invoke(null, null);
+            if (algorithm == null)
+                throw new InvalidOperationException("Системный SHA-256 не создал алгоритм проверки шрифта.");
+            using ((IDisposable)algorithm)
             {
-                string digest = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "");
+                byte[] hash = (byte[])compute.Invoke(algorithm, new object[] { bytes });
+                string digest = BitConverter.ToString(hash).Replace("-", "");
                 return String.Equals(digest, expected, StringComparison.OrdinalIgnoreCase);
             }
         }

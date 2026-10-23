@@ -98,6 +98,13 @@ static void BadRecipe(byte[] original, byte[] recipe)
 }
 public static void Main()
 {
+    foreach (System.Reflection.AssemblyName reference in typeof(Checks).Assembly.GetReferencedAssemblies())
+        Require(!reference.Name.StartsWith("System.Security.Cryptography", StringComparison.Ordinal),
+            "Journal requires a cryptography compiler reference");
+    Require(FontDigestMatches(new byte[0], "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        "Empty-input SHA-256 mismatch");
+    Require(FontDigestMatches(new byte[] { 97, 98, 99 }, "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD"),
+        "Known SHA-256 or uppercase comparison mismatch");
     byte[] original = new byte[FontByteCount];
     for (int i = 0; i < original.Length; i++) original[i] = (byte)((i * 73 + 19) & 255);
     byte[] snapshot = (byte[])original.Clone();
@@ -122,7 +129,7 @@ public static void Main()
     BadRecipe(snapshot, new byte[] { 0, 2, 0, 1, 0, 1, 170, 0, 1, 0, 1, 187 });
     BadRecipe(snapshot, new byte[] { 0, 0, 7 });
     BadRecipe(snapshot, new byte[] { 0, 1, 0, 0, 0, 1 });
-    Console.WriteLine("Font metadata migration, reuse, source preservation and rejection checks passed.");
+    Console.WriteLine("Runtime SHA-256, font migration, reuse, source preservation and rejection checks passed.");
 }
 }'''
         fixture = fixture.replace("// CONSTANTS", constants).replace("// RECIPE", declaration).replace("// METHODS", methods)
@@ -142,7 +149,13 @@ public static void Main()
                 project = path / "Checks.csproj"
                 project.write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType>'
                                    '<TargetFramework>net8.0</TargetFramework><LangVersion>7.3</LangVersion>'
-                                   '</PropertyGroup></Project>', encoding="ascii")
+                                   '</PropertyGroup>'
+                                   '<Target Name="ExcludeCryptoReferences" BeforeTargets="CoreCompile"><ItemGroup>'
+                                   '<ReferencePath Remove="@(ReferencePath)" '
+                                   'Condition="$([System.String]::Copy(\'%(ReferencePath.Filename)\').StartsWith(\'System.Security.Cryptography\'))" />'
+                                   '<ReferencePathWithRefAssemblies Remove="@(ReferencePathWithRefAssemblies)" '
+                                   'Condition="$([System.String]::Copy(\'%(ReferencePathWithRefAssemblies.Filename)\').StartsWith(\'System.Security.Cryptography\'))" />'
+                                   '</ItemGroup></Target></Project>', encoding="ascii")
                 command = [dotnet, "build", str(project), "--nologo", "-v:q"]
                 run = [dotnet, str(path / "bin/Debug/net8.0/Checks.dll")]
             compiled = subprocess.run(command, capture_output=True, text=True, timeout=120)
