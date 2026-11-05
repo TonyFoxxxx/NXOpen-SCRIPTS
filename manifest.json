@@ -51,6 +51,15 @@
       "description": "Переименование операций с нумерацией по порядку дерева CAM."
     },
     {
+      "id": "PlanarCHIK",
+      "name": "PlanarCHIK — границы и припуск",
+      "file": "PlanarCHIK.cs",
+      "version": "V1.01",
+      "path": "scripts/PlanarCHIK.cs",
+      "sha256": "a5bb32eda693da5d6708011604f3f4602ec5ff2d9386a987399e6fd3247b6e5b",
+      "description": "Tool Position On для всех элементов границ выбранных PLANAR_MILL; включение Stock с единым припуском по запросу."
+    },
+    {
       "id": "NX_Number_Program_Folders",
       "name": "Нумерация папок программ",
       "file": "NX_Number_Program_Folders.cs",

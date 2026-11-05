@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-05 — PlanarCHIK V1.01
+
+- First publication of PlanarCHIK in the updater catalog, using the stable filename `PlanarCHIK.cs` and SHA-256 verification.
+- The script sets Tool Position On for every boundary member of selected PLANAR_MILL operations. Answering Yes to «Добавить припуск?» (Add stock?) enables Stock for each member and applies one entered value in work-part units; No preserves the Stock settings.
+- V1.01 appears in the opening comment and a single version constant used by message titles. The native NX numeric input includes the version in its prompt. Added Russian and English guides; publication does not change script behavior.
+- Checked catalog validity, matching versions and SHA-256, and installation and updating through the updater code. Execution inside NX / Designcenter was not performed here.
+
 ## 2026-10-23 — ESKD V1.41
 
 - Fixed the NX journal `SHA256` compilation error: the system algorithm is resolved at runtime without an additional assembly reference.

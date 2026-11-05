@@ -18,6 +18,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.47 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.04 | Add minimum Z to operation names, including supported spot-drilling and through-hole drilling cycles. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
+| [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Fill tool descriptions with diameter and T, H, D numbers. | [All features](docs/en/tool-description.md) |
 | [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.41 | ESKD drawing borders, title blocks and annotation formatting. | [All features](docs/en/eskd.md) |
@@ -30,10 +31,10 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — ESKD V1.41 · 2026-10-23
+### Latest update — PlanarCHIK V1.01 · 2026-11-05
 
-- Fixed the `SHA256` compilation error when starting ESKD. Font verification is retained without requiring an additional .NET assembly reference.
-- Update ESKD through the updater and run the journal again. [Details](docs/en/eskd.md#latest-release).
+- PlanarCHIK is now available in the updater catalog. It sets Tool Position On for all boundary members of selected PLANAR_MILL operations and optionally enables Stock with an entered allowance.
+- In the updater, click «Проверить» (Check), select PlanarCHIK, then click «Применить выбранное» (Apply selected). The installed filename is `PlanarCHIK.cs`. [Details](docs/en/planarchik.md#latest-release).
 
 ## Installation
 

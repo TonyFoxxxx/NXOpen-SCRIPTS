@@ -18,6 +18,7 @@
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.47 | Вывод управляющих программ и FANUC BIN в папку станка или на носитель. | [Все функции](docs/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.04 | Добавление минимального Z к именам операций, включая поддерживаемые циклы центрования и сквозного сверления. | [Все функции](docs/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |
+| [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Заполнение описаний инструментов диаметром и номерами T, H, D. | [Все функции](docs/tool-description.md) |
 | [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.41 | Оформление рамки, основной надписи и аннотаций чертежа по ЕСКД. | [Все функции](docs/eskd.md) |
@@ -30,10 +31,10 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — ЕСКД V1.41 · 23.10.2026
+### Последнее обновление — PlanarCHIK V1.01 · 05.11.2026
 
-- Исправлена ошибка компиляции `SHA256` при запуске ЕСКД. Проверка шрифта сохранена и не требует дополнительной ссылки на сборку .NET.
-- Обновите ЕСКД через апдейтер и запустите журнал повторно. [Подробности](docs/eskd.md#изменения-последней-версии).
+- PlanarCHIK впервые добавлен в каталог апдейтера. Скрипт задаёт Tool Position On всем элементам границ выбранных PLANAR_MILL и по запросу включает Stock с введённым припуском.
+- В апдейтере нажмите «Проверить», отметьте PlanarCHIK и нажмите «Применить выбранное». Рабочее имя — `PlanarCHIK.cs`. [Подробности](docs/planarchik.md#изменения-последней-версии).
 
 ## Установка
 
