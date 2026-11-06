@@ -2,17 +2,16 @@
 
 [Русский](../zmin.md) | **English**
 
-Script: [NX_Operation_Zmin.py](../../scripts/NX_Operation_Zmin.py), **V1.04**. [All scripts](../../README.en.md#scripts).
+Script: [NX_Operation_Zmin.py](../../scripts/NX_Operation_Zmin.py), **V1.05**. [All scripts](../../README.en.md#scripts).
 
 ## Latest release
 
-**V1.04 · 2026-10-15**
+**V1.05 · 2026-11-06**
 
-- Spot drilling now supports `Drill` as well as `Drill,Csink`; depth to the tip comes from operation-local FBM `DEPTH`.
-- Through-hole drilling now supports `SYS_CL_SHOULDER` with `IgnoreToolTip` enabled. The existing `SYS_CL_TIP` with `IgnoreToolTip` disabled remains supported. Both use local `DEPTH` + bottom offset + standard conical point length; enabling `IgnoreToolTip` does not remove the point-length term.
-- Linked through-hole features `STEP1HOLE` and `STEP2HOLE` are supported. The full operation-local depth is used, not the master feature's `DEPTH_1`.
-- Hole matching allows small FBM coordinate roundoff, with a base tolerance of `0.00001` model units. Entrance-point and axis correspondence must remain unique.
-- New diagnostic data and reference NC output confirm the calculation outside NX. Ordinary CL projection and rotary handling are retained; unsupported settings still produce a skip reason. V1.04 requires a control run inside the target NX / Designcenter environment.
+- Fixed skipped through-hole drilling when model and local entrances differ by the configured positive `Top Offset` along the hole axis.
+- When no direct entrance match exists, the reader checks that exact offset using the existing roundoff tolerance. A unique link to a supported through-hole feature is required.
+- Final Z still uses the saved `Cycle` point, local `DEPTH`, bottom offset and point length; top offset is not counted again.
+- The same calculation is included in Setup sheets V2.65 and Postprocessing V1.48. Diagnostic data and reference NC output were checked outside NX; Python/C# tests cover shifted entrances, rotations and ambiguity rejection.
 
 ## Purpose
 
@@ -45,7 +44,7 @@ Linear motion is evaluated at saved CL points. Internal minima of arcs and helic
 
 ## Spot drilling and drilling
 
-A saved machine-cycle point may lie at the hole entrance. A minimum based only on those CL points therefore misses drilling depth. V1.04 reads operation-local FBM data, matches each hole by entrance coordinates and axis, and calculates:
+A saved machine-cycle point may lie at the hole entrance. A minimum based only on those CL points therefore misses drilling depth. V1.05 reads operation-local FBM data, matches each hole by entrance coordinates and axis, and calculates:
 
 `Z_tip = dot(P_entry - O, unit(ToolAxis)) - depth_to_tip`.
 
@@ -58,6 +57,8 @@ The following standard `HoleDrilling` profiles are supported:
 
 Depth comes from the feature **inside the operation**, rather than the master model feature or operation name. For `STEP2HOLE`, the full operation-local depth is used; the master feature's `DEPTH_1` does not replace it. Geometry order and path order may differ. Matching allows small FBM coordinate roundoff with a base tolerance of `0.00001` model units; the entrance-point and axis match must be unique. Approach and retract heights are not added to drilling depth. Ordinary CL movements still contribute to the overall minimum.
 
+To confirm a through-hole type, the reader first matches the local entrance to a linked model feature. If no direct match exists, it accepts `P_model + TopOffset × tool_axis` only for a positive `TopOffset.Distance` with offset type `Distance`. This checks the model link only: each `Cycle` point must still match the actual local entrance. Top offset neither changes local `DEPTH` nor gets added to depth again. Lateral shifts, opposite axes and ambiguous links are rejected; geometric tolerance is unchanged.
+
 This requires a current path, `MachineCycle` output and a verified standard conical tip. Spot drilling uses `SYS_CL_TIP` with `IgnoreToolTip` disabled. Through-hole drilling supports two setting pairs:
 
 | Control point | `IgnoreToolTip` | Depth to the tip |
@@ -69,10 +70,10 @@ Other control-point / `IgnoreToolTip` combinations are unsupported. Depth must c
 
 Blind holes and other unconfirmed hole types, other cycles, pilot/compound tips, unsupported control points and depth policies are skipped with explanations. If even one Cycle point cannot be resolved, the entire operation is skipped; no partial minimum or substituted Z0 is written. A skipped operation retains its old name.
 
-Ordinary CL projection matches the [setup-sheet generator](setup-card.md) algorithm introduced in V2.38. The standalone V1.04 cycle-depth correction is included in setup-sheet V2.52, for both its Zmin column and optional renaming. [Postprocessing V1.47](postprocess.md#zmin-in-operation-names) uses the same calculation when Zmin naming is enabled before NC output. All three scripts share the same machine-cycle limitations.
+Shared Zmin V1.05 calculation is included in [Setup sheets V2.65](setup-card.md), for both the Zmin column and optional renaming. [Postprocessing V1.48](postprocess.md#zmin-in-operation-names) uses the same calculation when Zmin naming is enabled before NC output. All three scripts share the same machine-cycle limitations; ordinary and rotary CL projection is retained.
 
 ## Validation and file effects
 
-V1.04 was checked outside NX against exported toolpaths, hole parameters, reference NC output and regression tests. A four-decimal suffix can differ from three-decimal NC output solely because of rounding. The journal itself neither reads nor creates NC files. Execution of this revision in the target NX environment still requires a control run. See the [changelog](../../CHANGELOG.en.md) for release history.
+V1.05 was checked outside NX against exported toolpaths, hole parameters, reference NC output and regression tests. A four-decimal suffix can differ from three-decimal NC output solely because of rounding. The journal itself neither reads nor creates NC files. Execution of this revision in the target NX environment still requires a control run. See the [changelog](../../CHANGELOG.en.md) for release history.
 
 The script shows its version in the window. It does not edit or recalculate toolpaths, save the PRT automatically, or create an INI, log, temporary file or other output file.

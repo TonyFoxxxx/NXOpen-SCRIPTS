@@ -161,6 +161,7 @@ class CycleCase:
             CycleTable=NS(MotionOutput=0, CycleType=cycle_type or ('Drill,Csink' if spot else 'Drill,Deep'),
                           CycleTrackingPoint='None', CsinkDiameter=0.),
             CutParameters=NS(BottomStock=NS(Value=0.), PartStock=NS(Value=0.),
+                             TopOffset=NS(OffsetType=0, Distance=0.),
                              BottomOffset=NS(OffsetType=0, Distance=0. if spot else 2.)))
         points = [(tuple(positions[0][i] + 40 * axes[0][i] for i in range(3)), axes[0], 1)]
         for p, a in reversed(list(zip(positions, axes))):
@@ -189,6 +190,14 @@ class CycleCase:
             CamPathToolAxisType=NS(Three=3, Five=5), CamPathMotionShapeType=NS(Linear=1),
             CamPathMotionType=NS(Rapid=1, Cycle=2), CamPathDir=NS(Clockwise=1, Counterclockwise=2)))
 
+    def offset_master_entries(self, distance):
+        """Keep saved/local entries fixed; place model entries below their top offset."""
+        self.builder.CutParameters.TopOffset.Distance = distance
+        for master in self.masters:
+            for c in 'XYZ':
+                master.values[c + '_POSITION'] += distance * master.values[c + '_ORIENTATION_D']
+        return self
+
     def read(self):
         try:
             return ZMIN.toolpath_zmin(self.nx, self.op, IDENTITY, self.origin)
@@ -197,6 +206,62 @@ class CycleCase:
 
 
 class CycleDepthTests(unittest.TestCase):
+    def test_top_offset_matches_master_without_changing_local_depth_or_projection(self):
+        origin, offset = (31., -12., 8.), .75
+        for mode in (3, 5):
+            for degrees in (-150, 0, 90, 180):
+                for shoulder in (False, True):
+                    for master_type in ('STEP1HOLE', 'STEP2HOLE'):
+                        with self.subTest(mode=mode, degrees=degrees, shoulder=shoulder, master=master_type):
+                            sine, cosine = math.sin(math.radians(degrees)), math.cos(math.radians(degrees))
+                            axis = (sine, 0., cosine)
+                            point = (origin[0] + 20*cosine + offset*sine, origin[1],
+                                     origin[2] - 20*sine + offset*cosine)
+                            case = CycleCase(positions=[point], axes=[axis], origin=origin,
+                                             shoulder=shoulder, master_type=master_type).offset_master_entries(offset)
+                            case.op.path.ToolAxisType = mode
+                            # Native FBM roundoff remains within the original geometric tolerance.
+                            case.masters[0].values['Y_POSITION'] += 4e-7
+                            case.masters[0].values['DEPTH'] = 700.
+                            expected = offset - 9.5 - 2. - 5. / (2 * math.tan(math.pi / 3))
+                            self.assertAlmostEqual(case.read(), expected)
+                            self.assertEqual(case.builder.destroyed, 1)
+
+    def test_top_offset_is_not_applied_when_entries_already_match(self):
+        case = CycleCase()
+        case.builder.CutParameters.TopOffset.Distance = .75
+        self.assertAlmostEqual(case.read(), -12.943375672974064)
+
+    def test_top_offset_does_not_relax_unmatched_or_ambiguous_master_checks(self):
+        mutations = [lambda c: setattr(c.builder.CutParameters.TopOffset, 'Distance', .5),
+                     lambda c: setattr(c.builder.CutParameters.TopOffset, 'Distance', -.75),
+                     lambda c: setattr(c.builder.CutParameters.TopOffset, 'OffsetType', 1),
+                     lambda c: c.masters[0].values.update(X_POSITION=10.01),
+                     lambda c: c.masters[0].values.update(Z_POSITION=-.75002),
+                     lambda c: c.masters[0].values.update(Z_ORIENTATION_D=1.),
+                     lambda c: setattr(c.masters[0], 'Type', 'STEP1POCKET'),
+                     lambda c: setattr(c.masters[0], 'operations', []),
+                     lambda c: c.masters.append(c.masters[0])]
+        for index, mutation in enumerate(mutations):
+            with self.subTest(index=index):
+                case = CycleCase().offset_master_entries(.75)
+                mutation(case)
+                with self.assertRaisesRegex(ValueError, 'STEP1HOLE/STEP2HOLE'):
+                    case.read()
+                self.assertEqual(case.builder.destroyed, 1)
+        for value in (float('nan'), float('inf')):
+            case = CycleCase().offset_master_entries(.75)
+            case.builder.CutParameters.TopOffset.Distance = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                case.read()
+
+    def test_top_offset_does_not_move_the_cycle_to_match_a_different_local_entry(self):
+        case = CycleCase().offset_master_entries(.75)
+        point, axis, kind = case.op.path.points[-1]
+        case.op.path.points[-1] = ((point[0], point[1], point[2] - .75), axis, kind)
+        with self.assertRaisesRegex(ValueError, 'сопоставить'):
+            case.read()
+
     def test_spot_uses_local_tip_depth_not_master_depth_or_tool_cone(self):
         for cycle_type in ('Drill,Csink', 'Drill'):
             with self.subTest(cycle_type=cycle_type):

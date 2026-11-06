@@ -1,5 +1,5 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.47
+// SCRIPT_VERSION: V1.48
 // Optional numbering, tool descriptions and operation Zmin.
 // Cycle Zmin uses verified local FBM depths; actual CL rotary axes are preserved.
 // Modal-aware work-offset repeats; per-post retract profiles and copyable errors.
@@ -1349,6 +1349,23 @@ internal static class ZminCycleDepth
                 if (drill)
                 {
                     List<Hole> matches = masters.FindAll(delegate(Hole candidate) { return SameHole(hole.Point, hole.Axis, candidate.Point, candidate.Axis); });
+                    if (matches.Count == 0)
+                    {
+                        // Some local entries include Top Offset; classify against that exact
+                        // distance along the model axis, retaining the local point and depth.
+                        var top = cut.TopOffset;
+                        if (top.OffsetType.ToString() == "Distance")
+                        {
+                            double topOffset = ZminGeometry.Finite(top.Distance);
+                            if (topOffset > 0)
+                                matches = masters.FindAll(delegate(Hole candidate)
+                                {
+                                    double[] shifted = new double[3];
+                                    for (int j = 0; j < 3; j++) shifted[j] = candidate.Point[j] + topOffset * candidate.Axis[j];
+                                    return SameHole(hole.Point, hole.Axis, shifted, candidate.Axis);
+                                });
+                        }
+                    }
                     if (matches.Count != 1 || (matches[0].FeatureType != "STEP1HOLE" && matches[0].FeatureType != "STEP2HOLE"))
                         throw new InvalidOperationException("\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e \u0441\u043a\u0432\u043e\u0437\u043d\u043e\u0435 \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u0435 STEP1HOLE/STEP2HOLE; \u0433\u043b\u0443\u0445\u0438\u0435 \u0438 \u043d\u0435\u043e\u0434\u043d\u043e\u0437\u043d\u0430\u0447\u043d\u044b\u0435 \u043e\u0442\u0432\u0435\u0440\u0441\u0442\u0438\u044f \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u044e\u0442\u0441\u044f.");
                     if (feature.IsAttributeOverridden("SUBTYPE") || feature.GetAttribute("SUBTYPE").GetIntegerValue() != 0)
@@ -5216,7 +5233,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.47";
+    internal const string SCRIPT_VERSION = "V1.48";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
     private static readonly string WindowStamp = DecodeWindowStamp();
 

@@ -8,10 +8,11 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.64 · 2026-10-22**
+**V2.65 · 2026-11-06**
 
-- On additional setup sheets, the Setup row is replaced by MCS and shows the full name of the coordinate system used for that sheet's views.
-- This row has no setup counter. Long MCS names wrap, and the name is retained when editing the setup number, saving HTML and printing.
+- Shared Zmin calculation updated to V1.05: through-hole entrances shifted by the configured positive `Top Offset` along their axis are accepted when the match is unique.
+- The fix applies to both the Zmin column and optional operation renaming. Local depth and the actual path point are retained without counting top offset twice.
+- Table output, renaming and reuse of the calculated value were checked; execution inside NX was not performed here.
 
 Regenerate the HTML after updating. See the [changelog](../../CHANGELOG.en.md).
 
@@ -96,9 +97,11 @@ Operation D visibility is determined by tool number T across the whole CAM proje
 
 Available tool information includes overhang H, cutting length L and relieved length HL; the sheet explains these labels. Toolpath time does not include every machine overhead.
 
-The Zmin column and optional renaming share the [standalone Zmin journal](zmin.md) V1.04 algorithm. Ordinary motions use `dot(P - O, unit(ToolAxis))` at saved CL points; both Three and Five motions supply their actual tool vectors. For rotary machining, the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include internal extrema; varying-axis arcs without interpolation data and compound paths are unsupported. This is not a simulation of postprocessed machine movement.
+The Zmin column and optional renaming share the [standalone Zmin journal](zmin.md) V1.05 algorithm. Ordinary motions use `dot(P - O, unit(ToolAxis))` at saved CL points; both Three and Five motions supply their actual tool vectors. For rotary machining, the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include internal extrema; varying-axis arcs without interpolation data and compound paths are unsupported. This is not a simulation of postprocessed machine movement.
 
 Supported `Drill` / `Drill,Csink` spot drilling calculates final Z from operation-local FBM `DEPTH` to the tip. Through-hole `STEP1HOLE` / `STEP2HOLE` features use full local operation depth, bottom offset and standard conical point length, both for `SYS_CL_TIP` with `IgnoreToolTip` disabled and for `SYS_CL_SHOULDER` with it enabled. Each hole's position and axis are matched uniquely to the path, allowing small FBM coordinate roundoff. Master-model depth, including `DEPTH_1`, and old operation names are not used as depth sources. The standard settings in the [machine-cycle limitations](zmin.md#spot-drilling-and-drilling) are required.
+
+To confirm a through-hole type, the reader first matches the local entrance to a linked model feature. If no direct match exists, it accepts `P_model + TopOffset × tool_axis` only for a positive `TopOffset.Distance` with offset type `Distance`. This checks the model link only: each `Cycle` point must still match the actual local entrance. Top offset neither changes local `DEPTH` nor gets added to depth again. Lateral shifts, opposite axes and ambiguous links are rejected; geometric tolerance is unchanged.
 
 If even one Cycle point has no resolved depth, Zmin stays blank for the whole operation; neither a partial minimum nor a substituted Z0 is displayed. With renaming enabled, that operation's Zmin suffix is left unchanged. Zmin suffixes are added or replaced only when the startup option is enabled; the NX result then shows reasons for skipped renames.
 

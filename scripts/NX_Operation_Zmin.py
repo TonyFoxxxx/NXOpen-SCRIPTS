@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # Минимальный Z в именах операций
-# SCRIPT_VERSION: V1.04
+# SCRIPT_VERSION: V1.05
 # Рабочее имя файла: NX_Operation_Zmin.py
-SCRIPT_VERSION = "V1.04"
+SCRIPT_VERSION = "V1.05"
 SCRIPT_NAME = "Минимальный Z в именах операций"
 
 # Запуск: NX / Designcenter -> Журнал -> Воспроизвести.
@@ -366,6 +366,16 @@ def read_cycle_holes(nx, operation):
                 raise ValueError('Угол вершины локального отверстия не совпадает с инструментом.')
             if drill:
                 matches = [m for m, p, a in masters if same_hole(point, axis, p, a)]
+                if not matches:
+                    # Some local entries already include the positive Top Offset.
+                    # Match only that configured distance along the model's axis.
+                    # Keep the local point/depth for Cycle matching and projection.
+                    top = cut.TopOffset
+                    if enum_name(top.OffsetType, offset_types, ('Distance',)) == 'Distance':
+                        top_offset = finite_number(top.Distance)
+                        if top_offset > 0:
+                            matches = [m for m, p, a in masters if same_hole(
+                                point, axis, tuple(p[i] + top_offset * a[i] for i in range(3)), a)]
                 if len(matches) != 1 or str(matches[0].Type) not in ('STEP1HOLE', 'STEP2HOLE'):
                     raise ValueError('Не подтверждено сквозное отверстие STEP1HOLE/STEP2HOLE; '
                                      'глухие и неоднозначные отверстия пока не поддерживаются.')

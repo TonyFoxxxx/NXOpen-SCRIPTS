@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.64
+# SCRIPT_VERSION: V2.65
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -116,7 +116,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.64"
+SCRIPT_VERSION = "V2.65"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -3891,6 +3891,16 @@ def read_cycle_holes(nx, operation):
                 raise ValueError('Угол вершины локального отверстия не совпадает с инструментом.')
             if drill:
                 matches = [m for m, p, a in masters if same_hole(point, axis, p, a)]
+                if not matches:
+                    # Some local entries already include the positive Top Offset.
+                    # Match only that configured distance along the model's axis.
+                    # Keep the local point/depth for Cycle matching and projection.
+                    top = cut.TopOffset
+                    if enum_name(top.OffsetType, offset_types, ('Distance',)) == 'Distance':
+                        top_offset = finite_number(top.Distance)
+                        if top_offset > 0:
+                            matches = [m for m, p, a in masters if same_hole(
+                                point, axis, tuple(p[i] + top_offset * a[i] for i in range(3)), a)]
                 if len(matches) != 1 or str(matches[0].Type) not in ('STEP1HOLE', 'STEP2HOLE'):
                     raise ValueError('Не подтверждено сквозное отверстие STEP1HOLE/STEP2HOLE; '
                                      'глухие и неоднозначные отверстия пока не поддерживаются.')

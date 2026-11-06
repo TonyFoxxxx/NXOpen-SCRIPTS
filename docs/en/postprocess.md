@@ -8,14 +8,13 @@ Outputs NC programs to machine folders, removable media or a manually selected f
 
 ## Latest release
 
-**V1.47 · 2026-10-15**
+**V1.48 · 2026-11-06**
 
-- Optional Zmin naming before NC output uses the extended Zmin V1.04 cycle calculation: `Drill` / `Drill,Csink` spot drilling and `STEP1HOLE` / `STEP2HOLE` through-hole features.
-- Drilling now supports `SYS_CL_SHOULDER` with `IgnoreToolTip` enabled and retains `SYS_CL_TIP` with it disabled. Both include full operation-local FBM depth, bottom offset and standard conical point length.
-- Hole matching allows small FBM coordinate roundoff but requires unique entrance-point and axis correspondence. [Exact settings and limitations](zmin.md#spot-drilling-and-drilling).
-- Retained rotary calculation along actual ToolAxis vectors, selection scope, numbering, Description, preparation rollback and NC/BIN output. Unsupported cycles are skipped with reasons, without writing partial minima or substituted Z0.
+- Shared Zmin V1.05 calculation fixes skipped through-hole drilling when the local entrance differs from its linked model feature by the configured positive `Top Offset` along the axis.
+- If no direct match exists, that offset is checked; ambiguous links and unsupported holes still produce a skip reason. Depth is projected from the actual `Cycle` point without adding top offset again.
+- The fix applies to optional Zmin naming before NC output. [Calculation and limitations](zmin.md#spot-drilling-and-drilling).
 
-Calculations were checked outside NX against new diagnostic data and reference NC output. This revision still requires a control run inside the target NX / Designcenter environment. See the [changelog](../../CHANGELOG.en.md).
+The C# calculation was checked outside NX using diagnostic data, reference NC output and synthetic paths. Execution in the target NX / Designcenter environment still requires a control run. See the [changelog](../../CHANGELOG.en.md).
 
 ## Program selection and posts
 
@@ -78,7 +77,9 @@ This option uses NX selection captured **before the first window opens**:
 
 Existing, current toolpaths are evaluated using actual Three/Five ToolAxis vectors and `dot(P - O, unit(ToolAxis))`. Values are rounded to four decimal places without unnecessary zeros. For rotary machining the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include analytical internal minima; unsupported varying-axis or compound paths, missing data and out-of-date paths are skipped with reasons. This is a CL calculation, not controller simulation.
 
-Supported `HoleDrilling` machine cycles use the standalone Zmin V1.04 algorithm: `Drill` / `Drill,Csink` spot drilling uses operation-local FBM `DEPTH` to the tip; through-hole `STEP1HOLE` / `STEP2HOLE` features use full local `DEPTH` + bottom offset + the verified length of a standard conical point. Drilling accepts `SYS_CL_TIP` with `IgnoreToolTip` disabled and `SYS_CL_SHOULDER` with it enabled; both include point length. The master feature's `DEPTH_1` is not substituted for operation-local depth. Each hole is uniquely matched to the path point and axis, allowing small FBM coordinate roundoff. Unsupported cycles/settings or even one unresolved Cycle depth leave the whole operation's Zmin suffix unchanged, with a reason in the output result. No partial minimum or substituted Z0 is written. See [spot-drilling and drilling limitations](zmin.md#spot-drilling-and-drilling) for the exact supported profiles.
+Supported `HoleDrilling` machine cycles use the standalone Zmin V1.05 algorithm: `Drill` / `Drill,Csink` spot drilling uses operation-local FBM `DEPTH` to the tip; through-hole `STEP1HOLE` / `STEP2HOLE` features use full local `DEPTH` + bottom offset + the verified length of a standard conical point. Drilling accepts `SYS_CL_TIP` with `IgnoreToolTip` disabled and `SYS_CL_SHOULDER` with it enabled; both include point length. The master feature's `DEPTH_1` is not substituted for operation-local depth. Each hole is uniquely matched to the path point and axis, allowing small FBM coordinate roundoff. Unsupported cycles/settings or even one unresolved Cycle depth leave the whole operation's Zmin suffix unchanged, with a reason in the output result. No partial minimum or substituted Z0 is written. See [spot-drilling and drilling limitations](zmin.md#spot-drilling-and-drilling) for the exact supported profiles.
+
+To confirm a through-hole type, the reader first matches the local entrance to a linked model feature. If no direct match exists, it accepts `P_model + TopOffset × tool_axis` only for a positive `TopOffset.Distance` with offset type `Distance`. This checks the model link only: each `Cycle` point must still match the actual local entrance. Top offset neither changes local `DEPTH` nor gets added to depth again. Lateral shifts, opposite axes and ambiguous links are rejected; geometric tolerance is unchanged.
 
 Repeated terminal numeric Z suffixes are replaced by one: `01_Milling_Z-5_Z-8` becomes `01_Milling_Z-12`. A Z fragment in the middle of a name and other prefixes/suffixes are retained. Already correct names and conflicts are skipped; extra counters are not added.
 

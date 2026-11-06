@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-06 — Zmin V1.05, Setup sheets V2.65 and Postprocessing V1.48
+
+- Fixed skipped through-hole drilling when the local entrance differs from its linked model feature by a positive `TopOffset.Distance` along the axis. If no direct match exists, only that exact offset with type `Distance` is accepted; ambiguous links are rejected.
+- Each `Cycle` point still matches the local entrance. Calculation uses local `DEPTH`, bottom offset and point length, without adding top offset again or substituting model depth.
+- Updated the shared algorithm in the standalone journal, setup-sheet table and renaming, and postprocessing. Working filenames and selection rules are retained.
+- Checked outside NX: reproduced the original skip from diagnostic data; corrected Python and C# calculations match reference NC rounding. Synthetic checks cover rotations, both axis storage modes, prior profiles, incorrect offsets and ambiguous links. Native execution inside NX was not performed.
+
 ## 2026-11-06 — Delete empty tools V1
 
 - Added `NX_Delete_Empty_Tools.cs` and «Удаление пустых инструментов» (Delete empty tools) to the updater catalog.

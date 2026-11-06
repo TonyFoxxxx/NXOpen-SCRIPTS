@@ -29,6 +29,23 @@ class OperationCollection(NS):
 
 
 class SetupCardCycleTests(unittest.TestCase):
+    def test_offset_master_entry_reaches_rename_and_table_from_same_local_depth(self):
+        def make():
+            return CycleCase(positions=((4., 9., -.75),), axes=((0., 0., -1.),),
+                             shoulder=True).offset_master_entries(.75)
+        case = make()
+        plan, skipped, _, values = self.rename_plan(case)
+        self.assertEqual(skipped, [])
+        self.assertEqual(plan[0]['new'], 'HOLES_Z-12.1934')
+        self.assert_released(case)
+        for prepared in (None, values):
+            case = make()
+            row, report = self.table(case, prepared=prepared)
+            self.assertAlmostEqual(row['zmin'], -12.193375672974064)
+            self.assertEqual(CARD.operation_cells(row, report)[CARD.OP_HEADERS.index('Zmin')], '-12.1934')
+            self.assertEqual(report['data_issues'], [])
+            self.assertEqual(case.builder.destroyed, 1 if prepared is None else 0)
+
     def frame(self, stack, case):
         mcs = NS(Tag=77, Name='MCS')
         stack.enter_context(patch.object(CARD, 'nearest_mcs', return_value=mcs))
