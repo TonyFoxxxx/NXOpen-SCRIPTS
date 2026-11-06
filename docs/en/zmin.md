@@ -2,15 +2,15 @@
 
 [Русский](../zmin.md) | **English**
 
-Script: [NX_Operation_Zmin.py](../../scripts/NX_Operation_Zmin.py), **V1.06**. [All scripts](../../README.en.md#scripts).
+Script: [NX_Operation_Zmin.py](../../scripts/NX_Operation_Zmin.py), **V1.07**. [All scripts](../../README.en.md#scripts).
 
 ## Latest release
 
-**V1.06 · 2026-11-06**
+**V1.07 · 2026-11-06**
 
-- Added cleanup of leading `COPY_` prefixes and trailing COPY / old-Z chains, including repeated copies. Names retain one current Z suffix.
-- Colliding final names receive `_1`, `_2`, and so on before Z. Allocation considers occupied names across the project; reruns keep the result.
-- The same rule applies to the standalone journal, setup-sheet renaming and postprocessing. Naming, selection scope, reruns and rollback were checked in Python/C# outside NX.
+- Added `Drill,Deep` support for `SPOT_DRILLING` / `NXHOLECENTER` spot drilling, using local `DEPTH` to the tip.
+- Fixed skipped through-hole drilling when local FBM and model entrances lie at different levels along the same axis. Type confirmation requires one uniquely linked model feature on the same axis with the same direction.
+- The fix is shared by the standalone journal, the setup-sheet Zmin column and renaming, and postprocessing. Each `Cycle` point must still match the local entrance strictly; model depth is never substituted.
 
 ## Purpose
 
@@ -49,7 +49,7 @@ Linear motion is evaluated at saved CL points. Internal minima of arcs and helic
 
 ## Spot drilling and drilling
 
-A saved machine-cycle point may lie at the hole entrance. A minimum based only on those CL points therefore misses drilling depth. V1.06 reads operation-local FBM data, matches each hole by entrance coordinates and axis, and calculates:
+A saved machine-cycle point may lie at the hole entrance. A minimum based only on those CL points therefore misses drilling depth. V1.07 reads operation-local FBM data, matches each hole by entrance coordinates and axis, and calculates:
 
 `Z_tip = dot(P_entry - O, unit(ToolAxis)) - depth_to_tip`.
 
@@ -57,12 +57,12 @@ The following standard `HoleDrilling` profiles are supported:
 
 | Operation | Depth to tool tip |
 | --- | --- |
-| Spot drilling: `SPOT_DRILLING` / `NXHOLECENTER`, `Drill` or `Drill,Csink` cycle | Local `DEPTH`; the conical point length is not added again. |
+| Spot drilling: `SPOT_DRILLING` / `NXHOLECENTER`, `Drill`, `Drill,Csink` or `Drill,Deep` cycle | Local `DEPTH`; the conical point length is not added again. |
 | Through-hole drilling: `DRILLING` / `NXHOLE`, `Drill` or `Drill,Deep` cycle | Full local `DEPTH` + bottom offset + tool point length. A linked `STEP1HOLE` or `STEP2HOLE` feature confirms the through-hole type. |
 
 Depth comes from the feature **inside the operation**, rather than the master model feature or operation name. For `STEP2HOLE`, the full operation-local depth is used; the master feature's `DEPTH_1` does not replace it. Geometry order and path order may differ. Matching allows small FBM coordinate roundoff with a base tolerance of `0.00001` model units; the entrance-point and axis match must be unique. Approach and retract heights are not added to drilling depth. Ordinary CL movements still contribute to the overall minimum.
 
-To confirm a through-hole type, the reader first matches the local entrance to a linked model feature. If no direct match exists, it accepts `P_model + TopOffset × tool_axis` only for a positive `TopOffset.Distance` with offset type `Distance`. This checks the model link only: each `Cycle` point must still match the actual local entrance. Top offset neither changes local `DEPTH` nor gets added to depth again. Lateral shifts, opposite axes and ambiguous links are rejected; geometric tolerance is unchanged.
+Through-hole confirmation requires exactly one model feature linked to the operation, of type `STEP1HOLE` or `STEP2HOLE`, on the same axis with the same direction. Local FBM and model entrances may lie at different axial levels; their difference need not equal `TopOffset`. The transverse distance to both axes uses the existing tolerance. Multiple linked coaxial features, including unsupported types, remain ambiguous even if one entrance matches exactly. This check only classifies the hole: each `Cycle` point must still match the actual local entrance in all three coordinates. Local entry, axis and `DEPTH` are neither moved nor replaced with model values; top offset is not added again.
 
 This requires a current path, `MachineCycle` output and a verified standard conical tip. Spot drilling uses `SYS_CL_TIP` with `IgnoreToolTip` disabled. Through-hole drilling supports two setting pairs:
 
@@ -75,10 +75,10 @@ Other control-point / `IgnoreToolTip` combinations are unsupported. Depth must c
 
 Blind holes and other unconfirmed hole types, other cycles, pilot/compound tips, unsupported control points and depth policies are skipped with explanations. If even one Cycle point cannot be resolved, the entire operation is skipped; no partial minimum or substituted Z0 is written. A skipped operation retains its old name.
 
-Shared Zmin V1.06 calculation is included in [Setup sheets V2.66](setup-card.md), for both the Zmin column and optional renaming. [Postprocessing V1.49](postprocess.md#zmin-in-operation-names) uses the same calculation when Zmin naming is enabled before NC output. All three scripts share the same machine-cycle limitations; ordinary and rotary CL projection is retained.
+Shared Zmin V1.07 calculation is included in [Setup sheets V2.67](setup-card.md), for both the Zmin column and optional renaming. [Postprocessing V1.50](postprocess.md#zmin-in-operation-names) uses the same calculation when Zmin naming is enabled before NC output. All three scripts share the same machine-cycle limitations; ordinary and rotary CL projection is retained.
 
 ## Validation and file effects
 
-V1.06 was checked outside NX against exported toolpaths, hole parameters, reference NC output and regression tests. A four-decimal suffix can differ from three-decimal NC output solely because of rounding. The journal itself neither reads nor creates NC files. Execution of this revision in the target NX environment still requires a control run. See the [changelog](../../CHANGELOG.en.md) for release history.
+V1.07 was checked outside NX against exported toolpaths, hole parameters, reference NC output and regression tests. A four-decimal suffix can differ from three-decimal NC output solely because of rounding. The journal itself neither reads nor creates NC files. Execution of this revision in the target NX environment still requires a control run. See the [changelog](../../CHANGELOG.en.md) for release history.
 
 The script shows its version in the window. It does not edit or recalculate toolpaths, save the PRT automatically, or create an INI, log, temporary file or other output file.

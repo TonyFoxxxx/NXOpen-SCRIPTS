@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-06 — Zmin V1.07, Setup sheets V2.67 and Postprocessing V1.50
+
+- Added `Drill,Deep` support for `SPOT_DRILLING` / `NXHOLECENTER` spot drilling, using local `DEPTH` to the tip.
+- Fixed skipped through-hole drilling when local FBM and model entrances lie at different levels along the same axis. Type confirmation requires one uniquely linked model feature on the same axis with the same direction.
+- The fix is shared by the standalone journal, the setup-sheet Zmin column and renaming, and postprocessing. Each `Cycle` point must still match the local entrance strictly; model depth is never substituted.
+- Checked outside NX: the reported skips were reproduced from the diagnostic export; the corrected Python and compiled production C# calculations agree with reference NC depths for all three operations, to NC output precision. Synthetic tests cover different model levels, rotation, both axis-storage formats, transverse offsets, opposite axes and coaxial ambiguity. Native NX execution has not been performed. COPY cleanup and collision numbering are retained.
+
 ## 2026-11-06 — Zmin V1.06, Setup sheets V2.66 and Postprocessing V1.49
 
 - Added cleanup of leading `COPY_` prefixes and trailing COPY / old-Z chains, including repeated copies. Names retain one current Z suffix.

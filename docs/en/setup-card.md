@@ -8,11 +8,11 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.66 · 2026-11-06**
+**V2.67 · 2026-11-06**
 
-- Added cleanup of leading `COPY_` prefixes and trailing COPY / old-Z chains, including repeated copies. Names retain one current Z suffix.
-- Colliding final names receive `_1`, `_2`, and so on before Z. Allocation considers occupied names across the project; reruns keep the result.
-- The same rule applies to the standalone journal, setup-sheet renaming and postprocessing. Naming, selection scope, reruns and rollback were checked in Python/C# outside NX.
+- Added `Drill,Deep` support for `SPOT_DRILLING` / `NXHOLECENTER` spot drilling, using local `DEPTH` to the tip.
+- Fixed skipped through-hole drilling when local FBM and model entrances lie at different levels along the same axis. Type confirmation requires one uniquely linked model feature on the same axis with the same direction.
+- The fix is shared by the standalone journal, the setup-sheet Zmin column and renaming, and postprocessing. Each `Cycle` point must still match the local entrance strictly; model depth is never substituted.
 
 Regenerate the HTML after updating.
 
@@ -103,11 +103,11 @@ Operation D visibility is determined by tool number T across the whole CAM proje
 
 Available tool information includes overhang H, cutting length L and relieved length HL; the sheet explains these labels. Toolpath time does not include every machine overhead.
 
-The Zmin column and optional renaming share the [standalone Zmin journal](zmin.md) V1.06 algorithm. Ordinary motions use `dot(P - O, unit(ToolAxis))` at saved CL points; both Three and Five motions supply their actual tool vectors. For rotary machining, the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include internal extrema; varying-axis arcs without interpolation data and compound paths are unsupported. This is not a simulation of postprocessed machine movement.
+The Zmin column and optional renaming share the [standalone Zmin journal](zmin.md) V1.07 algorithm. Ordinary motions use `dot(P - O, unit(ToolAxis))` at saved CL points; both Three and Five motions supply their actual tool vectors. For rotary machining, the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include internal extrema; varying-axis arcs without interpolation data and compound paths are unsupported. This is not a simulation of postprocessed machine movement.
 
-Supported `Drill` / `Drill,Csink` spot drilling calculates final Z from operation-local FBM `DEPTH` to the tip. Through-hole `STEP1HOLE` / `STEP2HOLE` features use full local operation depth, bottom offset and standard conical point length, both for `SYS_CL_TIP` with `IgnoreToolTip` disabled and for `SYS_CL_SHOULDER` with it enabled. Each hole's position and axis are matched uniquely to the path, allowing small FBM coordinate roundoff. Master-model depth, including `DEPTH_1`, and old operation names are not used as depth sources. The standard settings in the [machine-cycle limitations](zmin.md#spot-drilling-and-drilling) are required.
+Supported `Drill` / `Drill,Csink` / `Drill,Deep` spot drilling calculates final Z from operation-local FBM `DEPTH` to the tip. Through-hole `STEP1HOLE` / `STEP2HOLE` features use full local operation depth, bottom offset and standard conical point length, both for `SYS_CL_TIP` with `IgnoreToolTip` disabled and for `SYS_CL_SHOULDER` with it enabled. Each hole's position and axis are matched uniquely to the path, allowing small FBM coordinate roundoff. Master-model depth, including `DEPTH_1`, and old operation names are not used as depth sources. The standard settings in the [machine-cycle limitations](zmin.md#spot-drilling-and-drilling) are required.
 
-To confirm a through-hole type, the reader first matches the local entrance to a linked model feature. If no direct match exists, it accepts `P_model + TopOffset × tool_axis` only for a positive `TopOffset.Distance` with offset type `Distance`. This checks the model link only: each `Cycle` point must still match the actual local entrance. Top offset neither changes local `DEPTH` nor gets added to depth again. Lateral shifts, opposite axes and ambiguous links are rejected; geometric tolerance is unchanged.
+Through-hole confirmation requires exactly one model feature linked to the operation, of type `STEP1HOLE` or `STEP2HOLE`, on the same axis with the same direction. Local FBM and model entrances may lie at different axial levels; their difference need not equal `TopOffset`. The transverse distance to both axes uses the existing tolerance. Multiple linked coaxial features, including unsupported types, remain ambiguous even if one entrance matches exactly. This check only classifies the hole: each `Cycle` point must still match the actual local entrance in all three coordinates. Local entry, axis and `DEPTH` are neither moved nor replaced with model values; top offset is not added again.
 
 If even one Cycle point has no resolved depth, Zmin stays blank for the whole operation; neither a partial minimum nor a substituted Z0 is displayed. With renaming enabled, that operation's Zmin suffix is left unchanged. Zmin suffixes are added or replaced only when the startup option is enabled; the NX result then shows reasons for skipped renames.
 

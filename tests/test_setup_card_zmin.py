@@ -114,7 +114,7 @@ class ZminTests(unittest.TestCase):
         names = ('dot', 'cross', 'unit', 'xyz', 'read_mcs', 'finite_number', 'enum_name',
                  'path_point', 'release_path_data', 'arc_path_zmin', 'path_axis_mode',
                  'motion_z_axis', 'uf_named_value', 'feature_number', 'feature_location',
-                 'same_hole', 'read_cycle_holes', 'cycle_tip_zmin', 'toolpath_zmin')
+                 'same_hole', 'same_hole_axis', 'read_cycle_holes', 'cycle_tip_zmin', 'toolpath_zmin')
         trees = [{node.name: ast.dump(node) for node in ast.parse(path.read_text(encoding='utf-8')).body
                   if isinstance(node, ast.FunctionDef)}
                  for path in (SOURCE, ROOT / 'scripts/NX_Operation_Zmin.py')]

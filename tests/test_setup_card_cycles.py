@@ -15,6 +15,7 @@ CARD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CARD)
 PROFILES = ((dict(spot=True), -1.25),
             (dict(spot=True, cycle_type='Drill'), -1.25),
+            (dict(spot=True, cycle_type='Drill,Deep'), -1.25),
             (dict(), -12.943375672974064),
             (dict(shoulder=True, master_type='STEP2HOLE'), -12.943375672974064))
 
@@ -29,6 +30,20 @@ class OperationCollection(NS):
 
 
 class SetupCardCycleTests(unittest.TestCase):
+    def test_different_model_surface_reaches_rename_cache_and_table(self):
+        def make():
+            case = CycleCase(positions=((4., 9., -.125),), axes=((0., 0., -1.),),
+                             shoulder=True, master_type='STEP2HOLE').offset_master_entries(-3.25)
+            case.builder.CutParameters.TopOffset.Distance = .5
+            return case
+        plan, skipped, _, values = self.rename_plan(make())
+        self.assertEqual(skipped, [])
+        self.assertEqual(plan[0]['new'], 'HOLES_Z-12.8184')
+        for prepared in (None, values):
+            row, report = self.table(make(), prepared=prepared)
+            self.assertAlmostEqual(row['zmin'], -12.818375672974064)
+            self.assertEqual(report['data_issues'], [])
+
     def test_offset_master_entry_reaches_rename_and_table_from_same_local_depth(self):
         def make():
             return CycleCase(positions=((4., 9., -.75),), axes=((0., 0., -1.),),

@@ -232,12 +232,9 @@ class CycleDepthTests(unittest.TestCase):
         case.builder.CutParameters.TopOffset.Distance = .75
         self.assertAlmostEqual(case.read(), -12.943375672974064)
 
-    def test_top_offset_does_not_relax_unmatched_or_ambiguous_master_checks(self):
-        mutations = [lambda c: setattr(c.builder.CutParameters.TopOffset, 'Distance', .5),
-                     lambda c: setattr(c.builder.CutParameters.TopOffset, 'Distance', -.75),
-                     lambda c: setattr(c.builder.CutParameters.TopOffset, 'OffsetType', 1),
-                     lambda c: c.masters[0].values.update(X_POSITION=10.01),
-                     lambda c: c.masters[0].values.update(Z_POSITION=-.75002),
+    def test_model_axis_match_rejects_transverse_offsets_wrong_types_and_ambiguity(self):
+        mutations = [lambda c: c.masters[0].values.update(X_POSITION=10.01),
+                     lambda c: c.masters[0].values.update(Y_POSITION=20.00002),
                      lambda c: c.masters[0].values.update(Z_ORIENTATION_D=1.),
                      lambda c: setattr(c.masters[0], 'Type', 'STEP1POCKET'),
                      lambda c: setattr(c.masters[0], 'operations', []),
@@ -251,9 +248,50 @@ class CycleDepthTests(unittest.TestCase):
                 self.assertEqual(case.builder.destroyed, 1)
         for value in (float('nan'), float('inf')):
             case = CycleCase().offset_master_entries(.75)
-            case.builder.CutParameters.TopOffset.Distance = value
+            case.masters[0].values['Z_POSITION'] = value
             with self.subTest(value=value), self.assertRaises(ValueError):
                 case.read()
+
+    def test_model_entry_level_does_not_change_local_depth_or_rotary_projection(self):
+        origin = (17., -23., 8.)
+        for mode in (3, 5):
+            for degrees in (-150, 0, 90, 180):
+                for shift in (-3.25, .0625, 7.5):
+                    for shoulder in (False, True):
+                        with self.subTest(mode=mode, degrees=degrees, shift=shift, shoulder=shoulder):
+                            sine, cosine = math.sin(math.radians(degrees)), math.cos(math.radians(degrees))
+                            axis = (sine, 0., cosine)
+                            point = tuple(origin[i] + (20*cosine, 7., -20*sine)[i] + .125*axis[i]
+                                          for i in range(3))
+                            case = CycleCase(positions=[point], axes=[axis], origin=origin,
+                                             shoulder=shoulder, master_type='STEP2HOLE')
+                            case.offset_master_entries(shift)
+                            case.builder.CutParameters.TopOffset.Distance = .5
+                            case.op.path.ToolAxisType = mode
+                            case.masters[0].values['DEPTH'] = 777.
+                            self.assertAlmostEqual(case.read(), .125 - 9.5 - 2. - 5./(2*math.tan(math.pi/3)))
+                            self.assertEqual(case.builder.destroyed, 1)
+
+    def test_collinear_models_at_different_levels_are_ambiguous_even_with_exact_entry(self):
+        for kind in ('STEP1HOLE', 'STEP2HOLE', 'STEP1POCKET'):
+            case = CycleCase(positions=[(10., 20., 0.)])
+            other = Feature((10., 20., 4.), (0., 0., 1.), 6., 120., 5.)
+            other.Type, other.operations = kind, [case.op]
+            case.masters.append(other)
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'совпадений: 2'):
+                case.read()
+        # Only features explicitly linked to this operation may classify it.
+        case = CycleCase(positions=[(10., 20., 0.)]).offset_master_entries(-3.25)
+        case.masters.append(Feature((10., 20., 0.), (0., 0., 1.), 6., 120., 5.))
+        self.assertAlmostEqual(case.read(), -12.943375672974064)
+
+    def test_model_axis_tolerance_is_transverse_and_checks_both_directed_lines(self):
+        p, a = (0., 0., 0.), (0., 0., 1.)
+        self.assertTrue(ZMIN.same_hole_axis(p, a, (1e-5, 0., 12.), a))
+        self.assertFalse(ZMIN.same_hole_axis(p, a, (1.0001e-5, 0., 12.), a))
+        self.assertFalse(ZMIN.same_hole_axis(p, a, (0., 0., 12.), (0., 0., -1.)))
+        self.assertFalse(ZMIN.same_hole_axis(p, a, (0., 0., 200.), ZMIN.unit((1e-7, 0., 1.))))
+        self.assertFalse(ZMIN.same_hole(p, a, (0., 0., 12.), a))
 
     def test_top_offset_does_not_move_the_cycle_to_match_a_different_local_entry(self):
         case = CycleCase().offset_master_entries(.75)
@@ -263,7 +301,7 @@ class CycleDepthTests(unittest.TestCase):
             case.read()
 
     def test_spot_uses_local_tip_depth_not_master_depth_or_tool_cone(self):
-        for cycle_type in ('Drill,Csink', 'Drill'):
+        for cycle_type in ('Drill,Csink', 'Drill', 'Drill,Deep'):
             with self.subTest(cycle_type=cycle_type):
                 case = CycleCase(spot=True, cycle_type=cycle_type)
                 self.assertAlmostEqual(case.read(), -1.25)
@@ -294,7 +332,8 @@ class CycleDepthTests(unittest.TestCase):
 
     def test_rotary_projection_is_invariant_for_both_storage_modes(self):
         origin = (45., 10., -7.)
-        profiles = (dict(spot=True), dict(spot=True, cycle_type='Drill'), dict(),
+        profiles = (dict(spot=True), dict(spot=True, cycle_type='Drill'),
+                    dict(spot=True, cycle_type='Drill,Deep'), dict(),
                     dict(shoulder=True, master_type='STEP2HOLE'))
         for profile in profiles:
             for mode in (3, 5):

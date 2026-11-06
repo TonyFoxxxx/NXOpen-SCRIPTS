@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.66
+# SCRIPT_VERSION: V2.67
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -116,7 +116,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.66"
+SCRIPT_VERSION = "V2.67"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -3826,6 +3826,22 @@ def same_hole(point, axis, other_point, other_axis):
     return dot(delta, delta) <= tolerance**2 and dot(axis_delta, axis_delta) <= 1e-12
 
 
+def same_hole_axis(point, axis, other_point, other_axis):
+    """Classify a linked model feature by its directed bore axis, not its surface.
+
+    Local FBM and model entries can be at different axial levels. This check
+    never moves a Cycle/local point or supplies a depth. Match both axis lines
+    and keep the strict entry-point check in cycle_tip_zmin.
+    """
+    tolerance = max(1e-5, max(abs(x) for x in point + other_point) * 1e-10)
+    delta = tuple(point[i] - other_point[i] for i in range(3))
+    axis_delta = tuple(axis[i] - other_axis[i] for i in range(3))
+    lateral, other_lateral = cross(delta, axis), cross(delta, other_axis)
+    return (dot(axis_delta, axis_delta) <= 1e-12 and
+            dot(lateral, lateral) <= tolerance**2 and
+            dot(other_lateral, other_lateral) <= tolerance**2)
+
+
 def read_cycle_holes(nx, operation):
     """Resolve the verified HoleDrilling profiles without modifying NX.
 
@@ -3870,7 +3886,7 @@ def read_cycle_holes(nx, operation):
         output_type = getattr(nx.CAM.Cycle, 'MotionOutputTypes', None)
         if enum_name(cycle.MotionOutput, output_type, ('MachineCycle',)) != 'MachineCycle':
             raise ValueError('Тип вывода цикла не соответствует точкам Cycle.')
-        allowed_cycles = ('Drill,Csink', 'Drill') if spot else ('Drill,Deep', 'Drill')
+        allowed_cycles = ('Drill,Csink', 'Drill', 'Drill,Deep') if spot else ('Drill,Deep', 'Drill')
         if str(cycle.CycleType) not in allowed_cycles or str(cycle.CycleTrackingPoint) != 'None':
             raise ValueError('Не поддержан цикл или его точка отслеживания: ' + str(cycle.CycleType))
         if abs(finite_number(cycle.CsinkDiameter)) > 1e-10:
@@ -3926,20 +3942,17 @@ def read_cycle_holes(nx, operation):
             if abs(feature_number(feature, 'TIP_ANGLE') - math.degrees(angle)) > 1e-5:
                 raise ValueError('Угол вершины локального отверстия не совпадает с инструментом.')
             if drill:
-                matches = [m for m, p, a in masters if same_hole(point, axis, p, a)]
-                if not matches:
-                    # Some local entries already include the positive Top Offset.
-                    # Match only that configured distance along the model's axis.
-                    # Keep the local point/depth for Cycle matching and projection.
-                    top = cut.TopOffset
-                    if enum_name(top.OffsetType, offset_types, ('Distance',)) == 'Distance':
-                        top_offset = finite_number(top.Distance)
-                        if top_offset > 0:
-                            matches = [m for m, p, a in masters if same_hole(
-                                point, axis, tuple(p[i] + top_offset * a[i] for i in range(3)), a)]
-                if len(matches) != 1 or str(matches[0].Type) not in ('STEP1HOLE', 'STEP2HOLE'):
-                    raise ValueError('Не подтверждено сквозное отверстие STEP1HOLE/STEP2HOLE; '
-                                     'глухие и неоднозначные отверстия пока не поддерживаются.')
+                # Model links classify the hole; the local entry/depth remains
+                # authoritative even when it starts on another axial surface.
+                # Count all linked types so a coaxial blind feature is ambiguous.
+                matches = [m for m, p, a in masters if same_hole_axis(point, axis, p, a)]
+                if len(matches) != 1:
+                    raise ValueError('Не найдено единственное связанное сквозное отверстие '
+                                     'STEP1HOLE/STEP2HOLE на оси обработки '
+                                     '(совпадений: ' + str(len(matches)) + ').')
+                if str(matches[0].Type) not in ('STEP1HOLE', 'STEP2HOLE'):
+                    raise ValueError('Не подтверждено сквозное отверстие STEP1HOLE/STEP2HOLE: '
+                                     'тип ' + str(matches[0].Type) + ' пока не поддерживается.')
                 if feature.IsAttributeOverridden('SUBTYPE') or feature.GetAttribute('SUBTYPE').GetIntegerValue() != 0:
                     raise ValueError('Изменён тип локального отверстия; сквозная глубина не подтверждена.')
                 if abs(feature_number(feature, 'DIAMETER_1') - diameter) > max(1e-6, diameter * 1e-6):

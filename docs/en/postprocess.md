@@ -8,11 +8,11 @@ Outputs NC programs to machine folders, removable media or a manually selected f
 
 ## Latest release
 
-**V1.49 · 2026-11-06**
+**V1.50 · 2026-11-06**
 
-- Added cleanup of leading `COPY_` prefixes and trailing COPY / old-Z chains, including repeated copies. Names retain one current Z suffix.
-- Colliding final names receive `_1`, `_2`, and so on before Z. Allocation considers occupied names across the project; reruns keep the result.
-- The same rule applies to the standalone journal, setup-sheet renaming and postprocessing. Naming, selection scope, reruns and rollback were checked in Python/C# outside NX.
+- Added `Drill,Deep` support for `SPOT_DRILLING` / `NXHOLECENTER` spot drilling, using local `DEPTH` to the tip.
+- Fixed skipped through-hole drilling when local FBM and model entrances lie at different levels along the same axis. Type confirmation requires one uniquely linked model feature on the same axis with the same direction.
+- The fix is shared by the standalone journal, the setup-sheet Zmin column and renaming, and postprocessing. Each `Cycle` point must still match the local entrance strictly; model depth is never substituted.
 
 ## Program selection and posts
 
@@ -75,9 +75,9 @@ This option uses NX selection captured **before the first window opens**:
 
 Existing, current toolpaths are evaluated using actual Three/Five ToolAxis vectors and `dot(P - O, unit(ToolAxis))`. Values are rounded to four decimal places without unnecessary zeros. For rotary machining the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include analytical internal minima; unsupported varying-axis or compound paths, missing data and out-of-date paths are skipped with reasons. This is a CL calculation, not controller simulation.
 
-Supported `HoleDrilling` machine cycles use the standalone Zmin V1.06 algorithm: `Drill` / `Drill,Csink` spot drilling uses operation-local FBM `DEPTH` to the tip; through-hole `STEP1HOLE` / `STEP2HOLE` features use full local `DEPTH` + bottom offset + the verified length of a standard conical point. Drilling accepts `SYS_CL_TIP` with `IgnoreToolTip` disabled and `SYS_CL_SHOULDER` with it enabled; both include point length. The master feature's `DEPTH_1` is not substituted for operation-local depth. Each hole is uniquely matched to the path point and axis, allowing small FBM coordinate roundoff. Unsupported cycles/settings or even one unresolved Cycle depth leave the whole operation's Zmin suffix unchanged, with a reason in the output result. No partial minimum or substituted Z0 is written. See [spot-drilling and drilling limitations](zmin.md#spot-drilling-and-drilling) for the exact supported profiles.
+Supported `HoleDrilling` machine cycles use the standalone Zmin V1.07 algorithm: `Drill` / `Drill,Csink` / `Drill,Deep` spot drilling uses operation-local FBM `DEPTH` to the tip; through-hole `STEP1HOLE` / `STEP2HOLE` features use full local `DEPTH` + bottom offset + the verified length of a standard conical point. Drilling accepts `SYS_CL_TIP` with `IgnoreToolTip` disabled and `SYS_CL_SHOULDER` with it enabled; both include point length. The master feature's `DEPTH_1` is not substituted for operation-local depth. Each hole is uniquely matched to the path point and axis, allowing small FBM coordinate roundoff. Unsupported cycles/settings or even one unresolved Cycle depth leave the whole operation's Zmin suffix unchanged, with a reason in the output result. No partial minimum or substituted Z0 is written. See [spot-drilling and drilling limitations](zmin.md#spot-drilling-and-drilling) for the exact supported profiles.
 
-To confirm a through-hole type, the reader first matches the local entrance to a linked model feature. If no direct match exists, it accepts `P_model + TopOffset × tool_axis` only for a positive `TopOffset.Distance` with offset type `Distance`. This checks the model link only: each `Cycle` point must still match the actual local entrance. Top offset neither changes local `DEPTH` nor gets added to depth again. Lateral shifts, opposite axes and ambiguous links are rejected; geometric tolerance is unchanged.
+Through-hole confirmation requires exactly one model feature linked to the operation, of type `STEP1HOLE` or `STEP2HOLE`, on the same axis with the same direction. Local FBM and model entrances may lie at different axial levels; their difference need not equal `TopOffset`. The transverse distance to both axes uses the existing tolerance. Multiple linked coaxial features, including unsupported types, remain ambiguous even if one entrance matches exactly. This check only classifies the hole: each `Cycle` point must still match the actual local entrance in all three coordinates. Local entry, axis and `DEPTH` are neither moved nor replaced with model values; top offset is not added again.
 
 Names are cleaned of leading `COPY_` / `COPY_COPY_` prefixes and trailing `_COPY` / numeric `_Z` chains in any order; `COPY1` and `COPY_1` markers are also supported. For example, `MILL_R0.5_Z-6_COPY_COPY_Z7.75` with a calculated Z of 7.75 becomes `MILL_R0.5_Z7.75`. Fragments inside the core name, such as `MILL_COPY_TOOL` or `MILL_Z1_part`, are retained.
 

@@ -368,7 +368,7 @@ internal static class CycleChecks
         double drillTip = 5.0 / (2 * Math.Tan(Math.PI / 3));
         foreach (bool spot in new bool[] { true, false })
         {
-            string[] cycles = spot ? new string[] { "Drill", "Drill,Csink" } : new string[] { "Drill", "Drill,Deep" };
+            string[] cycles = spot ? new string[] { "Drill", "Drill,Csink", "Drill,Deep" } : new string[] { "Drill", "Drill,Deep" };
             foreach (string cycle in cycles)
             foreach (string drive in new string[] { "SYS_CL_TIP", "SYS_CL_SHOULDER", "CUSTOM_POINT" })
             foreach (bool ignore in new bool[] { false, true })
@@ -448,19 +448,65 @@ internal static class CycleChecks
         }
         Case direct = Make(false); direct.Builder.CutParameters.TopOffset.Distance = .75;
         Near(OperationZmin.ToolpathMinimum(direct.Operation, direct.Origin).Value, -11.706681090196877, "already matching entries do not apply top offset twice"); direct.Released();
-        Case bad = TopOffsetCase(); bad.Builder.CutParameters.TopOffset.Distance = .5; Reject(bad, "STEP1HOLE/STEP2HOLE");
-        bad = TopOffsetCase(); bad.Builder.CutParameters.TopOffset.Distance = -.75; Reject(bad, "STEP1HOLE/STEP2HOLE");
-        bad = TopOffsetCase(); bad.Builder.CutParameters.TopOffset.OffsetType = VerticalPosition.OffsetTypes.ToolDiameter; Reject(bad, "STEP1HOLE/STEP2HOLE");
-        bad = TopOffsetCase(); bad.Operation.OwningPart.CAMFeatures[0].Values["Y_POSITION"] = 20.01; Reject(bad, "STEP1HOLE/STEP2HOLE");
-        bad = TopOffsetCase(); bad.Operation.OwningPart.CAMFeatures[0].Values["X_POSITION"] = 2e-5; Reject(bad, "STEP1HOLE/STEP2HOLE");
+        foreach (double top in new double[] { .5, -.75 })
+        {
+            Case independent = TopOffsetCase(); independent.Builder.CutParameters.TopOffset.Distance = top;
+            independent.Builder.CutParameters.TopOffset.OffsetType = VerticalPosition.OffsetTypes.ToolDiameter;
+            Near(OperationZmin.ToolpathMinimum(independent.Operation, independent.Origin).Value, expected, "local data already contains actual entry"); independent.Released();
+        }
+        Case bad = TopOffsetCase(); bad.Operation.OwningPart.CAMFeatures[0].Values["Y_POSITION"] = 20.01; Reject(bad, "STEP1HOLE/STEP2HOLE");
+        bad = TopOffsetCase(); bad.Operation.OwningPart.CAMFeatures[0].Values["Z_POSITION"] = 10.00002; Reject(bad, "STEP1HOLE/STEP2HOLE");
         bad = TopOffsetCase(); bad.Operation.OwningPart.CAMFeatures[0].Values["X_ORIENTATION_D"] = -1.0; Reject(bad, "STEP1HOLE/STEP2HOLE");
         bad = TopOffsetCase(); bad.Operation.OwningPart.CAMFeatures[0].Type = "STEP1POCKET"; Reject(bad, "STEP1HOLE/STEP2HOLE");
         bad = TopOffsetCase(); bad.Operation.OwningPart.CAMFeatures[0].Operations = new Operation[0]; Reject(bad, "STEP1HOLE/STEP2HOLE");
         bad = TopOffsetCase(); bad.Operation.OwningPart.CAMFeatures.Add(bad.Operation.OwningPart.CAMFeatures[0]); Reject(bad, "STEP1HOLE/STEP2HOLE");
         bad = TopOffsetCase(); bad.Operation.SavedPath.Records[2].Point = new double[] { 0, 20, 10 };
         Reject(bad, "\u0441\u043e\u043f\u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c");
-        bad = TopOffsetCase(); bad.Builder.CutParameters.TopOffset.Distance = Double.NaN;
+        bad = TopOffsetCase(); bad.Operation.OwningPart.CAMFeatures[0].Values["X_POSITION"] = Double.NaN;
         Reject(bad, "\u043d\u0435\u0447\u0438\u0441\u043b\u043e\u0432\u043e\u0435");
+    }
+    private static void ModelSurfaces()
+    {
+        double expected = .75 - 7 - 2 - 5.0 / (2 * Math.Tan(Math.PI / 3));
+        foreach (CamPathToolAxisType mode in new CamPathToolAxisType[] { CamPathToolAxisType.Three, CamPathToolAxisType.Five })
+        foreach (int degrees in new int[] { -150, 0, 90, 180 })
+        foreach (double surface in new double[] { -3.25, .0625, 7.5 })
+        foreach (bool shoulder in new bool[] { false, true })
+        {
+            Case c = TopOffsetCase(); c.Operation.SavedPath.ToolAxisType = mode;
+            c.Builder.DrivePoint = shoulder ? "SYS_CL_SHOULDER" : "SYS_CL_TIP"; c.Builder.IgnoreToolTip = shoulder;
+            c.Builder.CutParameters.TopOffset.Distance = .5;
+            c.Origin = new double[] { 17, -23, 8 }; double angle = degrees * Math.PI / 180;
+            foreach (var item in c.Builder.Geometry.GeometryList.Items) TransformFeature(item.LocalFeature, angle, c.Origin);
+            foreach (CAMFeature master in c.Operation.OwningPart.CAMFeatures)
+            {
+                master.Type = "STEP2HOLE"; master.Values["X_POSITION"] = surface;
+                TransformFeature(master, angle, c.Origin);
+            }
+            foreach (PathRecord record in c.Operation.SavedPath.Records)
+                if (record.IsMotion) { record.Point = Shift(Rotate(record.Point, angle), c.Origin); record.Axis = Rotate(record.Axis, angle); }
+            c.Builder.Geometry.GeometryList.Items.Reverse(); c.Operation.OwningPart.CAMFeatures.Reverse();
+            Near(OperationZmin.ToolpathMinimum(c.Operation, c.Origin).Value, expected, "different model surface retains local depth and rotary frame"); c.Released();
+        }
+        foreach (string kind in new string[] { "STEP1HOLE", "STEP2HOLE", "STEP1POCKET" })
+        {
+            Case c = Make(false);
+            CAMFeature other = new CAMFeature { Type = kind, Operations = new Operation[] { c.Operation } };
+            foreach (var pair in c.Operation.OwningPart.CAMFeatures[0].Values) other.Values[pair.Key] = pair.Value;
+            other.Values["X_POSITION"] = 4.0; c.Operation.OwningPart.CAMFeatures.Add(other);
+            Reject(c, "2)."); // A matching entry cannot override a second coaxial linked feature.
+        }
+        Case unlinked = TopOffsetCase();
+        CAMFeature decoy = new CAMFeature { Type = "STEP1POCKET", Operations = new Operation[0] };
+        foreach (var pair in unlinked.Operation.OwningPart.CAMFeatures[0].Values) decoy.Values[pair.Key] = pair.Value;
+        unlinked.Operation.OwningPart.CAMFeatures.Add(decoy);
+        Near(OperationZmin.ToolpathMinimum(unlinked.Operation, unlinked.Origin).Value, expected, "ignore unlinked model"); unlinked.Released();
+        double[] zero = new double[] { 0, 0, 0 }, axis = new double[] { 0, 0, 1 };
+        Check(ZminCycleDepth.SameHoleAxis(zero, axis, new double[] { 1e-5, 0, 12 }, axis), "axis line transverse tolerance boundary");
+        Check(!ZminCycleDepth.SameHoleAxis(zero, axis, new double[] { 1.0001e-5, 0, 12 }, axis), "axis line outside transverse tolerance");
+        Check(!ZminCycleDepth.SameHoleAxis(zero, axis, new double[] { 0, 0, 12 }, new double[] { 0, 0, -1 }), "opposite axis rejected");
+        Check(!ZminCycleDepth.SameHoleAxis(zero, axis, new double[] { 0, 0, 200 }, ZminGeometry.Unit(new double[] { 1e-7, 0, 1 })), "both axis lines must match");
+        Check(!ZminCycleDepth.SameHole(zero, axis, new double[] { 0, 0, 12 }, axis), "cycle entry still strict in axial direction");
     }
     private static void CoordinateTolerance()
     {
@@ -562,7 +608,7 @@ internal static class CycleChecks
     }
     public static int Main()
     {
-        try { Profiles(); ExpandedProfiles(); TopOffsets(); CoordinateTolerance(); Unsupported(); OrdinaryPaths(); Console.WriteLine("Production C# Zmin cycle checks: " + count + " passed."); return 0; }
+        try { Profiles(); ExpandedProfiles(); TopOffsets(); ModelSurfaces(); CoordinateTolerance(); Unsupported(); OrdinaryPaths(); Console.WriteLine("Production C# Zmin cycle checks: " + count + " passed."); return 0; }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
 }
