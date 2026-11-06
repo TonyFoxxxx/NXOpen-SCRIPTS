@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-07 — Zmin V1.08
+
+- Fixed a false skip of a constant-Z circular toolpath caused by a small difference between the stored endpoint radii. When the arc plane is perpendicular to the current tool axis, that difference does not affect depth.
+- Constant Z is verified from the arc-axis direction, radii and endpoint levels. Tilted arcs retain analytic interior minima and radius validation; helix checks are unchanged.
+- This release updates only the standalone Zmin journal. Setup sheets V2.67 and Postprocessing V1.50 retain the V1.07 calculation for now; integration of further fixes is deferred.
+- Checked outside NX: reproduced the failure from the complete diagnostic export; the corrected minimum matches reference NC output. Added checks for rotated axes, tilted arcs with equal endpoint Z, tiny tilts at large radii, noncoplanar endpoints and helices. This revision has not been executed inside NX.
+
 ## 2026-11-06 — Zmin V1.07, Setup sheets V2.67 and Postprocessing V1.50
 
 - Added `Drill,Deep` support for `SPOT_DRILLING` / `NXHOLECENTER` spot drilling, using local `DEPTH` to the tip.

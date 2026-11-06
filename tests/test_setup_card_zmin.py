@@ -1,4 +1,4 @@
-"""The setup card and standalone journal share CL projection and cycle readers."""
+"""Shared CL projection and cycles; the standalone arc fix is staged separately."""
 import ast
 import importlib.util
 import math
@@ -110,9 +110,10 @@ class ZminTests(unittest.TestCase):
         return results[0]
 
     def test_shared_projection_helpers_match_standalone_exactly(self):
-        # Keep the proven rotary calculation and cycle guards identical in both scripts.
+        # Keep the rotary calculation and cycle guards identical. V1.08 changes
+        # only the standalone arc helper; integration is deferred by the user.
         names = ('dot', 'cross', 'unit', 'xyz', 'read_mcs', 'finite_number', 'enum_name',
-                 'path_point', 'release_path_data', 'arc_path_zmin', 'path_axis_mode',
+                 'path_point', 'release_path_data', 'path_axis_mode',
                  'motion_z_axis', 'uf_named_value', 'feature_number', 'feature_location',
                  'same_hole', 'same_hole_axis', 'read_cycle_holes', 'cycle_tip_zmin', 'toolpath_zmin')
         trees = [{node.name: ast.dump(node) for node in ast.parse(path.read_text(encoding='utf-8')).body

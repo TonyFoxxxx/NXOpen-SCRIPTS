@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # Минимальный Z в именах операций
-# SCRIPT_VERSION: V1.07
+# SCRIPT_VERSION: V1.08
 # Рабочее имя файла: NX_Operation_Zmin.py
-SCRIPT_VERSION = "V1.07"
+SCRIPT_VERSION = "V1.08"
 SCRIPT_NAME = "Минимальный Z в именах операций"
 
 # Запуск: NX / Designcenter -> Журнал -> Воспроизвести.
 # Выделены операции: только они. Выделения нет: все операции рабочей детали.
-# V1.07: центрование Drill,Deep и связь отверстий с разными уровнями входа.
+# V1.08: дуги на постоянном Z не зависят от округления радиуса в плоскости.
 # Фактическая ось ToolAxis учитывается и в формате Three, и в Five.
 # Three может содержать постоянный наклон инструмента при повороте детали.
 # Начало СКС операции должно находиться на оси вращения детали.
@@ -160,8 +160,22 @@ def arc_path_zmin(start, end, center, axis, clockwise, z_axis, origin, revolutio
     radial = tuple(delta0[i] - h0 * axis[i] for i in range(3))
     last_radial = tuple(delta1[i] - h1 * axis[i] for i in range(3))
     radius = math.sqrt(dot(radial, radial))
+    last_radius = math.sqrt(dot(last_radial, last_radial))
+    z0 = dot(tuple(start[i] - origin[i] for i in range(3)), z_axis)
+    z1 = dot(tuple(end[i] - origin[i] for i in range(3)), z_axis)
+    # A circular move normal to ToolAxis has constant projected Z, even when
+    # the stored endpoints disagree slightly on its radius in the arc plane.
+    # Bound the full radial projection (not just the endpoint difference):
+    # equal endpoint Z alone would miss the bottom of a tilted semicircle.
+    # The absolute bound also prevents a tiny tilt at a large radius from
+    # hiding a real Z excursion. Helices retain their original checks.
+    normal_cross = cross(axis, z_axis)
+    radial_z_bound = max(radius, last_radius) * math.sqrt(dot(normal_cross, normal_cross))
+    if (revolutions is None and min(radius, last_radius) > 1e-10 and
+            radial_z_bound <= 1e-10 and abs(z1 - z0) <= 1e-10):
+        return finite_number(min(z0, z1))
     tolerance = max(1e-7, radius * 1e-6)
-    if radius <= 1e-10 or abs(math.sqrt(dot(last_radial, last_radial)) - radius) > tolerance:
+    if radius <= 1e-10 or abs(last_radius - radius) > tolerance:
         raise ValueError('Не удалось проверить радиус дуги траектории.')
     direction = -1.0 if clockwise else 1.0
     tangent = tuple(direction * c for c in cross(axis, radial))
@@ -179,8 +193,6 @@ def arc_path_zmin(start, end, center, axis, clockwise, z_axis, origin, revolutio
         phase_error = math.remainder(sweep - phase, 2 * math.pi)
         if abs(phase_error) * radius > tolerance:
             raise ValueError('Число витков не соответствует концам винтового движения.')
-    z0 = dot(tuple(start[i] - origin[i] for i in range(3)), z_axis)
-    z1 = dot(tuple(end[i] - origin[i] for i in range(3)), z_axis)
     a, b = dot(radial, z_axis), dot(tangent, z_axis)
     drift = dot(axis, z_axis) * rise / sweep
     base = z0 - a

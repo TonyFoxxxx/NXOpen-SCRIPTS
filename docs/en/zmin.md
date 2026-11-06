@@ -2,15 +2,15 @@
 
 [Русский](../zmin.md) | **English**
 
-Script: [NX_Operation_Zmin.py](../../scripts/NX_Operation_Zmin.py), **V1.07**. [All scripts](../../README.en.md#scripts).
+Script: [NX_Operation_Zmin.py](../../scripts/NX_Operation_Zmin.py), **V1.08**. [All scripts](../../README.en.md#scripts).
 
 ## Latest release
 
-**V1.07 · 2026-11-06**
+**V1.08 · 2026-11-07**
 
-- Added `Drill,Deep` support for `SPOT_DRILLING` / `NXHOLECENTER` spot drilling, using local `DEPTH` to the tip.
-- Fixed skipped through-hole drilling when local FBM and model entrances lie at different levels along the same axis. Type confirmation requires one uniquely linked model feature on the same axis with the same direction.
-- The fix is shared by the standalone journal, the setup-sheet Zmin column and renaming, and postprocessing. Each `Cycle` point must still match the local entrance strictly; model depth is never substituted.
+- Fixed a false skip of a constant-Z circular toolpath caused by a small difference between the stored endpoint radii. When the arc plane is perpendicular to the current tool axis, that difference does not affect depth.
+- Constant Z is verified from the arc-axis direction, radii and endpoint levels. Tilted arcs retain analytic interior minima and radius validation; helix checks are unchanged.
+- This release updates only the standalone Zmin journal. Setup sheets V2.67 and Postprocessing V1.50 retain the V1.07 calculation for now; integration of further fixes is deferred.
 
 ## Purpose
 
@@ -47,9 +47,11 @@ For ordinary three-axis machining, including a tilted MCS, the familiar result i
 
 Linear motion is evaluated at saved CL points. Internal minima of arcs and helices with a constant tool axis are calculated analytically. A varying-axis arc without interpolation data and compound paths are unsupported. It does not model interpolation of a changing axis between linear samples, postprocessor transformations, controller kinematics or smoothing.
 
+For a circular arc whose plane is perpendicular to the current `ToolAxis`, Z is constant: a small difference between endpoint radii in that plane does not affect depth. Both the possible Z variation over the entire radial plane and the endpoint-level difference are checked against a numerical limit of `1e-10` part units. Equal endpoint Z alone is insufficient: a tilted arc can dip lower between them. Other arcs and helices retain radius validation and analytic calculation.
+
 ## Spot drilling and drilling
 
-A saved machine-cycle point may lie at the hole entrance. A minimum based only on those CL points therefore misses drilling depth. V1.07 reads operation-local FBM data, matches each hole by entrance coordinates and axis, and calculates:
+A saved machine-cycle point may lie at the hole entrance. A minimum based only on those CL points therefore misses drilling depth. The script reads operation-local FBM data, matches each hole by entrance coordinates and axis, and calculates:
 
 `Z_tip = dot(P_entry - O, unit(ToolAxis)) - depth_to_tip`.
 
@@ -75,10 +77,10 @@ Other control-point / `IgnoreToolTip` combinations are unsupported. Depth must c
 
 Blind holes and other unconfirmed hole types, other cycles, pilot/compound tips, unsupported control points and depth policies are skipped with explanations. If even one Cycle point cannot be resolved, the entire operation is skipped; no partial minimum or substituted Z0 is written. A skipped operation retains its old name.
 
-Shared Zmin V1.07 calculation is included in [Setup sheets V2.67](setup-card.md), for both the Zmin column and optional renaming. [Postprocessing V1.50](postprocess.md#zmin-in-operation-names) uses the same calculation when Zmin naming is enabled before NC output. All three scripts share the same machine-cycle limitations; ordinary and rotary CL projection is retained.
+[Setup sheets V2.67](setup-card.md) and [Postprocessing V1.50](postprocess.md#zmin-in-operation-names) still use the Zmin V1.07 calculation. The V1.08 circular-arc fix is published only in the standalone journal; integration into those two scripts is deferred. Machine-cycle calculations and ordinary/rotary CL projection remain shared.
 
 ## Validation and file effects
 
-V1.07 was checked outside NX against exported toolpaths, hole parameters, reference NC output and regression tests. A four-decimal suffix can differ from three-decimal NC output solely because of rounding. The journal itself neither reads nor creates NC files. Execution of this revision in the target NX environment still requires a control run. See the [changelog](../../CHANGELOG.en.md) for release history.
+V1.08 was checked outside NX against the complete reported operation export: 8425 events including 6745 circular movements. The V1.07 failure was reproduced; the corrected minimum matches the reference NC program. Additional checks cover rotated axes, tilted arcs, tiny tilts at large radii, noncoplanar endpoints and helices; prior drilling and naming checks are retained. A four-decimal suffix can differ from three-decimal NC output solely because of rounding. The journal itself neither reads nor creates NC files. Execution of this revision in the target NX environment still requires a control run. See the [changelog](../../CHANGELOG.en.md) for release history.
 
 The script shows its version in the window. It does not edit or recalculate toolpaths, save the PRT automatically, or create an INI, log, temporary file or other output file.

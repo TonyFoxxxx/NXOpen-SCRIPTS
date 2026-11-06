@@ -16,7 +16,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | --- | --- | --- | --- |
 | [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.67 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.50 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
-| [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.07 | Add minimum Z to operation names, including supported spot-drilling and through-hole drilling cycles. | [All features](docs/en/zmin.md) |
+| [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.08 | Add minimum Z to operation names, including supported spot-drilling and through-hole drilling cycles. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
@@ -32,13 +32,13 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Zmin V1.07, Setup sheets V2.67 and Postprocessing V1.50 · 2026-11-06
+### Latest update — Zmin V1.08 · 2026-11-07
 
-- Added `Drill,Deep` support for `SPOT_DRILLING` / `NXHOLECENTER` spot drilling, using local `DEPTH` to the tip.
-- Fixed skipped through-hole drilling when local FBM and model entrances lie at different levels along the same axis. Type confirmation requires one uniquely linked model feature on the same axis with the same direction.
-- The fix is shared by the standalone journal, the setup-sheet Zmin column and renaming, and postprocessing. Each `Cycle` point must still match the local entrance strictly; model depth is never substituted.
+- Fixed a false skip of a constant-Z circular toolpath caused by a small difference between the stored endpoint radii. When the arc plane is perpendicular to the current tool axis, that difference does not affect depth.
+- Constant Z is verified from the arc-axis direction, radii and endpoint levels. Tilted arcs retain analytic interior minima and radius validation; helix checks are unchanged.
+- This release updates only the standalone Zmin journal. Setup sheets V2.67 and Postprocessing V1.50 retain the V1.07 calculation for now; integration of further fixes is deferred.
 
-Update all three scripts using the updater. [Cycle calculation and limitations](docs/en/zmin.md#spot-drilling-and-drilling).
+Update the standalone Zmin journal through the updater. [Arc calculation and limitations](docs/en/zmin.md#calculation).
 
 ## Installation
 

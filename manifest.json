@@ -36,9 +36,9 @@
       "id": "NX_Operation_Zmin",
       "name": "Минимальный Z в именах операций",
       "file": "NX_Operation_Zmin.py",
-      "version": "V1.07",
+      "version": "V1.08",
       "path": "scripts/NX_Operation_Zmin.py",
-      "sha256": "2c18849af2552ed7f540aea964060af00c07d148d488610c036a9fac724fbb41",
+      "sha256": "ec6918f32086723c08ebe12c5da957124ed6bc85b000dddfbdec7ac6460c65f6",
       "description": "Добавление минимального Z к именам операций по текущей оси инструмента, включая поддерживаемые циклы центрования и сквозного сверления. Начало MCS должно лежать на оси вращения детали."
     },
     {
