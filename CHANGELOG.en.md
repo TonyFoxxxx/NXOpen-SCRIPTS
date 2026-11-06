@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-06 — Delete empty tools V1
+
+- Added `NX_Delete_Empty_Tools.cs` and «Удаление пустых инструментов» (Delete empty tools) to the updater catalog.
+- Deletes only empty tools in the current work part: no child nodes and no association with CAM operations. Tools with ungenerated operations and folders are preserved; tree selection does not limit the scope.
+- Preview, explicit confirmation, one Ctrl+Z undo step, a second check before deletion, result verification and an attempt to roll back the entire run on failure. Creates no files and does not save the PRT automatically.
+- Compiled against the Designcenter 2606 libraries and checked 31 scenarios using an NX API test model: deletion, cancellation, nested associations, errors and rollback. Execution on a real CAM project in NX has not yet been checked.
+- Added Russian and English guides and an automated journal check.
+
 ## 2026-11-05 — PlanarCHIK V1.01
 
 - First publication of PlanarCHIK in the updater catalog, using the stable filename `PlanarCHIK.cs` and SHA-256 verification.

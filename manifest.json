@@ -92,6 +92,15 @@
       "description": "Заполнение описаний инструментов диаметром и номерами T, H, D."
     },
     {
+      "id": "NX_Delete_Empty_Tools",
+      "name": "Удаление пустых инструментов",
+      "file": "NX_Delete_Empty_Tools.cs",
+      "version": "V1",
+      "path": "scripts/NX_Delete_Empty_Tools.cs",
+      "sha256": "c1d0284513995f815bc5703b9bbeb74f27aa5701a7b3e95783dd79e3c97edf44",
+      "description": "Удаление пустых CAM-инструментов без операций с предварительным списком и общей отменой."
+    },
+    {
       "id": "NX_ESKD_Format_GOST_A",
       "name": "ЕСКД",
       "file": "NX_ESKD_Format_GOST_A.cs",

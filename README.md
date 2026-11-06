@@ -21,6 +21,7 @@
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Заполнение описаний инструментов диаметром и номерами T, H, D. | [Все функции](docs/tool-description.md) |
+| [NX_Delete_Empty_Tools.cs](scripts/NX_Delete_Empty_Tools.cs) | V1 | Удаление пустых CAM-инструментов без операций с предварительным списком и общей отменой. | [Все функции](docs/delete-empty-tools.md) |
 | [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.41 | Оформление рамки, основной надписи и аннотаций чертежа по ЕСКД. | [Все функции](docs/eskd.md) |
 | [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.13 | Экспорт текущего листа в PDF с настройкой толщин линий. | [Все функции](docs/export-pdf.md) |
 | [NX_Export_Current_View_To_DXF.cs](scripts/NX_Export_Current_View_To_DXF.cs) | V1.08 | Экспорт рёбер, внешнего контура или выбранных кривых в DXF. | [Все функции](docs/export-dxf.md) |
@@ -31,10 +32,10 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — PlanarCHIK V1.01 · 05.11.2026
+### Последнее обновление — Удаление пустых инструментов V1 · 06.11.2026
 
-- PlanarCHIK впервые добавлен в каталог апдейтера. Скрипт задаёт Tool Position On всем элементам границ выбранных PLANAR_MILL и по запросу включает Stock с введённым припуском.
-- В апдейтере нажмите «Проверить», отметьте PlanarCHIK и нажмите «Применить выбранное». Рабочее имя — `PlanarCHIK.cs`. [Подробности](docs/planarchik.md#изменения-последней-версии).
+- Новый скрипт удаляет пустые инструменты текущей рабочей детали. Перед удалением показывает список; инструменты с операциями сохраняются независимо от состояния траекторий. Удаление можно отменить одним Ctrl+Z.
+- В апдейтере нажмите «Проверить», отметьте «Удаление пустых инструментов» и нажмите «Применить выбранное». Рабочее имя — `NX_Delete_Empty_Tools.cs`. [Подробности](docs/delete-empty-tools.md#изменения-последней-версии).
 
 ## Установка
 

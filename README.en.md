@@ -21,6 +21,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Fill tool descriptions with diameter and T, H, D numbers. | [All features](docs/en/tool-description.md) |
+| [NX_Delete_Empty_Tools.cs](scripts/NX_Delete_Empty_Tools.cs) | V1 | Delete empty CAM tools without operations, with a preview and one undo step. | [All features](docs/en/delete-empty-tools.md) |
 | [NX_ESKD_Format_GOST_A.cs](scripts/NX_ESKD_Format_GOST_A.cs) | V1.41 | ESKD drawing borders, title blocks and annotation formatting. | [All features](docs/en/eskd.md) |
 | [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.13 | Export the current sheet to PDF with adjustable line weights. | [All features](docs/en/export-pdf.md) |
 | [NX_Export_Current_View_To_DXF.cs](scripts/NX_Export_Current_View_To_DXF.cs) | V1.08 | Export edges, the outer outline or selected curves to DXF. | [All features](docs/en/export-dxf.md) |
@@ -31,10 +32,10 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — PlanarCHIK V1.01 · 2026-11-05
+### Latest update — Delete empty tools V1 · 2026-11-06
 
-- PlanarCHIK is now available in the updater catalog. It sets Tool Position On for all boundary members of selected PLANAR_MILL operations and optionally enables Stock with an entered allowance.
-- In the updater, click «Проверить» (Check), select PlanarCHIK, then click «Применить выбранное» (Apply selected). The installed filename is `PlanarCHIK.cs`. [Details](docs/en/planarchik.md#latest-release).
+- The new script deletes empty tools in the current work part after showing a preview. Tools with operations are preserved regardless of toolpath status. One Ctrl+Z restores the deletion.
+- In the updater, click «Проверить» (Check), select «Удаление пустых инструментов» (Delete empty tools), then click «Применить выбранное» (Apply selected). The installed filename is `NX_Delete_Empty_Tools.cs`. [Details](docs/en/delete-empty-tools.md#latest-release).
 
 ## Installation
 
