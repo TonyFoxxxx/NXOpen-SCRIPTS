@@ -1,5 +1,5 @@
 // NX_Postprocess_To_Machine.cs
-// SCRIPT_VERSION: V1.48
+// SCRIPT_VERSION: V1.49
 // Optional numbering, tool descriptions and operation Zmin.
 // Cycle Zmin uses verified local FBM depths; actual CL rotary axes are preserved.
 // Modal-aware work-offset repeats; per-post retract profiles and copyable errors.
@@ -944,11 +944,10 @@ internal sealed class OperationZmin
     private readonly List<CamObject> allObjects = new List<CamObject>();
     private string scope, refreshError;
     private int total, unchanged;
-    private static readonly Regex Suffix = new Regex(@"(?:_Z[+-]?(?:[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+))+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     internal static string NameWithZmin(string name, double value)
     {
-        string body = Suffix.Replace(name, "");
+        string body = ZminNames.BaseName(name);
         if (body.Length == 0) throw new InvalidOperationException("\u041F\u043E\u0441\u043B\u0435 \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u044F \u0441\u0442\u0430\u0440\u043E\u0433\u043E \u0441\u0443\u0444\u0444\u0438\u043A\u0441\u0430 Z \u0438\u043C\u044F \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u043F\u0443\u0441\u0442\u043E\u0435.");
         string number = ZminGeometry.Finite(value).ToString("F4", CultureInfo.InvariantCulture).TrimEnd('0').TrimEnd('.');
         if (number == "-0") number = "0";
@@ -1109,23 +1108,13 @@ internal sealed class OperationZmin
 
     private void RemoveConflicts()
     {
-        Dictionary<string, int> targets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (Rename item in planned)
-        { int count; targets.TryGetValue(item.New, out count); targets[item.New] = count + 1; }
-        List<Rename> duplicates = planned.FindAll(delegate(Rename item) { return targets[item.New] > 1; });
-        foreach (Rename item in duplicates)
-        { skipped.Add(item.Old + " \u2014 \u041D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u043E \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439 \u043F\u043E\u043B\u0443\u0447\u0430\u0442 \u0438\u043C\u044F \u00AB" + item.New + "\u00BB."); planned.Remove(item); }
-        while (planned.Count > 0)
-        {
-            HashSet<Tag> moving = new HashSet<Tag>();
-            foreach (Rename item in planned) moving.Add(item.Operation.Tag);
-            HashSet<string> occupied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (CamObject obj in allObjects) if (!moving.Contains(obj.Tag)) occupied.Add(obj.Name);
-            List<Rename> blocked = planned.FindAll(delegate(Rename item) { return occupied.Contains(item.New); });
-            if (blocked.Count == 0) break;
-            foreach (Rename item in blocked)
-            { skipped.Add(item.Old + " \u2014 \u0418\u043C\u044F \u00AB" + item.New + "\u00BB \u0443\u0436\u0435 \u0437\u0430\u043D\u044F\u0442\u043E \u0432 CAM-\u043F\u0440\u043E\u0435\u043A\u0442\u0435."); planned.Remove(item); }
-        }
+        HashSet<Tag> moving = new HashSet<Tag>();
+        foreach (Rename item in planned) moving.Add(item.Operation.Tag);
+        List<string> occupied = new List<string>(), desired = new List<string>();
+        foreach (CamObject obj in allObjects) if (!moving.Contains(obj.Tag)) occupied.Add(obj.Name);
+        foreach (Rename item in planned) desired.Add(item.New);
+        List<string> names = ZminNames.Unique(desired, occupied);
+        for (int i = 0; i < planned.Count; i++) planned[i].New = names[i];
     }
 
     private static void SetName(NXOpen.CAM.Operation operation, string name)
@@ -1185,6 +1174,44 @@ internal sealed class OperationZmin
             if (skipped.Count > 8) text.Append("\n\u0418 \u0435\u0449\u0451 " + (skipped.Count - 8) + " \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0439.");
         }
         return text.ToString();
+    }
+}
+
+// Same naming rules as the Python Zmin journal and setup-sheet preparation.
+internal static class ZminNames
+{
+    private const string Copy = @"COPY(?:[0-9]+|_[0-9]+)?";
+    private const string Number = @"[+-]?(?:[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+)";
+    private static readonly Regex Prefix = new Regex(@"^((?:[0-9]+_)*)(?:" + Copy + @"_)+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex Suffix = new Regex(@"(?:_(?:" + Copy + @"|Z" + Number + @"))+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static string BaseName(string name)
+    {
+        string body = Suffix.Replace(Prefix.Replace(name, "$1"), "");
+        if (body.Length == 0) throw new InvalidOperationException("\u041f\u043e\u0441\u043b\u0435 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u044f COPY \u0438 \u0441\u0442\u0430\u0440\u044b\u0445 \u0441\u0443\u0444\u0444\u0438\u043a\u0441\u043e\u0432 Z \u0438\u043c\u044f \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u0438 \u043f\u0443\u0441\u0442\u043e\u0435.");
+        return body;
+    }
+
+    internal static List<string> Unique(List<string> names, IEnumerable<string> occupied)
+    {
+        // Natural targets take priority over counters generated for other operations.
+        HashSet<string> reserved = new HashSet<string>(occupied, StringComparer.OrdinalIgnoreCase);
+        List<string> result = new List<string>(names);
+        List<int> collisions = new List<int>();
+        for (int i = 0; i < result.Count; i++)
+            if (!reserved.Add(result[i])) collisions.Add(i);
+        foreach (int index in collisions)
+        {
+            int marker = result[index].LastIndexOf("_Z", StringComparison.Ordinal);
+            if (marker <= 0) throw new InvalidOperationException("\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u043a\u043e\u043d\u0435\u0447\u043d\u044b\u0439 \u0441\u0443\u0444\u0444\u0438\u043a\u0441 Z \u0434\u043b\u044f \u043d\u0443\u043c\u0435\u0440\u0430\u0446\u0438\u0438 \u0438\u043c\u0435\u043d\u0438.");
+            string body = result[index].Substring(0, marker), depth = result[index].Substring(marker);
+            int number = 1;
+            string candidate;
+            do { candidate = body + "_" + number.ToString(CultureInfo.InvariantCulture) + depth; number++; }
+            while (!reserved.Add(candidate));
+            result[index] = candidate;
+        }
+        return result;
     }
 }
 
@@ -5233,7 +5260,7 @@ internal static class SharedFormsAssembly
 
 internal static class ScriptInfo
 {
-    internal const string SCRIPT_VERSION = "V1.48";
+    internal const string SCRIPT_VERSION = "V1.49";
     internal const string SCRIPT_NAME = "\u041F\u043E\u0441\u0442\u043F\u0440\u043E\u0446\u0435\u0441\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435";
     private static readonly string WindowStamp = DecodeWindowStamp();
 

@@ -8,13 +8,13 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.65 · 2026-11-06**
+**V2.66 · 2026-11-06**
 
-- Shared Zmin calculation updated to V1.05: through-hole entrances shifted by the configured positive `Top Offset` along their axis are accepted when the match is unique.
-- The fix applies to both the Zmin column and optional operation renaming. Local depth and the actual path point are retained without counting top offset twice.
-- Table output, renaming and reuse of the calculated value were checked; execution inside NX was not performed here.
+- Added cleanup of leading `COPY_` prefixes and trailing COPY / old-Z chains, including repeated copies. Names retain one current Z suffix.
+- Colliding final names receive `_1`, `_2`, and so on before Z. Allocation considers occupied names across the project; reruns keep the result.
+- The same rule applies to the standalone journal, setup-sheet renaming and postprocessing. Naming, selection scope, reruns and rollback were checked in Python/C# outside NX.
 
-Regenerate the HTML after updating. See the [changelog](../../CHANGELOG.en.md).
+Regenerate the HTML after updating.
 
 ## Building the sheet in NX
 
@@ -67,11 +67,17 @@ All three checkboxes are off on the first launch; later launches restore the use
 | --- | --- |
 | «Нумеровать операции» (Number operations) | Renumbers all operations in each selected folder, including nested folders, in Program Order. Up to 99 operations: `01_`, `02_`…; from 100: `001_`, `002_`… Existing leading numbers are replaced. With the option off, numbering is left unchanged. |
 | «Добавить параметры инструмента в описание (description)» (Add tool parameters to description) | Writes General Description and Cutter Description for supported tools throughout the current part, including unused tools. Format: `⌀6` or `⌀6_T2_H3_D4`. Missing D is omitted; a readable zero remains `D0`. Geometry and T/H/D parameters themselves do not change. |
-| Add Zmin to operation names | Uses selection captured before opening the menu. Selected operations restrict the scope; a completely empty selection means all project operations. Replaces terminal numeric `_Z…` suffixes, for example `MILL_Z-3.125`. Folder-only selection or a selection-reading error does not authorize renaming the entire project. |
+| Add Zmin to operation names | Uses selection captured before opening the menu. Selected operations restrict the scope; a completely empty selection means all project operations. Cleans COPY / old-Z chains and adds the current Z; collisions receive a counter before Z, for example `MILL_1_Z-3.125`. Folder-only selection or a selection-reading error does not authorize renaming the entire project. |
 
 Use the mouse or Space to toggle checkboxes. Double-clicking a label toggles it once. Description formats appear in the same window without another dialog.
 
-Supported tool families are Mill, Drill, Barrel, Tcutter and MillForm with an accessible positive diameter. Other descriptions remain unchanged. A per-tool error rolls back that tool's partial write while allowing other tools to be processed. Unavailable/out-of-date toolpaths and conflicting Zmin names are skipped with explanations in the NX result. Numbering conflicts or a general preparation error stop generation and roll back preparation. These diagnostics are not inserted into the HTML.
+Supported tool families are Mill, Drill, Barrel, Tcutter and MillForm with an accessible positive diameter. Other descriptions remain unchanged. A per-tool error rolls back that tool's partial write while allowing other tools to be processed. Unavailable/out-of-date toolpaths are skipped with explanations in the NX result. Zmin name collisions receive a counter before Z. Numbering conflicts or a general preparation error stop generation and roll back preparation. These diagnostics are not inserted into the HTML.
+
+### COPY and Zmin name collisions
+
+Names are cleaned of leading `COPY_` / `COPY_COPY_` prefixes and trailing `_COPY` / numeric `_Z` chains in any order; `COPY1` and `COPY_1` markers are also supported. For example, `MILL_R0.5_Z-6_COPY_COPY_Z7.75` with a calculated Z of 7.75 becomes `MILL_R0.5_Z7.75`. Fragments inside the core name, such as `MILL_COPY_TOOL` or `MILL_Z1_part`, are retained.
+
+If the final name is occupied, the first available number is inserted **before Z**: `MILL_1_Z-6`, `MILL_2_Z-6`, and so on. All project operations and groups are considered, including unselected objects. The same core name with different final Z values needs no counter. Natural targets of other planned renames are reserved before generated counters. Already correct names are retained; rerunning with the same depths adds no counters. Existing numeric parts of the core name are preserved.
 
 ## Operation and tool data
 
@@ -97,7 +103,7 @@ Operation D visibility is determined by tool number T across the whole CAM proje
 
 Available tool information includes overhang H, cutting length L and relieved length HL; the sheet explains these labels. Toolpath time does not include every machine overhead.
 
-The Zmin column and optional renaming share the [standalone Zmin journal](zmin.md) V1.05 algorithm. Ordinary motions use `dot(P - O, unit(ToolAxis))` at saved CL points; both Three and Five motions supply their actual tool vectors. For rotary machining, the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include internal extrema; varying-axis arcs without interpolation data and compound paths are unsupported. This is not a simulation of postprocessed machine movement.
+The Zmin column and optional renaming share the [standalone Zmin journal](zmin.md) V1.06 algorithm. Ordinary motions use `dot(P - O, unit(ToolAxis))` at saved CL points; both Three and Five motions supply their actual tool vectors. For rotary machining, the MCS origin must lie on the part's rotation axis. Constant-axis arcs/helices include internal extrema; varying-axis arcs without interpolation data and compound paths are unsupported. This is not a simulation of postprocessed machine movement.
 
 Supported `Drill` / `Drill,Csink` spot drilling calculates final Z from operation-local FBM `DEPTH` to the tip. Through-hole `STEP1HOLE` / `STEP2HOLE` features use full local operation depth, bottom offset and standard conical point length, both for `SYS_CL_TIP` with `IgnoreToolTip` disabled and for `SYS_CL_SHOULDER` with it enabled. Each hole's position and axis are matched uniquely to the path, allowing small FBM coordinate roundoff. Master-model depth, including `DEPTH_1`, and old operation names are not used as depth sources. The standard settings in the [machine-cycle limitations](zmin.md#spot-drilling-and-drilling) are required.
 

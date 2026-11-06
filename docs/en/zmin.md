@@ -2,16 +2,15 @@
 
 [Русский](../zmin.md) | **English**
 
-Script: [NX_Operation_Zmin.py](../../scripts/NX_Operation_Zmin.py), **V1.05**. [All scripts](../../README.en.md#scripts).
+Script: [NX_Operation_Zmin.py](../../scripts/NX_Operation_Zmin.py), **V1.06**. [All scripts](../../README.en.md#scripts).
 
 ## Latest release
 
-**V1.05 · 2026-11-06**
+**V1.06 · 2026-11-06**
 
-- Fixed skipped through-hole drilling when model and local entrances differ by the configured positive `Top Offset` along the hole axis.
-- When no direct entrance match exists, the reader checks that exact offset using the existing roundoff tolerance. A unique link to a supported through-hole feature is required.
-- Final Z still uses the saved `Cycle` point, local `DEPTH`, bottom offset and point length; top offset is not counted again.
-- The same calculation is included in Setup sheets V2.65 and Postprocessing V1.48. Diagnostic data and reference NC output were checked outside NX; Python/C# tests cover shifted entrances, rotations and ambiguity rejection.
+- Added cleanup of leading `COPY_` prefixes and trailing COPY / old-Z chains, including repeated copies. Names retain one current Z suffix.
+- Colliding final names receive `_1`, `_2`, and so on before Z. Allocation considers occupied names across the project; reruns keep the result.
+- The same rule applies to the standalone journal, setup-sheet renaming and postprocessing. Naming, selection scope, reruns and rollback were checked in Python/C# outside NX.
 
 ## Purpose
 
@@ -26,7 +25,13 @@ Adds or replaces a terminal numeric Z suffix, for example `MILL_Z-1` or `MILL_Z1
 
 Selecting a folder does not mean recursively selecting its operations. If selection cannot be read reliably, the script stops instead of falling back to the whole project.
 
-Only existing, current toolpaths are used. Missing, out-of-date, invalid or unsupported paths are skipped with explanations. Name conflicts do not cause extra suffixes to be invented. Changes can be undone in NX.
+Only existing, current toolpaths are used. Missing, out-of-date, invalid or unsupported paths are skipped with explanations. Name collisions receive a counter before Z as described below. Changes can be undone in NX.
+
+## COPY and duplicate names
+
+Names are cleaned of leading `COPY_` / `COPY_COPY_` prefixes and trailing `_COPY` / numeric `_Z` chains in any order; `COPY1` and `COPY_1` markers are also supported. For example, `MILL_R0.5_Z-6_COPY_COPY_Z7.75` with a calculated Z of 7.75 becomes `MILL_R0.5_Z7.75`. Fragments inside the core name, such as `MILL_COPY_TOOL` or `MILL_Z1_part`, are retained.
+
+If the final name is occupied, the first available number is inserted **before Z**: `MILL_1_Z-6`, `MILL_2_Z-6`, and so on. All project operations and groups are considered, including unselected objects. The same core name with different final Z values needs no counter. Natural targets of other planned renames are reserved before generated counters. Already correct names are retained; rerunning with the same depths adds no counters. Existing numeric parts of the core name are preserved.
 
 ## Calculation
 
@@ -44,7 +49,7 @@ Linear motion is evaluated at saved CL points. Internal minima of arcs and helic
 
 ## Spot drilling and drilling
 
-A saved machine-cycle point may lie at the hole entrance. A minimum based only on those CL points therefore misses drilling depth. V1.05 reads operation-local FBM data, matches each hole by entrance coordinates and axis, and calculates:
+A saved machine-cycle point may lie at the hole entrance. A minimum based only on those CL points therefore misses drilling depth. V1.06 reads operation-local FBM data, matches each hole by entrance coordinates and axis, and calculates:
 
 `Z_tip = dot(P_entry - O, unit(ToolAxis)) - depth_to_tip`.
 
@@ -70,10 +75,10 @@ Other control-point / `IgnoreToolTip` combinations are unsupported. Depth must c
 
 Blind holes and other unconfirmed hole types, other cycles, pilot/compound tips, unsupported control points and depth policies are skipped with explanations. If even one Cycle point cannot be resolved, the entire operation is skipped; no partial minimum or substituted Z0 is written. A skipped operation retains its old name.
 
-Shared Zmin V1.05 calculation is included in [Setup sheets V2.65](setup-card.md), for both the Zmin column and optional renaming. [Postprocessing V1.48](postprocess.md#zmin-in-operation-names) uses the same calculation when Zmin naming is enabled before NC output. All three scripts share the same machine-cycle limitations; ordinary and rotary CL projection is retained.
+Shared Zmin V1.06 calculation is included in [Setup sheets V2.66](setup-card.md), for both the Zmin column and optional renaming. [Postprocessing V1.49](postprocess.md#zmin-in-operation-names) uses the same calculation when Zmin naming is enabled before NC output. All three scripts share the same machine-cycle limitations; ordinary and rotary CL projection is retained.
 
 ## Validation and file effects
 
-V1.05 was checked outside NX against exported toolpaths, hole parameters, reference NC output and regression tests. A four-decimal suffix can differ from three-decimal NC output solely because of rounding. The journal itself neither reads nor creates NC files. Execution of this revision in the target NX environment still requires a control run. See the [changelog](../../CHANGELOG.en.md) for release history.
+V1.06 was checked outside NX against exported toolpaths, hole parameters, reference NC output and regression tests. A four-decimal suffix can differ from three-decimal NC output solely because of rounding. The journal itself neither reads nor creates NC files. Execution of this revision in the target NX environment still requires a control run. See the [changelog](../../CHANGELOG.en.md) for release history.
 
 The script shows its version in the window. It does not edit or recalculate toolpaths, save the PRT automatically, or create an INI, log, temporary file or other output file.

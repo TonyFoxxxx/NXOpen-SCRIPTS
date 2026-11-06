@@ -266,7 +266,13 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(len(preparation.warnings), 2)
         self.assertEqual(CARD.zmin_operation_name('MILL_Z1_part_Z-2,50_z+.25', -0.00001), 'MILL_Z1_part_Z0')
 
-    def test_conflicts_skip_zmin_but_abort_numbering_and_undo_other_options(self):
+    def test_copy_prefix_cleanup_preserves_the_new_operation_order_number(self):
+        self.m.ops[0].Name, self.m.ops[1].Name = 'COPY_MILL_Z-6', 'COPY_COPY_MILL_Z-8_COPY'
+        preparation = self.m.prepare(number_operations=True, add_zmin=True)
+        preparation.apply()
+        self.assertEqual([op.Name for op in self.m.ops[:2]], ['01_MILL_Z-3.125', '02_MILL_Z-3.125'])
+
+    def test_conflicts_number_zmin_but_abort_operation_numbering_and_undo_other_options(self):
         self.m.ops[2].Name = '01_ROUGH_Z-7'
         original = [op.Name for op in self.m.ops]
         preparation = self.m.prepare(number_operations=True, update_descriptions=True)
@@ -279,8 +285,8 @@ class PreparationTests(unittest.TestCase):
         self.m.selection = [1]
         preparation = self.m.prepare(add_zmin=True)
         preparation.apply()
-        self.assertEqual(self.m.ops[0].Name, original[0])
-        self.assertTrue(preparation.warnings)
+        self.assertEqual(self.m.ops[0].Name, '02_ROUGH_1_Z-3.125')
+        self.assertFalse(preparation.warnings)
 
     def test_mid_rename_failure_restores_names_and_descriptions(self):
         self.m.refuse = '02_FINISH'

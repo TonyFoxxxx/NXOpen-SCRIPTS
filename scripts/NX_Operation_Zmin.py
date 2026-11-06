@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # Минимальный Z в именах операций
-# SCRIPT_VERSION: V1.05
+# SCRIPT_VERSION: V1.06
 # Рабочее имя файла: NX_Operation_Zmin.py
-SCRIPT_VERSION = "V1.05"
+SCRIPT_VERSION = "V1.06"
 SCRIPT_NAME = "Минимальный Z в именах операций"
 
 # Запуск: NX / Designcenter -> Журнал -> Воспроизвести.
@@ -15,7 +15,8 @@ SCRIPT_NAME = "Минимальный Z в именах операций"
 # Единицы CAM-детали; четыре знака после точки без незначащих нулей.
 # Дуги/винты с постоянной осью: аналитический минимум между CL-точками.
 # Дуги/винты с изменением оси без данных интерполяции: операция пропускается.
-# Старый конечный суффикс _Zчисло заменяется. Траектории не пересчитываются.
+# COPY и цепочки старых Z убираются; совпадения получают _1, _2 перед Z.
+# Траектории не пересчитываются.
 # Нет файлов настроек, отчётов, журналов, резервных копий или записи в Temp.
 # PRT сохраняет пользователь. Переименование можно отменить в NX через Ctrl+Z.
 
@@ -24,7 +25,6 @@ import re
 
 _CREDIT = bytes((98, 121, 32, 64, 84, 111, 110, 121, 95, 70, 111, 120, 120, 120, 32, 40, 84, 71, 41)).decode("ascii")
 TITLE = SCRIPT_NAME + " — " + SCRIPT_VERSION + " | " + _CREDIT
-_Z_SUFFIX = re.compile(r"(?:_Z[+-]?(?:[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+))+$", re.IGNORECASE)
 
 
 def message(text, kind="info"):
@@ -541,11 +541,44 @@ def zmin_text(value):
     return "0" if text == "-0" else text
 
 
+def zmin_base_name(name):
+    """Remove copy prefixes and the trailing COPY/Z chain, retaining the core name."""
+    copy = r'COPY(?:[0-9]+|_[0-9]+)?'
+    number = r'[+-]?(?:[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+)'
+    body = re.sub(r'^((?:[0-9]+_)*)(?:' + copy + r'_)+', r'\1', str(name), flags=re.I)
+    body = re.sub(r'(?:_(?:' + copy + r'|Z' + number + r'))+$', '', body, flags=re.I)
+    if not body:
+        raise ValueError('После удаления COPY и старых суффиксов Z имя операции пустое.')
+    return body
+
+
+def unique_zmin_names(names, occupied):
+    """Reserve natural targets first, then number collisions before the final Z."""
+    reserved = {str(name).casefold() for name in occupied}
+    result, collisions = list(names), []
+    for index, name in enumerate(result):
+        key = name.casefold()
+        if key in reserved:
+            collisions.append(index)
+        else:
+            reserved.add(key)
+    for index in collisions:
+        body, marker, depth = result[index].rpartition('_Z')
+        if not body or not marker:
+            raise ValueError('Недоступен конечный суффикс Z для нумерации имени.')
+        number = 1
+        while True:
+            candidate = body + '_' + str(number) + marker + depth
+            if candidate.casefold() not in reserved:
+                result[index] = candidate
+                reserved.add(candidate.casefold())
+                break
+            number += 1
+    return result
+
+
 def name_with_zmin(name, value):
-    base = _Z_SUFFIX.sub("", str(name))
-    if not base:
-        raise ValueError("После удаления старого суффикса Z имя операции пустое.")
-    return base + "_Z" + zmin_text(value)
+    return zmin_base_name(name) + "_Z" + zmin_text(value)
 
 
 def prepare_names(nx, part, operations):
@@ -591,30 +624,14 @@ def prepare_names(nx, part, operations):
 
 
 def remove_name_conflicts(planned, all_operations, all_groups):
-    """Skip ambiguous names without adding numbering or altering the base name."""
-    targets = {}
-    for item in planned:
-        targets.setdefault(item["new"].casefold(), []).append(item)
-    skipped, remaining = [], []
-    for item in planned:
-        if len(targets[item["new"].casefold()]) > 1:
-            skipped.append((item["old"], "Несколько операций получат имя «" + item["new"] + "»."))
-        else:
-            remaining.append(item)
-
-    # Removing a blocked rename may make its old name block another rename.
-    while remaining:
-        moving = {item["tag"] for item in remaining}
-        occupied = {str(op.Name).casefold() for op in all_operations if str(op.Tag) not in moving}
-        occupied.update(str(group.Name).casefold() for group in all_groups)
-        blocked = [item for item in remaining if item["new"].casefold() in occupied]
-        if not blocked:
-            break
-        blocked_tags = {item["tag"] for item in blocked}
-        for item in blocked:
-            skipped.append((item["old"], "Имя «" + item["new"] + "» уже занято в CAM-проекте."))
-        remaining = [item for item in remaining if item["tag"] not in blocked_tags]
-    return remaining, skipped
+    """Number Zmin collisions against the whole project, including unselected objects."""
+    moving = {item['tag'] for item in planned}
+    occupied = [str(op.Name) for op in all_operations if str(op.Tag) not in moving]
+    occupied.extend(str(group.Name) for group in all_groups)
+    names = unique_zmin_names([item['new'] for item in planned], occupied)
+    for item, name in zip(planned, names):
+        item['new'] = name
+    return planned, []
 
 
 def set_operation_name(operation, name):

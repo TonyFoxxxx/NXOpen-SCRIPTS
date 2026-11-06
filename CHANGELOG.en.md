@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-06 — Zmin V1.06, Setup sheets V2.66 and Postprocessing V1.49
+
+- Added cleanup of leading `COPY_` prefixes and trailing COPY / old-Z chains, including repeated copies. Names retain one current Z suffix.
+- Colliding final names receive `_1`, `_2`, and so on before Z. Allocation considers occupied names across the project; reruns keep the result.
+- The same rule applies to the standalone journal, setup-sheet renaming and postprocessing. Naming, selection scope, reruns and rollback were checked in Python/C# outside NX.
+- Depth calculation, rotary handling and drilling support are unchanged. Operation-order numbering retains its existing conflict checks.
+
 ## 2026-11-06 — Zmin V1.05, Setup sheets V2.65 and Postprocessing V1.48
 
 - Fixed skipped through-hole drilling when the local entrance differs from its linked model feature by a positive `TopOffset.Distance` along the axis. If no direct match exists, only that exact offset with type `Distance` is accepted; ambiguous links are rejected.

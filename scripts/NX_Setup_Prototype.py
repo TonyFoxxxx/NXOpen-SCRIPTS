@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.65
+# SCRIPT_VERSION: V2.66
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -116,7 +116,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.65"
+SCRIPT_VERSION = "V2.66"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -2949,10 +2949,43 @@ def operation_numbering_plan(jobs):
     return planned
 
 
-def zmin_operation_name(name, value):
-    body = re.sub(r'(?:_Z[+-]?(?:[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+))+$', '', str(name), flags=re.I)
+def zmin_base_name(name):
+    """Remove copy prefixes and the trailing COPY/Z chain, retaining the core name."""
+    copy = r'COPY(?:[0-9]+|_[0-9]+)?'
+    number = r'[+-]?(?:[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+)'
+    body = re.sub(r'^((?:[0-9]+_)*)(?:' + copy + r'_)+', r'\1', str(name), flags=re.I)
+    body = re.sub(r'(?:_(?:' + copy + r'|Z' + number + r'))+$', '', body, flags=re.I)
     if not body:
-        raise ValueError('После удаления старого суффикса Z имя операции пустое.')
+        raise ValueError('После удаления COPY и старых суффиксов Z имя операции пустое.')
+    return body
+
+def unique_zmin_names(names, occupied):
+    """Reserve natural targets first, then number collisions before the final Z."""
+    reserved = {str(name).casefold() for name in occupied}
+    result, collisions = list(names), []
+    for index, name in enumerate(result):
+        key = name.casefold()
+        if key in reserved:
+            collisions.append(index)
+        else:
+            reserved.add(key)
+    for index in collisions:
+        body, marker, depth = result[index].rpartition('_Z')
+        if not body or not marker:
+            raise ValueError('Недоступен конечный суффикс Z для нумерации имени.')
+        number = 1
+        while True:
+            candidate = body + '_' + str(number) + marker + depth
+            if candidate.casefold() not in reserved:
+                result[index] = candidate
+                reserved.add(candidate.casefold())
+                break
+            number += 1
+    return result
+
+
+def zmin_operation_name(name, value):
+    body = zmin_base_name(name)
     number = ('%.4f' % finite_number(value)).rstrip('0').rstrip('.')
     return body + '_Z' + ('0' if number == '-0' else number)
 
@@ -3004,7 +3037,7 @@ def zmin_rename_plan(nx, part, operations):
 
 
 def remove_rename_conflicts(planned, objects):
-    """Same collision rules as Zmin: skip ambiguous names, including blocking chains."""
+    """Keep strict conflicts for operation numbering; Zmin has its own allocation."""
     targets = {}
     for item in planned:
         targets.setdefault(item['new'].casefold(), []).append(item)
@@ -3165,8 +3198,11 @@ class SetupPreparation:
             self.messages.append('Нумерация: переименовано операций — %d.' % len(allowed))
         if options.get('add_zmin'):
             planned, skipped, unchanged, values = zmin_rename_plan(self.nx, self.part, self.selection.operations)
-            planned, conflicts = remove_rename_conflicts(planned, objects)
-            skipped.extend(conflicts)
+            moving = {item['tag'] for item in planned}
+            occupied = [str(obj.Name) for obj in objects if object_key(obj) not in moving]
+            names = unique_zmin_names([item['new'] for item in planned], occupied)
+            for item, name in zip(planned, names):
+                item['new'] = name
             apply_operation_names(planned, objects)
             self.messages.append('Zmin: %s. Переименовано — %d; уже актуальны — %d; пропущено — %d.' %
                                  (self.selection.scope, len(planned), unchanged, len(skipped)))
