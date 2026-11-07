@@ -18,6 +18,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.50 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.09 | Add minimum Z to operation names, including supported spot-drilling and through-hole drilling cycles. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
+| [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Clean copy/instance suffixes and counters in all operation names while preserving Z. | [All features](docs/en/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Fill tool descriptions with diameter and T, H, D numbers. | [All features](docs/en/tool-description.md) |
@@ -32,13 +33,13 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Zmin V1.09 · 2026-11-07
+### Latest update — Clean operation names V1 · 2026-11-08
 
-- Z in operation names is rounded to three decimal places: `CHIST_1_Z-2.5375` with a calculated Z of −2.5375 becomes `CHIST_1_Z-2.538`.
-- Trailing zeros are omitted and negative zero is displayed as `Z0`. Names that collide after rounding receive a counter before Z under the existing rules.
-- Only the standalone journal's Z formatting is changed. Depth calculation, Setup sheets and Postprocessing are unchanged.
+- New standalone journal removes trailing `COPY`, `INSTANCE`, `INSTANT` and their chains from all work-part operations.
+- Repeated names receive `_1`, `_2`, etc. in Program Order. Z retains its exact text, with the counter before it: `PLSK_CHIST_Z0_COPY` → `PLSK_CHIST_1_Z0` when `PLSK_CHIST_Z0` exists.
+- Includes stable repeat runs, one undo step and rollback on a renaming error.
 
-Update the standalone Zmin journal through the updater. [Name formatting and collision rules](docs/en/zmin.md#purpose).
+Click Check in the updater and install **«Очистка названий операций» (Clean operation names)**. [Rules and examples](docs/en/clean-operation-names.md).
 
 ## Installation
 

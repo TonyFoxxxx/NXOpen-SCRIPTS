@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-08 — Clean operation names V1
+
+- Added `NX_Clean_Operation_Names.cs` and the «Очистка названий операций» entry to the updater.
+- Removes trailing COPY, INSTANCE, INSTANT, DUPLICATE and Russian equivalents; replaces old numeric suffixes with sequential duplicate counters in Program Order.
+- Numeric Z suffixes retain their exact text without calculation or rounding. Duplicate counters precede Z; different Z suffixes form different names.
+- Covers all work-part operations, including nested groups and instances. Includes CAM group name collision checks, stable repeat runs, one undo step and verified rollback on errors.
+- Checked executable naming, traversal, collision and failure scenarios, 5000 mixed names, compilation against Designcenter 2606 libraries and updater installation. Native execution on a production part has not yet been performed.
+
 ## 2026-11-07 — Zmin V1.09
 
 - Z in operation names is rounded to three decimal places: `CHIST_1_Z-2.5375` with a calculated Z of −2.5375 becomes `CHIST_1_Z-2.538`.

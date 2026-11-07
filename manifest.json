@@ -51,6 +51,15 @@
       "description": "Переименование операций с нумерацией по порядку дерева CAM."
     },
     {
+      "id": "NX_Clean_Operation_Names",
+      "name": "Очистка названий операций",
+      "file": "NX_Clean_Operation_Names.cs",
+      "version": "V1",
+      "path": "scripts/NX_Clean_Operation_Names.cs",
+      "sha256": "70db144c93401613ed7011466c00567ea35e1590eca5eaf7c81e0e625a11248f",
+      "description": "Очистка COPY/INSTANCE и нумерации в именах всех операций с сохранением суффикса Z."
+    },
+    {
       "id": "PlanarCHIK",
       "name": "PlanarCHIK — границы и припуск",
       "file": "PlanarCHIK.cs",
