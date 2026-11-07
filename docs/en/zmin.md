@@ -2,19 +2,19 @@
 
 [Русский](../zmin.md) | **English**
 
-Script: [NX_Operation_Zmin.py](../../scripts/NX_Operation_Zmin.py), **V1.08**. [All scripts](../../README.en.md#scripts).
+Script: [NX_Operation_Zmin.py](../../scripts/NX_Operation_Zmin.py), **V1.09**. [All scripts](../../README.en.md#scripts).
 
 ## Latest release
 
-**V1.08 · 2026-11-07**
+**V1.09 · 2026-11-07**
 
-- Fixed a false skip of a constant-Z circular toolpath caused by a small difference between the stored endpoint radii. When the arc plane is perpendicular to the current tool axis, that difference does not affect depth.
-- Constant Z is verified from the arc-axis direction, radii and endpoint levels. Tilted arcs retain analytic interior minima and radius validation; helix checks are unchanged.
-- This release updates only the standalone Zmin journal. Setup sheets V2.67 and Postprocessing V1.50 retain the V1.07 calculation for now; integration of further fixes is deferred.
+- Z in operation names is rounded to three decimal places: `CHIST_1_Z-2.5375` with a calculated Z of −2.5375 becomes `CHIST_1_Z-2.538`.
+- Trailing zeros are omitted and negative zero is displayed as `Z0`. Names that collide after rounding receive a counter before Z under the existing rules.
+- Only the standalone journal's Z formatting is changed. Depth calculation, Setup sheets and Postprocessing are unchanged.
 
 ## Purpose
 
-Adds or replaces a terminal numeric Z suffix, for example `MILL_Z-1` or `MILL_Z1`. Values use CAM-part units, are rounded to four decimal places and omit unnecessary trailing zeros.
+Adds or replaces a terminal numeric Z suffix, for example `MILL_Z-1` or `MILL_Z1`. Values use CAM-part units, are rounded to three decimal places and omit unnecessary trailing zeros. For example, −2.5375 becomes `Z-2.538`, −2.5 becomes `Z-2.5`, and −0.0004 becomes `Z0`. Rounding is applied only when forming the name, after calculating the minimum at full precision.
 
 ## Scope and use
 
@@ -77,10 +77,10 @@ Other control-point / `IgnoreToolTip` combinations are unsupported. Depth must c
 
 Blind holes and other unconfirmed hole types, other cycles, pilot/compound tips, unsupported control points and depth policies are skipped with explanations. If even one Cycle point cannot be resolved, the entire operation is skipped; no partial minimum or substituted Z0 is written. A skipped operation retains its old name.
 
-[Setup sheets V2.67](setup-card.md) and [Postprocessing V1.50](postprocess.md#zmin-in-operation-names) still use the Zmin V1.07 calculation. The V1.08 circular-arc fix is published only in the standalone journal; integration into those two scripts is deferred. Machine-cycle calculations and ordinary/rotary CL projection remain shared.
+[Setup sheets V2.67](setup-card.md) and [Postprocessing V1.50](postprocess.md#zmin-in-operation-names) still use the Zmin V1.07 calculation. The V1.08 circular-arc fix and V1.09 three-decimal name formatting are published only in the standalone journal; integration into those two scripts is deferred. Machine-cycle calculations and ordinary/rotary CL projection remain shared.
 
 ## Validation and file effects
 
-V1.08 was checked outside NX against the complete reported operation export: 8425 events including 6745 circular movements. The V1.07 failure was reproduced; the corrected minimum matches the reference NC program. Additional checks cover rotated axes, tilted arcs, tiny tilts at large radii, noncoplanar endpoints and helices; prior drilling and naming checks are retained. A four-decimal suffix can differ from three-decimal NC output solely because of rounding. The journal itself neither reads nor creates NC files. Execution of this revision in the target NX environment still requires a control run. See the [changelog](../../CHANGELOG.en.md) for release history.
+V1.09 was checked outside NX for rounding positive and negative values, replacing old suffixes, omitting trailing zeros, handling name collisions after rounding and rerunning the journal. Toolpath calculation is retained from V1.08, previously checked against a complete diagnostic export with 8425 events and reference NC output. The journal itself neither reads nor creates NC files. Execution of this revision in the target NX environment still requires a control run. See the [changelog](../../CHANGELOG.en.md) for release history.
 
 The script shows its version in the window. It does not edit or recalculate toolpaths, save the PRT automatically, or create an INI, log, temporary file or other output file.

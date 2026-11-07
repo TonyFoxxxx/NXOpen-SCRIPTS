@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 # Минимальный Z в именах операций
-# SCRIPT_VERSION: V1.08
+# SCRIPT_VERSION: V1.09
 # Рабочее имя файла: NX_Operation_Zmin.py
-SCRIPT_VERSION = "V1.08"
+SCRIPT_VERSION = "V1.09"
 SCRIPT_NAME = "Минимальный Z в именах операций"
 
 # Запуск: NX / Designcenter -> Журнал -> Воспроизвести.
 # Выделены операции: только они. Выделения нет: все операции рабочей детали.
-# V1.08: дуги на постоянном Z не зависят от округления радиуса в плоскости.
+# V1.09: округление Z в имени операции до трёх знаков после точки.
 # Фактическая ось ToolAxis учитывается и в формате Three, и в Five.
 # Three может содержать постоянный наклон инструмента при повороте детали.
 # Начало СКС операции должно находиться на оси вращения детали.
 # При ToolAxis, совпадающей с Z СКС, результат обычной 3-осевой обработки прежний.
-# Единицы CAM-детали; четыре знака после точки без незначащих нулей.
+# Единицы CAM-детали; три знака после точки без незначащих нулей.
 # Дуги/винты с постоянной осью: аналитический минимум между CL-точками.
 # Дуги/винты с изменением оси без данных интерполяции: операция пропускается.
 # COPY и цепочки старых Z убираются; совпадения получают _1, _2 перед Z.
@@ -561,8 +561,8 @@ def select_operations(nx, ui, uf, all_operations, all_groups):
 
 
 def zmin_text(value):
-    # Exactly the setup-card display precision; suppress negative zero.
-    text = ("%.4f" % finite_number(value)).rstrip("0").rstrip(".")
+    # Round only the name suffix to three decimals; suppress negative zero.
+    text = ("%.3f" % finite_number(value)).rstrip("0").rstrip(".")
     return "0" if text == "-0" else text
 
 

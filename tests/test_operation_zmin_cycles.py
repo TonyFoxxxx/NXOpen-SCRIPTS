@@ -323,7 +323,7 @@ class CycleDepthTests(unittest.TestCase):
         result = case.read()
         # Synthetic G83: 9.5 mm feature + 2 mm overtravel + 120-degree D5 tip.
         self.assertEqual('%.3f' % result, '-12.943')
-        self.assertEqual(ZMIN.name_with_zmin(case.op.Name, result), 'HOLES_Z-12.9434')
+        self.assertEqual(ZMIN.name_with_zmin(case.op.Name, result), 'HOLES_Z-12.943')
         self.assertEqual(case.builder.destroyed, 1)
 
     def test_minimum_uses_each_holes_height_depth_and_actual_order(self):

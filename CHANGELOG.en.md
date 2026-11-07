@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-07 — Zmin V1.09
+
+- Z in operation names is rounded to three decimal places: `CHIST_1_Z-2.5375` with a calculated Z of −2.5375 becomes `CHIST_1_Z-2.538`.
+- Trailing zeros are omitted and negative zero is displayed as `Z0`. Names that collide after rounding receive a counter before Z under the existing rules.
+- Only the standalone journal's Z formatting is changed. Depth calculation, Setup sheets and Postprocessing are unchanged.
+
 ## 2026-11-07 — Zmin V1.08
 
 - Fixed a false skip of a constant-Z circular toolpath caused by a small difference between the stored endpoint radii. When the arc plane is perpendicular to the current tool axis, that difference does not affect depth.
