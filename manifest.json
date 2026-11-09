@@ -6,9 +6,9 @@
       "id": "NX_Setup_Prototype",
       "name": "Карта наладки",
       "file": "NX_Setup_Prototype.py",
-      "version": "V2.67",
+      "version": "V2.68",
       "path": "scripts/NX_Setup_Prototype.py",
-      "sha256": "7a21cceffa7b78e9da7a17a06d634c8057d6986e4c2f8d83d48534640f6682df",
+      "sha256": "31fd5fd44b6a2e3cfce8e56540fd318494bc500e0c3615c7bbf9de300e1e6add",
       "description": "Создание редактируемой карты наладки с видами, инструментами и операциями.",
       "config": {
         "path": "config/NX_Setup_Prototype.example.ini",

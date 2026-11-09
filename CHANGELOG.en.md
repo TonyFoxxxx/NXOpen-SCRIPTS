@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-09 — Setup sheets V2.68
+
+- Operation headings wrap at word boundaries; sizing uses the longest heading word instead of the complete phrase.
+- Automatic widths for all columns except Operations follow the longest value across all setup operations. Fixed minima for empty and short columns are removed.
+- Operations receives remaining space; when the minimum total exceeds the sheet, the whole table scales to fit. Manual widths, their persistence and Ctrl + wheel scaling are preserved.
+- Checked width calculation, hidden columns, long values on later sheets, HTML generation and saving. Browser visual verification was not performed because the environment blocks Chrome launch.
+
 ## 2026-11-08 — Clean operation names V1
 
 - Added `NX_Clean_Operation_Names.cs` and the «Очистка названий операций» entry to the updater.

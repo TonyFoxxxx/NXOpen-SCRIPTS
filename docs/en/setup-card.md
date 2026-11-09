@@ -8,11 +8,11 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.67 · 2026-11-06**
+**V2.68 · 2026-11-09**
 
-- Added `Drill,Deep` support for `SPOT_DRILLING` / `NXHOLECENTER` spot drilling, using local `DEPTH` to the tip.
-- Fixed skipped through-hole drilling when local FBM and model entrances lie at different levels along the same axis. Type confirmation requires one uniquely linked model feature on the same axis with the same direction.
-- The fix is shared by the standalone journal, the setup-sheet Zmin column and renaming, and postprocessing. Each `Cycle` point must still match the local entrance strictly; model depth is never substituted.
+- Operation-table headings wrap at word boundaries, including the wall-stock and floor-stock headings.
+- Automatic layout gives every column except Operations the minimum width required by its longest value and longest heading word. All operations in the setup are measured, including later sheets.
+- Operations receives all remaining space. If the minimum widths exceed the available space, the entire table is fitted to the sheet. Saved manual widths remain in effect until Auto width is selected.
 
 Regenerate the HTML after updating.
 
@@ -120,8 +120,8 @@ If even one Cycle point has no resolved depth, Zmin stays blank for the whole op
 - Click the enlarged arrow before a Carrier name to collapse it: its heading stays in the list while all tools and nested groups are hidden. Click again to expand. The arrow rotates smoothly over 160 ms, down when expanded and right when collapsed. Only the relevant tool list is updated.
 - The separate «Инструмент» (Tools) block contains only tools outside Carriers. Its arrow hides or shows only those rows, leaving Carriers and their nested groups in their current states.
 - Collapsing is independent in each setup's tool list and the shared project catalog, and is saved with the HTML. Printing omits the entire collapsed Tools block or Carrier, including the heading that remains on screen. **Original view** expands the blocks in the corresponding list.
-- Hide operation columns and set table scale and column widths manually. **«Автоширина» (Auto width)** distributes column widths without changing the font. Ctrl + wheel over the desired table sets row/text scale in 5-percentage-point steps; there is no automatic fitting to text length or two-space reserve. Layout of the table block as a whole within its available area is retained.
-- **Wrap operation names** affects only the operation name: with it off, the name stays on one line with an ellipsis when space runs out; with it on, the name wraps. All other values in operation and tool tables stay on one line without wrapping or ellipses; overflow is clipped at the cell edge. Adjust column width or scale to make room; these settings are saved in HTML.
+- Hide operation columns and set table scale and column widths manually. New cards and **«Автоширина» (Auto width)** use the minimum operation-column widths needed for complete cell values and the longest heading word; Operations receives the remaining space. Headings wrap at word boundaries. If the combined minimum exceeds the sheet, the entire table scales down to fit. Ctrl + wheel over a table changes its selected row/text scale in 5-percentage-point steps. Saved manual widths take priority until Auto width is selected.
+- **Wrap operation names** affects only the operation name: with it off, the name stays on one line with an ellipsis when space runs out; with it on, the name wraps. All other values in operation and tool tables stay on one line without wrapping or ellipses. Manually narrowed columns and tool-table cells clip overflow at the cell edge; adjust width or scale to make room. These settings are saved in HTML.
 - Move selected operations onto the setup's first sheet or back using buttons or drag-and-drop. The optional limit is 25 operations on the first sheet; available space also limits placement.
 - Operations paginate automatically, with repeated group headings and continuous page numbers.
 - Click an image to switch IPW / NO IPW; pan, zoom and reset to 100% or center.

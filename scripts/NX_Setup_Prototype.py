@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.67
+# SCRIPT_VERSION: V2.68
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -116,7 +116,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.67"
+SCRIPT_VERSION = "V2.68"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -6897,7 +6897,7 @@ table[data-fit-family] tbody>tr.operation-selected>td{background:#dcf2ff}
 #operation-options{position:relative;font:13px Arial}#operation-options summary{cursor:pointer;padding:7px;border:1px solid #a9c2c8;border-radius:4px}
 .operation-options-panel{position:absolute;top:100%;left:0;z-index:90;width:320px;background:white;border:1px solid #a9c2c8;border-radius:6px;box-shadow:0 5px 18px #173c4930;padding:14px}
 .operation-options-panel strong{display:block;margin-bottom:10px;line-height:1.4}.operation-options-panel label{display:flex;align-items:center;gap:8px;padding:5px 0}.operation-options-panel .wrap-option{border-top:1px solid #d4dfe2;margin-top:7px;padding-top:12px;line-height:1.4}
-.ops th .cell-text{white-space:nowrap;overflow:hidden;text-overflow:clip}
+.ops th .cell-text{height:auto;min-height:calc(3.4mm * var(--data-scale) - 1px);line-height:1.2;white-space:normal;overflow:hidden;overflow-wrap:normal;word-break:normal;text-overflow:clip}
 .ops th{text-align:center}.ops th[data-column-id="name"]{text-align:left}
 .ops tbody td.numeric,.ops tbody td.numeric .cell-text{text-align:center}
 .ops.wrap-operation-names tbody td[data-column-id="name"] .cell-text{height:auto;min-height:calc(3.4mm * var(--data-scale) - 1px);white-space:normal;overflow-wrap:anywhere;word-break:normal;line-height:1.2;text-overflow:clip}
@@ -8134,8 +8134,8 @@ function applyColumnLayout(family,metrics,widths){
  const apply=table=>{
   const viewport=tableViewport(table);if(!viewport)return;
   table.style.width=total+'px';table.style.setProperty('--print-source-width',total+'px');
-  // Preserve the established layout for manually oversized columns.
-  // Automatic widths stay inside the viewport without changing text size.
+  // Fit oversized manual columns or the full automatic cell widths into
+  // the viewport. The chosen base font remains stored independently.
   if(family==='operations'){table.style.zoom=String(fit);table.style.setProperty('--print-table-scale',fit);}
   table.style.fontSize=font+'pt';table.dataset.widthMode=columnWidths[family]?'manual':'auto';
   [...table.querySelectorAll('colgroup>col')].forEach((col,i)=>{col.style.width=(total?visible[i]/total*100:0)+'%';});
@@ -8221,14 +8221,15 @@ scope.addEventListener('keydown',event=>{
 });
 local('columns-auto').addEventListener('click',()=>resetColumnWidths());
 
-function autoColumnWidths(natural,floor,flex,target){
- // Size columns at the chosen font. Text overflow clips instead of shrinking
- // the table's font, including long tool names and correction-register lists.
+function autoColumnWidths(natural,floor,flex,target,keepNatural=false){
+ // Operations keep full non-name cells. If their minimum total exceeds the
+ // sheet, applyColumnLayout fits the whole table using its existing zoom.
  const widths=natural.map((n,i)=>Math.max(n,floor[i]));
  flex.forEach(i=>widths[i]=floor[i]);
+ const total=widths.reduce((sum,n)=>sum+n,0);
+ if(keepNatural&&(total>target||!flex.length))return widths;
  const minimum=floor.reduce((sum,n)=>sum+n,0);
  if(minimum>=target)return floor.map(n=>n*target/Math.max(1,minimum));
- const total=widths.reduce((sum,n)=>sum+n,0);
  if(total>target){
   const fraction=(target-minimum)/Math.max(.001,total-minimum);
   return widths.map((n,i)=>floor[i]+(n-floor[i])*fraction);
@@ -8547,6 +8548,15 @@ function fitDataTables(only=null){
   if(family==='operations')ColumnOptions.apply(probe);probe.classList.remove('wrap-operation-names');
   probe.querySelectorAll('.column-grip,.operation-grip').forEach(grip=>grip.remove());holder.append(probe);scope.append(holder);
   const headerCells=[...probe.tHead.rows[0].cells];
+  if(family==='operations')for(const cell of headerCells){
+   const label=cell.querySelector('.cell-text');if(!label)continue;
+   const words=label.textContent.trim().split(/\s+/);label.replaceChildren();label.style.width='max-content';
+   words.forEach((word,i)=>{if(i)label.append(document.createElement('br'));label.append(document.createTextNode(word));});
+   if(cell===headerCells[0]&&shown[0]){
+    const style=getComputedStyle(cell);
+    floor[0]=Math.max(floor[0],label.getBoundingClientRect().width+(parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0)+3);
+   }
+  }
   // Tree indentation and controls need a visible label area at the manual
   // font size. This is a column minimum, independent of the label's length.
   for(const row of body.rows)for(const i of flex){
@@ -8561,7 +8571,10 @@ function fitDataTables(only=null){
    const metrics={target,base,natural,floor,renderScale,tables,shown};tables.forEach(t=>columnMetrics.set(t,metrics));
    const manual=columnWidths[family]&&safeManualWidths(metrics,columnWidths[family]);
    if(manual)applyColumnLayout(family,metrics,manual);
-   else applyColumnLayout(family,metrics,autoColumnWidths(natural,floor,flex,target).map((n,i)=>shown[i]?n:Math.max(1,allFloor[i])));
+   else{
+    const autoFloor=family==='operations'?floor.map((n,i)=>i===0?n:0):floor;
+    applyColumnLayout(family,metrics,autoColumnWidths(natural,autoFloor,flex,target,family==='operations').map((n,i)=>shown[i]?n:Math.max(1,allFloor[i])));
+   }
   }finally{holder.remove();}
  }
 }
@@ -9783,8 +9796,8 @@ def text_width_em(value, bold=False):
     return total * (1.24 if bold else 1.20)
 
 
-def column_layout_widths(samples, width_mm, base_pt, minima, flexible):
-    """Distribute column widths at a fixed font; overflow never shrinks text."""
+def column_layout_widths(samples, width_mm, base_pt, minima, flexible, keep_natural=False):
+    """Distribute widths; optionally retain full cells for the HTML table fit."""
     if width_mm <= 0:
         raise ValueError('Недостаточная ширина таблицы.')
     natural = [max([minimum] + [em * base_pt * 25.4 / 72 + extra for em, extra in column])
@@ -9792,10 +9805,12 @@ def column_layout_widths(samples, width_mm, base_pt, minima, flexible):
     widths = natural[:]
     for index in flexible:
         widths[index] = minima[index]
+    total = sum(widths)
+    if keep_natural and total > width_mm:
+        return widths
     minimum = sum(minima)
     if minimum >= width_mm:
         return [value * width_mm / minimum for value in minima]
-    total = sum(widths)
     if total > width_mm:
         fraction = (width_mm - minimum) / (total - minimum)
         return [floor + (value - floor) * fraction for value, floor in zip(widths, minima)]
@@ -9826,7 +9841,8 @@ def layout_attributes(family, font, widths, base_pt, minima, flexible):
 
 
 def operation_layout(report):
-    samples = [[(text_width_em(h), 1.8)] for h in OP_HEADERS]
+    samples = [[(max((text_width_em(word) for word in h.split()), default=0), 1.8)]
+               for h in OP_HEADERS]
     for row in report.get('operation_rows', []):
         values = operation_cells(row, report)
         for i, value in enumerate(values):
@@ -9840,7 +9856,9 @@ def operation_layout(report):
                     value = str(value) + ' · продолжение'
             samples[i].append((text_width_em(value, row['kind'] == 'group' or i == 3 or (i == 0 and bool(re.search(r'(?<![^\W_])R0(?![^\W_]|[.,][0-9])', str(value), re.IGNORECASE)))), extra))
     minima = (8, 7, 4, 8, 4, 7, 7, 7, 7, 7, 7, 5)
-    widths = column_layout_widths(samples, 193.4, 7, minima, (0,))
+    auto_minima = [value if index in (0, 2) else 0 for index, value in enumerate(minima)]
+    auto_minima[0] = max(auto_minima[0], samples[0][0][0] * 7 * 25.4 / 72 + 1.8)
+    widths = column_layout_widths(samples, 193.4, 7, auto_minima, (0,), keep_natural=True)
     attrs, cols = layout_attributes('operations', 7, widths, 7, minima, (0,))
     for key in OP_KEYS:
         cols = cols.replace('<col style=', '<col data-column-id="%s" style=' % key, 1)
