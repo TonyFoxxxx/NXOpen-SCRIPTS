@@ -2,6 +2,15 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-11 - Save project and archive V1
+
+- Added `NX_Save_Project_And_Archive.py` and its updater entry. Native Save saves the work part and modified components; only the main work-part `.prt` is archived.
+- One `<project name>.zip` next to the `.prt` is replaced on subsequent runs. The original path is preserved; no temporary files, INI, logs or additional copies are created.
+- Checks NX save status, remaining modifications, CRC, size and SHA-256 of the archived copy. Releases handles and protects unrelated existing ZIP files.
+- Keeps the old ZIP in memory for recovery from handled write failures. Replacement without a staging file is not atomic on power loss or forced termination. Archiving never writes to the original `.prt`.
+- Added creation, repeated replacement, normal-write alternation, NX failure, locking, memory-exhaustion and ZIP restoration checks.
+- Passed 22 dedicated tests and native Designcenter 2606 execution: journal → native Save → journal. The path and Work/Display Part were preserved, ZIP matches the latest `.prt`, and only two files remain in the project folder.
+
 ## 2026-11-09 — Setup sheets V2.68
 
 - Operation headings wrap at word boundaries; sizing uses the longest heading word instead of the complete phrase.

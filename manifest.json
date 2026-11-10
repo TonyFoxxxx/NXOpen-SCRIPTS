@@ -170,6 +170,15 @@
       "description": "Открытие папки карт наладки текущего проекта."
     },
     {
+      "id": "NX_Save_Project_And_Archive",
+      "name": "Сохранение проекта и архива",
+      "file": "NX_Save_Project_And_Archive.py",
+      "version": "V1",
+      "path": "scripts/NX_Save_Project_And_Archive.py",
+      "sha256": "ea747108cea3ebfe50df9f645e4d5481fa07bcdabb0cfd268199b3d07e0743d3",
+      "description": "Штатное сохранение рабочего PRT и обновление одного ZIP рядом с проектом без временных файлов."
+    },
+    {
       "id": "NX_Update_Scripts",
       "name": "Апдейтер скриптов",
       "file": "NX_Update_Scripts.py",

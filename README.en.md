@@ -27,19 +27,20 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.13 | Export the current sheet to PDF with adjustable line weights. | [All features](docs/en/export-pdf.md) |
 | [NX_Export_Current_View_To_DXF.cs](scripts/NX_Export_Current_View_To_DXF.cs) | V1.08 | Export edges, the outer outline or selected curves to DXF. | [All features](docs/en/export-dxf.md) |
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Rename part and assembly files and update component references. | [All features](docs/en/rename-assemblies.md) |
+| [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Clean operation names V1 · 2026-11-08
+### Latest update — Save project and archive V1 · 2026-11-11
 
-- New standalone journal removes trailing `COPY`, `INSTANCE`, `INSTANT` and their chains from all work-part operations.
-- Repeated names receive `_1`, `_2`, etc. in Program Order. Z retains its exact text, with the counter before it: `PLSK_CHIST_Z0_COPY` → `PLSK_CHIST_1_Z0` when `PLSK_CHIST_Z0` exists.
-- Includes stable repeat runs, one undo step and rollback on a renaming error.
+- New journal performs a native work-part `.prt` save and updates one ZIP in the same folder. The ZIP contains only the main `.prt`, without external components.
+- The project path is preserved and normal saves can continue afterward. The journal creates no temporary files, INI or logs.
+- Checks NX save errors and ZIP contents. A handled write error triggers an attempt to restore the previous archive from memory.
 
-Click Check in the updater and install **«Очистка названий операций» (Clean operation names)**. [Rules and examples](docs/en/clean-operation-names.md).
+Install **«Сохранение проекта и архива» (Save project and archive)** in the updater. [Use, validation and limitations](docs/en/save-project-archive.md).
 
 ## Installation
 
