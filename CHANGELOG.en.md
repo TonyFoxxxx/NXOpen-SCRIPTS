@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.04
+
+- Fix the short-stroke gap failure by leaving through-pairs untrimmed, including short connectors between nearby junctions.
+- Remove collapsed connectors left by straight-axis snapping. The removal condition excludes genuine loops around holes and independent short strokes; compact duplicate points before fitting.
+- Adapt the requested 0.02 mm gap within 0.004–0.02 mm when needed, without changing the 0.001 mm CAM tolerance. Retry from the original curves and report the selected gap range. Never silently omit an unresolvable branch.
+- Fix false intersection detection caused by floating-point error on nearly parallel segments.
+- Add 93 scenarios, including slanted 4/plus/K/P/Phi outlines reproducing V1.03 failures. Total: 152 routing scenarios, 122 centerline scenarios, 102 adapter checks and 21 chain checks. Compiles against DC 2606 SDK for .NET Framework and .NET 10; the user model and final toolpath remain unverified.
+
 ## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.03
 
 - Separate junctions into nonintersecting chains with at least 0.02 mm clearance: two elbows for plus, a stem and diagonals for K, and gaps at loop returns in P/4/Phi.
