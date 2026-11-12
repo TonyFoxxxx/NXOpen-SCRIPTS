@@ -23,6 +23,7 @@ public static class Checks
     public static int Main()
     {
         G.FontData f=G.ReadFont(FontBytes());Require(f.CapHeight==52 && f.Baseline==70,"metrics");
+        foreach(char ch in "\u0410\u0411\u0412\u0401\u0451\u042f\u044f") Require(f.Glyphs.ContainsKey(ch),"Windows-1251 Cyrillic mapping");
         List<G.Stroke> h=G.Text(f,"H H");Require(h.Count==6,"space/three strokes");
         G.P stem=h[0].P[1]-h[0].P[0];Require(Math.Abs(Math.Atan2(Math.Abs(stem.X),Math.Abs(stem.Y))*180/Math.PI-15)<1e-9,"exact slant");
         Require(Math.Abs(Math.Abs(stem.Y)-1)<1e-9,"capital height");
@@ -44,6 +45,6 @@ public static class Checks
         var repeated=G.Smooth(new List<G.P>{new G.P(0,0),new G.P(0,0),new G.P(5,0)},52);Require(repeated.Count==1,"zero segment removal");
         G.Glyph retrace=new G.Glyph{Width=40};retrace.Paths.Add(new List<G.P>{new G.P(0,0),new G.P(5,0),new G.P(0,0),new G.P(0,8)});f.Glyphs['R']=retrace;
         Require(G.Text(f,"R").Count==2,"no repeated engraving segment");
-        Console.WriteLine("10 smooth-font scenarios passed");return 0;
+        Console.WriteLine("11 smooth-font scenarios passed");return 0;
     }
 }

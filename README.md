@@ -21,7 +21,7 @@
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Очистка служебных хвостов и нумерации в именах всех операций с сохранением Z. | [Все функции](docs/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1 | Добавление надписи, эскиза или кривых в существующую PLANAR_MILL с Tool Position On. | [Все функции](docs/planar-mill-curves.md) |
-| [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1 | Создание однолинейного текста ГОСТ А из линий и гладких сплайнов по внешнему FON. | [Все функции](docs/gost-smooth-text.md) |
+| [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Создание однолинейного текста ГОСТ А из линий и гладких сплайнов по внешнему FON. | [Все функции](docs/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Заполнение описаний инструментов диаметром и номерами T, H, D. | [Все функции](docs/tool-description.md) |
 | [NX_Delete_Empty_Tools.cs](scripts/NX_Delete_Empty_Tools.cs) | V1 | Удаление пустых CAM-инструментов без операций с предварительным списком и общей отменой. | [Все функции](docs/delete-empty-tools.md) |
@@ -36,13 +36,11 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Гладкий текст ГОСТ А и выбор кривых · 12.11.2026
+### Последнее обновление — Гладкий текст ГОСТ А V1.01 · 12.11.2026
 
-- «Гладкий текст ГОСТ А» создаёт одиночные линии и кубические сплайны по внешнему векторному FON. Вводятся текст, высота в мм и поворот, положение выбирается на XY текущей WCS.
-- «Кривые для PLANAR_MILL» добавляет Text, эскиз или кривые в выбранную существующую операцию. Новые границы получают Tool Position On и припуск 0.
-- Оба действия отменяются через Ctrl+Z. Проверка границ и расчёт траектории остаются штатными действиями NX.
+Исправлена ошибка запуска журнала в .NET 10: `IPersist.Interface`, `IHandle<>` и `Font`. Также исправлено чтение кириллицы из FON. Проверены компиляция с SDK DC 2606, поля окна, создание, отмена и повторные открытия.
 
-Установите нужные пункты в апдейтере. Руководства: [гладкий текст](docs/gost-smooth-text.md), [выбор кривых](docs/planar-mill-curves.md).
+В апдейтере обновите **«Гладкий текст ГОСТ А»** до **V1.01**. [Изменения и порядок работы](docs/gost-smooth-text.md#изменения-последней-версии--v101--12112026).
 
 ## Установка
 

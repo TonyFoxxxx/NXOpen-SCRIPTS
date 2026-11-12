@@ -26,10 +26,6 @@ class GostSmoothTests(unittest.TestCase):
                 dotnet = shutil.which('dotnet')
                 if not dotnet:
                     self.skipTest('.NET SDK required')
-                # Legacy Cyrillic encodings require registration on .NET Core.
-                original = (path / 'Checks.cs').read_text()
-                original = original.replace('G.FontData f=G.ReadFont', 'Encoding.RegisterProvider(CodePagesEncodingProvider.Instance); G.FontData f=G.ReadFont')
-                (path / 'Checks.cs').write_text(original)
                 project = path / 'Checks.csproj'
                 project.write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><LangVersion>7.3</LangVersion></PropertyGroup></Project>')
                 build = [dotnet, 'build', str(project), '--nologo', '-v:q']
@@ -38,4 +34,4 @@ class GostSmoothTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             result = subprocess.run(run, capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn('10 smooth-font scenarios passed', result.stdout)
+            self.assertIn('11 smooth-font scenarios passed', result.stdout)

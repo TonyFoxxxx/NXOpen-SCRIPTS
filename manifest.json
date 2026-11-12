@@ -81,9 +81,9 @@
       "id": "NX_GOST_Smooth_Text",
       "name": "Гладкий текст ГОСТ А",
       "file": "NX_GOST_Smooth_Text.cs",
-      "version": "V1",
+      "version": "V1.01",
       "path": "scripts/NX_GOST_Smooth_Text.cs",
-      "sha256": "4006087785ecc6dcedbeaa0bdfa07c73e22f57adc94859bf2d48632301457ce6",
+      "sha256": "22d453b3706111deb3dd88f12c55e257cd945c133ccf35bfd1a114a155f061ca",
       "description": "Создание однолинейной надписи ГОСТ А из линий и гладких сплайнов по внешнему FON: текст, высота, положение и наклон 75°."
     },
     {

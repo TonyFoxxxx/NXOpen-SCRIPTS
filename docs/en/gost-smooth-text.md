@@ -2,7 +2,14 @@
 
 [Русский](../gost-smooth-text.md) | **English**
 
-File: `NX_GOST_Smooth_Text.cs` · **V1** · 2026-11-12.
+File: `NX_GOST_Smooth_Text.cs` · **V1.01** · 2026-11-12.
+
+## Latest changes — V1.01 · 2026-11-12
+
+- Fixed .NET 10 journal compilation errors mentioning `IPersist.Interface`, `IHandle<>`, `System.Private.Windows.Core` and `System.Drawing.Common`.
+- Creates the dialog through the Windows Forms assembly available in NX without compile-time references to its types. No additional DLL downloads or manual library installation are required.
+- Reads Windows-1251 Cyrillic when the host has not registered legacy encodings, using the runtime provider without changing NX process-wide encoding settings.
+- Compiled the complete journal against DC 2606 SDKs for .NET Framework and .NET 10. Exercised real dialog inputs, accept/cancel and repeated opening in both runtimes without visible windows.
 
 Creates model lines and cubic splines for later CAM selection. Rounded portions no longer use the coarse integer FON coordinate grid. Strokes have zero geometric width; cutter and depth determine the engraved width.
 
@@ -37,7 +44,7 @@ This reconstructs plotter-font roundings. It is not an exact medial-axis convers
 
 ## Validation and limits
 
-Compiled against Designcenter 2606 libraries. Passed 10 scenarios covering font parsing, metrics, slant, tangency, corners, closure, zero segments and retraces. A separate local check processed 180 installed-source glyphs into 1297 entities, including 687 cubic segments.
+Compiled against Designcenter 2606 libraries for .NET Framework and .NET 10. Exercised the real input dialog in both runtimes. Passed 11 scenarios covering font parsing, Cyrillic, metrics, slant, tangency, corners, closure, zero segments and retraces. A separate local check processed 180 installed-source glyphs into 1297 entities, including 687 cubic segments.
 
 Supports one line up to 250 characters. Does not change existing Text features, sketches or operations. Requires a legacy vector FON 2.0 with byte coordinates. Raster/outline fonts, Unicode without corresponding Windows-1251 geometry and text on nonplanar surfaces are unsupported.
 

@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-12 — Smooth GOST A text V1.01
+
+- Fixed .NET 10 journal compilation errors mentioning `IPersist.Interface`, `IHandle<>`, `System.Private.Windows.Core` and `System.Drawing.Common`.
+- Creates the dialog through the Windows Forms assembly available in NX without compile-time references to its types. No additional DLL downloads or manual library installation are required.
+- Reads Windows-1251 Cyrillic when the host has not registered legacy encodings, using the runtime provider without changing NX process-wide encoding settings.
+- Compiled the complete journal against DC 2606 SDKs for .NET Framework and .NET 10. Exercised real dialog inputs, accept/cancel and repeated opening in both runtimes without visible windows.
+
 ## 2026-11-12 — Smooth GOST A text V1
 
 - Added `NX_GOST_Smooth_Text.cs` and the updater entry «Гладкий текст ГОСТ А».

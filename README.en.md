@@ -21,7 +21,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Clean copy/instance suffixes and counters in all operation names while preserving Z. | [All features](docs/en/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1 | Add text, sketch or selected curves to an existing PLANAR_MILL with Tool Position On. | [All features](docs/en/planar-mill-curves.md) |
-| [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1 | Create single-stroke GOST A text from lines and smooth splines using an external FON. | [All features](docs/en/gost-smooth-text.md) |
+| [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Create single-stroke GOST A text from lines and smooth splines using an external FON. | [All features](docs/en/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Fill tool descriptions with diameter and T, H, D numbers. | [All features](docs/en/tool-description.md) |
 | [NX_Delete_Empty_Tools.cs](scripts/NX_Delete_Empty_Tools.cs) | V1 | Delete empty CAM tools without operations, with a preview and one undo step. | [All features](docs/en/delete-empty-tools.md) |
@@ -36,13 +36,11 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Smooth GOST A text and curve selection · 2026-11-12
+### Latest update — Smooth GOST A text V1.01 · 2026-11-12
 
-- Smooth GOST A Text creates individual lines and cubic splines from an external vector FON. Enter text, height in mm and rotation; choose the origin on current WCS XY.
-- Curves for PLANAR_MILL adds Text, sketch or selected curves to an existing operation. New boundaries use Tool Position On and stock 0.
-- Both actions support one Ctrl+Z undo. Review boundaries and generate the toolpath using native NX commands.
+Fixed .NET 10 journal startup errors involving `IPersist.Interface`, `IHandle<>` and `Font`, plus Cyrillic FON decoding. Validated DC 2606 SDK compilation, dialog inputs, accept/cancel and repeated opening.
 
-Install the required updater entries. Guides: [smooth text](docs/en/gost-smooth-text.md), [curve selection](docs/en/planar-mill-curves.md).
+Update **«Гладкий текст ГОСТ А»** to **V1.01** in the updater. [Changes and usage](docs/en/gost-smooth-text.md#latest-changes--v101--2026-11-12).
 
 ## Installation
 
