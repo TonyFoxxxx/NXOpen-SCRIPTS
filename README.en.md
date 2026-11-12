@@ -20,6 +20,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Clean copy/instance suffixes and counters in all operation names while preserving Z. | [All features](docs/en/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
+| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1 | Add text, sketch or selected curves to an existing PLANAR_MILL with Tool Position On. | [All features](docs/en/planar-mill-curves.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Fill tool descriptions with diameter and T, H, D numbers. | [All features](docs/en/tool-description.md) |
 | [NX_Delete_Empty_Tools.cs](scripts/NX_Delete_Empty_Tools.cs) | V1 | Delete empty CAM tools without operations, with a preview and one undo step. | [All features](docs/en/delete-empty-tools.md) |
@@ -34,13 +35,13 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Save project and archive V1 · 2026-11-11
+### Latest update — Curves for PLANAR_MILL V1 · 2026-11-12
 
-- New journal performs a native work-part `.prt` save and updates one ZIP in the same folder. The ZIP contains only the main `.prt`, without external components.
-- The project path is preserved and normal saves can continue afterward. The journal creates no temporary files, INI or logs.
-- Checks NX save errors and ZIP contents. A handled write error triggers an attempt to restore the previous archive from memory.
+- Select an existing PLANAR_MILL, run the journal and select a Text feature, sketch or multiple curves. Connected chains become separate open or closed boundaries.
+- New members use Tool Position On and stock 0. Already assigned curves are skipped; other operation parameters are preserved.
+- Undo the change with one Ctrl+Z. Generate the toolpath manually after reviewing the boundaries.
 
-Install **«Сохранение проекта и архива» (Save project and archive)** in the updater. [Use, validation and limitations](docs/en/save-project-archive.md).
+Install **«Кривые для PLANAR_MILL» (Curves for PLANAR_MILL)** in the updater. [Use, validation and limitations](docs/en/planar-mill-curves.md).
 
 ## Installation
 

@@ -2,6 +2,15 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-12 — Curves for PLANAR_MILL V1
+
+- Added `NX_PlanarMill_Select_Curves.cs` and the updater entry «Кривые для PLANAR_MILL».
+- Adds Text, sketch or directly selected curves to an existing operation. Skips reference geometry and repeated selections of the same object.
+- Builds open and closed chains without connecting disconnected strokes. Does not add curves already assigned to the operation again.
+- New boundary members use Tool Position On and stock 0. Preserves existing boundaries and machining parameters; handled errors roll back the current run.
+- Checks coplanarity, work-part ownership and the new boundary contents. Nonempty inherited boundaries require switching to local boundaries first.
+- Passed compilation against the installed DC 2606 SDK and 21 chain/plane scenarios. Native NX execution is not confirmed: the background process failed before running the journal.
+
 ## 2026-11-11 - Save project and archive V1
 
 - Added `NX_Save_Project_And_Archive.py` and its updater entry. Native Save saves the work part and modified components; only the main work-part `.prt` is archived.

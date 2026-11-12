@@ -69,6 +69,15 @@
       "description": "Tool Position On для всех элементов границ выбранных PLANAR_MILL; включение Stock с единым припуском по запросу."
     },
     {
+      "id": "NX_PlanarMill_Select_Curves",
+      "name": "Кривые для PLANAR_MILL",
+      "file": "NX_PlanarMill_Select_Curves.cs",
+      "version": "V1",
+      "path": "scripts/NX_PlanarMill_Select_Curves.cs",
+      "sha256": "2c17e5e421102321a0270457e4d290594e6a676b6199f88f8b9ba7381e47c9a2",
+      "description": "Добавление надписи Text, эскиза или выбранных кривых в существующую PLANAR_MILL: связанные цепочки, Tool Position On и припуск 0."
+    },
+    {
       "id": "NX_Number_Program_Folders",
       "name": "Нумерация папок программ",
       "file": "NX_Number_Program_Folders.cs",
