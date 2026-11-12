@@ -1,8 +1,8 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.01
+// SCRIPT_VERSION: V1.02
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
 // Reconstructs approximate medial curves; round dots use a circle of half the face diameter.
-// Appends local boundaries, Tool Position ON, member stock 0; one undo transaction.
+// Appends OPEN profile boundaries, Tool Position ON, stock 0, local CAM tolerance 0.001 mm.
 // Does not save files, generate a toolpath, or change the tool, depths, feeds or source body.
 
 using System;
@@ -20,9 +20,10 @@ using P = EngravingCenterlines.P;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.01";
+    private const string SCRIPT_VERSION = "V1.02";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "2";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -49,7 +50,7 @@ public class NXPlanarMillSelectCurves
     }
     private sealed class Existing
     {
-        internal string Shape;
+        internal string Shape, Revision;
         internal int Expected, Count;
         internal readonly HashSet<string> Faces = new HashSet<string>();
     }
@@ -64,7 +65,7 @@ public class NXPlanarMillSelectCurves
             HashSet<Tag> assigned = AssignedCurves(uf, operation);
             Face[] faces = SelectFaces(); if (faces == null) return;
             double unit = part.PartUnits == BasePart.Units.Inches ? 1 / 25.4 : 1;
-            double tolerance = 0.002 * unit, joinTolerance = 0.000001 * unit;
+            double tolerance = 0.002 * unit, joinTolerance = 0.000001 * unit, camTolerance = 0.001 * unit;
             PlanarCurveChains.Frame frame; int skipped;
             List<FaceGroup> groups = Prepare(uf, part, faces, assigned, tolerance, joinTolerance, out frame, out skipped);
             if (groups.Count == 0) { Show(NXMessageBox.DialogType.Information, "Средние линии выбранных граней уже назначены этой операции."); return; }
@@ -72,7 +73,9 @@ public class NXPlanarMillSelectCurves
                 throw new InvalidOperationException("Рабочая деталь изменилась. Запустите скрипт заново.");
             EnsureNoInheritedBoundaries(uf, operation);
             if (!assigned.SetEquals(AssignedCurves(uf, operation))) throw new InvalidOperationException("Границы операции изменились во время выбора. Повторите запуск.");
-            IntPtr[] oldBoundaries = Boundaries(uf, operation.Tag); HashSet<IntPtr> oldHandles = new HashSet<IntPtr>(oldBoundaries);
+            IntPtr[] oldBoundaries = Boundaries(uf, operation.Tag);
+            List<Tag[]> oldMembers = new List<Tag[]>();
+            foreach (IntPtr boundary in oldBoundaries) oldMembers.Add(MemberTags(uf, boundary));
             mark = session.SetUndoMark(Session.MarkVisibility.Visible, "Оси гравировки: " + operation.Name); hasMark = true;
             List<CurveInfo> curves = new List<CurveInfo>(); List<PlanarCurveChains.Chain> chains = new List<PlanarCurveChains.Chain>(); int dots = 0;
             foreach (FaceGroup group in groups)
@@ -104,26 +107,17 @@ public class NXPlanarMillSelectCurves
             }
             foreach (PlanarCurveChains.Chain chain in chains)
             {
-                Tag[] tags = new Tag[chain.Items.Count]; UFCambnd.AppData[] memberData = new UFCambnd.AppData[tags.Length];
-                for (int i = 0; i < tags.Length; i++)
-                {
-                    tags[i] = curves[chain.Items[i]].Curve.Tag;
-                    memberData[i] = new UFCambnd.AppData { has_stock = 1, stock = 0,
-                        has_tool_position = 1, tool_position = CamToolPosition.CamToolPositionOn, tolerances = new double[2] };
-                }
-                UFCambnd.BoundaryData boundary = new UFCambnd.BoundaryData
-                {
-                    boundary_type = chain.Closed ? CamBoundaryType.CamBoundaryTypeClosed : CamBoundaryType.CamBoundaryTypeOpen,
-                    plane_type = 0, origin = new double[] { frame.Origin.X, frame.Origin.Y, frame.Origin.Z },
-                    matrix = new double[] { frame.X.X, frame.X.Y, frame.X.Z, frame.Y.X, frame.Y.Y, frame.Y.Z, frame.Z.X, frame.Z.Y, frame.Z.Z },
-                    material_side = CamMaterialSide.CamMaterialSideInLeft,
-                    app_data = new UFCambnd.AppData[] { new UFCambnd.AppData { has_stock = 1, stock = 0, tolerances = new double[2] } }
-                };
-                uf.Cambnd.AppendBndFromCurve(operation.Tag, CamGeomType.CamPart, tags.Length, tags, ref boundary, memberData);
+                Tag[] tags = new Tag[chain.Items.Count];
+                for (int i = 0; i < tags.Length; i++) tags[i] = curves[chain.Items[i]].Curve.Tag;
+                EngravingCamBoundary.Append(uf, operation.Tag, tags,
+                    new double[] { frame.Origin.X, frame.Origin.Y, frame.Origin.Z },
+                    new double[] { frame.X.X, frame.X.Y, frame.X.Z, frame.Y.X, frame.Y.Y, frame.Y.Z, frame.Z.X, frame.Z.Y, frame.Z.Z }, camTolerance);
             }
-            VerifyNewBoundaries(uf, operation, oldHandles, curves, chains);
+            VerifyNewBoundaries(uf, operation, oldMembers, curves, chains, camTolerance);
             PlanarMillingBuilder builder = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
             try { builder.Commit(); } finally { builder.Destroy(); }
+            // Verify saved parameters as well as the pre-commit objects. NX may recreate boundary handles.
+            VerifyNewBoundaries(uf, operation, oldMembers, curves, chains, camTolerance);
             HashSet<Tag> expectedTags = new HashSet<Tag>(assigned); foreach (CurveInfo curve in curves) expectedTags.Add(curve.Curve.Tag);
             if (!AssignedCurves(uf, operation).SetEquals(expectedTags) || Boundaries(uf, operation.Tag).Length != oldBoundaries.Length + chains.Count)
                 throw new InvalidOperationException("NX сохранил другой состав границ. Изменение отменяется.");
@@ -131,10 +125,10 @@ public class NXPlanarMillSelectCurves
             try { uf.UiOnt.Refresh(); } catch { }
             int closed = chains.FindAll(delegate(PlanarCurveChains.Chain c) { return c.Closed; }).Count;
             Show(NXMessageBox.DialogType.Information, "Операция: " + operation.Name + "\nСоздано кривых: " + curves.Count
-                + "\nГраниц: " + chains.Count + " (открытых: " + (chains.Count - closed) + ", замкнутых: " + closed + ")"
+                + "\nЦепочек кривых: " + chains.Count + " (разомкнутых: " + (chains.Count - closed) + ", замкнутых: " + closed + ")"
                 + "\nКруглых точек D/2: " + dots + (skipped > 0 ? "\nРанее обработанных граней пропущено: " + skipped : "")
                 + "\nСуществующих границ сохранено: " + oldBoundaries.Length
-                + "\n\nНовые кривые созданы в плоскости выбранных граней. Tool Position: ON; Stock: 0."
+                + "\n\nНовые кривые созданы в плоскости выбранных граней. Границы CAM: OPEN; Tool Position: ON; Stock: 0; допуск: 0,001 мм."
                 + "\nПроверьте средние линии, уровни резания и рассчитайте траекторию штатной командой NX.\nОтмена: Ctrl+Z.");
         }
         catch (Exception ex)
@@ -212,6 +206,8 @@ public class NXPlanarMillSelectCurves
             Existing previous;
             if (existing.TryGetValue(group.Key, out previous))
             {
+                if (previous.Revision != GeometryRevision)
+                    throw new InvalidOperationException("Для этих граней остались оси из прежней версии скрипта. Удалите их из границ операции и модели либо отмените прежний запуск через Undo, затем создайте оси заново.");
                 if (previous.Shape != group.Shape || previous.Count != previous.Expected)
                     throw new InvalidOperationException("Для выбранной грани уже есть осевые кривые, но модель или состав границ изменился. Удалите прежний набор осей из операции и модели либо отмените предыдущий запуск, затем повторите расчёт.");
                 skipped += group.Faces.Count; continue;
@@ -323,9 +319,10 @@ public class NXPlanarMillSelectCurves
             NXObject item = NXObjectManager.Get(tag) as NXObject;
             if (item == null || !item.HasUserAttribute(GroupAttribute, NXObject.AttributeType.String, -1)) continue;
             string key = item.GetStringUserAttribute(GroupAttribute, -1), shape = item.GetStringUserAttribute(ShapeAttribute, -1);
+            string revision = item.HasUserAttribute(RevisionAttribute, NXObject.AttributeType.String, -1) ? item.GetStringUserAttribute(RevisionAttribute, -1) : "1";
             int count = int.Parse(item.GetStringUserAttribute(CountAttribute, -1), CultureInfo.InvariantCulture); Existing entry;
-            if (!result.TryGetValue(key, out entry)) { entry = new Existing { Shape = shape, Expected = count }; result.Add(key, entry); }
-            if (entry.Shape != shape || entry.Expected != count) throw new InvalidOperationException("Несогласованные метки ранее созданных осей гравировки.");
+            if (!result.TryGetValue(key, out entry)) { entry = new Existing { Shape = shape, Expected = count, Revision = revision }; result.Add(key, entry); }
+            if (entry.Shape != shape || entry.Expected != count || entry.Revision != revision) throw new InvalidOperationException("Несогласованные метки ранее созданных осей гравировки.");
             entry.Count++;
             foreach (NXObject.AttributeInformation attribute in item.GetUserAttributes()) if (attribute.Title == SourceAttribute && attribute.Type == NXObject.AttributeType.String) entry.Faces.Add(attribute.StringValue);
         }
@@ -337,6 +334,7 @@ public class NXPlanarMillSelectCurves
         curve.SetUserAttribute(GroupAttribute, -1, group.Key, Update.Option.Now);
         curve.SetUserAttribute(ShapeAttribute, -1, group.Shape, Update.Option.Now);
         curve.SetUserAttribute(CountAttribute, -1, count.ToString(CultureInfo.InvariantCulture), Update.Option.Now);
+        curve.SetUserAttribute(RevisionAttribute, -1, GeometryRevision, Update.Option.Now);
         for (int i = 0; i < group.Faces.Count; i++) curve.SetUserAttribute(SourceAttribute, i, group.Faces[i].Key, Update.Option.Now);
     }
     private static string Hash(string text)
@@ -475,22 +473,25 @@ public class NXPlanarMillSelectCurves
         return result;
     }
 
-    private static void VerifyNewBoundaries(UFSession uf, PlanarMilling operation, HashSet<IntPtr> old,
-        List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains)
+    private static void VerifyNewBoundaries(UFSession uf, PlanarMilling operation, List<Tag[]> old,
+        List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains, double tolerance)
     {
         IntPtr[] current = Boundaries(uf, operation.Tag);
-        if (current.Length != old.Count + chains.Count || !old.IsSubsetOf(new HashSet<IntPtr>(current)))
+        if (current.Length != old.Count + chains.Count)
             throw new InvalidOperationException("NX изменил существующие границы при добавлении. Изменение отменяется.");
         Dictionary<Tag, int> remaining = new Dictionary<Tag, int>();
         foreach (CurveInfo curve in curves) remaining.Add(curve.Curve.Tag, 1);
         Dictionary<Tag, int> chainByTag = new Dictionary<Tag, int>();
         for (int i = 0; i < chains.Count; i++)
             foreach (int index in chains[i].Items) chainByTag.Add(curves[index].Curve.Tag, i);
-        HashSet<int> verifiedChains = new HashSet<int>();
+        HashSet<int> verifiedChains = new HashSet<int>(), verifiedOld = new HashSet<int>();
         foreach (IntPtr boundary in current)
         {
-            if (old.Contains(boundary)) continue;
             Tag[] tags = MemberTags(uf, boundary);
+            bool previous = false;
+            for (int i = 0; i < old.Count; i++) if (!verifiedOld.Contains(i) && SameMembers(tags, old[i]))
+            { verifiedOld.Add(i); previous = true; break; }
+            if (previous) continue;
             int newIndex;
             if (tags.Length == 0 || !chainByTag.TryGetValue(tags[0], out newIndex) || !verifiedChains.Add(newIndex))
                 throw new InvalidOperationException("NX сформировал неожиданную новую границу.");
@@ -498,28 +499,86 @@ public class NXPlanarMillSelectCurves
             foreach (int index in chains[newIndex].Items) expected.Add(curves[index].Curve.Tag);
             if (tags.Length != expected.Count || !expected.SetEquals(tags))
                 throw new InvalidOperationException("NX сформировал неожиданный состав новой границы.");
-            UFCambnd.BoundaryData data; uf.Cambnd.AskBoundaryData(boundary, out data);
-            bool closed = data.boundary_type == CamBoundaryType.CamBoundaryTypeClosed;
-            if (closed != chains[newIndex].Closed) throw new InvalidOperationException("NX изменил открытость границы.");
-            int count; IntPtr[] members; uf.Cambnd.AskBoundaryItems(boundary, out count, out members);
-            foreach (IntPtr member in members)
-            {
-                UFCambnd.AppData app; uf.Cambnd.AskItemAppData(member, out app);
-                if (app.has_tool_position == 0 || app.tool_position != CamToolPosition.CamToolPositionOn || app.has_stock == 0 || Math.Abs(app.stock) > 1e-12)
-                    throw new InvalidOperationException("NX не подтвердил положение НА кривой или нулевой припуск.");
-            }
+            EngravingCamBoundary.Verify(uf, boundary, tolerance);
             foreach (Tag tag in tags)
             {
                 if (!remaining.ContainsKey(tag) || --remaining[tag] < 0)
                     throw new InvalidOperationException("Кривая была назначена несколько раз.");
             }
         }
+        if (verifiedOld.Count != old.Count || verifiedChains.Count != chains.Count)
+            throw new InvalidOperationException("NX изменил состав прежних или новых границ.");
         foreach (int count in remaining.Values) if (count != 0) throw new InvalidOperationException("Назначены не все выбранные кривые.");
+    }
+
+    private static bool SameMembers(Tag[] a, Tag[] b)
+    {
+        if (a.Length != b.Length) return false;
+        Dictionary<Tag, int> counts = new Dictionary<Tag, int>();
+        foreach (Tag tag in a) { int count; counts.TryGetValue(tag, out count); counts[tag] = count + 1; }
+        foreach (Tag tag in b) { int count; if (!counts.TryGetValue(tag, out count) || count == 0) return false; counts[tag] = count - 1; }
+        return true;
     }
 
     private static void Show(NXMessageBox.DialogType type, string message) { UI.GetUI().NXMessageBox.Show(Title, type, message); }
     public static int GetUnloadOption(string unused) { return (int)Session.LibraryUnloadOption.Immediately; }
 }
+
+// BEGIN ENGRAVING CAM BOUNDARY ADAPTER
+public static class EngravingCamBoundary
+{
+    public static void Append(UFSession uf, Tag operation, Tag[] tags, double[] origin, double[] matrix, double tolerance)
+    {
+        if (tags == null || tags.Length == 0 || !(tolerance > 0) || double.IsInfinity(tolerance))
+            throw new ArgumentException("Empty engraving boundary or invalid tolerance.");
+        UFCambnd.AppData[] members = new UFCambnd.AppData[tags.Length];
+        for (int i = 0; i < tags.Length; i++) members[i] = ApplicationData(tolerance, true);
+        UFCambnd.BoundaryData boundary = new UFCambnd.BoundaryData
+        {
+            // OPEN is the CAM profile condition, not a statement about the curve's endpoints.
+            // Rings and D/2 dots keep their complete closed geometry, with ON on every member.
+            boundary_type = CamBoundaryType.CamBoundaryTypeOpen,
+            plane_type = 0, origin = origin, matrix = matrix,
+            material_side = CamMaterialSide.CamMaterialSideInLeft,
+            app_data = new UFCambnd.AppData[] { ApplicationData(tolerance, false) }
+        };
+        uf.Cambnd.AppendBndFromCurve(operation, CamGeomType.CamPart, tags.Length, tags, ref boundary, members);
+    }
+    private static UFCambnd.AppData ApplicationData(double tolerance, bool member)
+    {
+        return new UFCambnd.AppData { has_stock = 1, stock = 0, has_tolerances = 1,
+            tolerances = new double[] { tolerance, tolerance }, has_tool_position = member ? 1 : 0,
+            tool_position = CamToolPosition.CamToolPositionOn };
+    }
+    public static void Verify(UFSession uf, IntPtr boundary, double tolerance)
+    {
+        UFCambnd.BoundaryData data; uf.Cambnd.AskBoundaryData(boundary, out data);
+        if (data.boundary_type != CamBoundaryType.CamBoundaryTypeOpen)
+            throw new InvalidOperationException("NX не сохранил границу гравировки в режиме Open / On.");
+        UFCambnd.AppData boundaryData; uf.Cambnd.AskBoundaryAppData(boundary, out boundaryData);
+        VerifyApplicationData(boundaryData, tolerance, false);
+        int count; IntPtr[] members; uf.Cambnd.AskBoundaryItems(boundary, out count, out members);
+        if (count < 1 || members == null || members.Length != count)
+            throw new InvalidOperationException("NX сохранил неполный состав элементов границы гравировки.");
+        foreach (IntPtr member in members)
+        {
+            UFCambnd.AppData app; uf.Cambnd.AskItemAppData(member, out app);
+            VerifyApplicationData(app, tolerance, true);
+        }
+    }
+    private static void VerifyApplicationData(UFCambnd.AppData app, double tolerance, bool member)
+    {
+        if (app.has_stock == 0 || double.IsNaN(app.stock) || Math.Abs(app.stock) > 1e-12
+            || (member && (app.has_tool_position == 0 || app.tool_position != CamToolPosition.CamToolPositionOn)))
+            throw new InvalidOperationException("NX не подтвердил движение по кривой или нулевой припуск.");
+        if (app.has_tolerances == 0 || app.tolerances == null || app.tolerances.Length != 2)
+            throw new InvalidOperationException("NX не сохранил локальный допуск границы гравировки.");
+        foreach (double value in app.tolerances)
+            if (!(value > 0) || double.IsInfinity(value) || value > tolerance * (1 + 1e-8))
+                throw new InvalidOperationException("NX увеличил допуск границы гравировки.");
+    }
+}
+// END ENGRAVING CAM BOUNDARY ADAPTER
 
 // BEGIN PORTABLE CURVE CHAIN CORE
 public static class PlanarCurveChains
@@ -651,6 +710,7 @@ public static class EngravingCenterlines
     {
         public readonly List<P> Points = new List<P>();
         public bool Closed;
+        public readonly HashSet<int> Corners = new HashSet<int>();
     }
     public sealed class Bezier
     {
@@ -845,9 +905,10 @@ public static class EngravingCenterlines
         {
             throw new InvalidOperationException("Не удалось получить устойчивую среднюю линию этой грани.");
         }
+        foreach (Stroke stroke in strokes) Refine(stroke, region, step, tolerance);
+        RestoreStraightStrokes(strokes, region, tolerance);
         foreach (Stroke stroke in strokes)
         {
-            Refine(stroke, region, step, tolerance);
             if (stroke.Points.Count < 2) continue;
             List<Bezier> curves = Fit(stroke, region, tolerance);
             if (curves.Count == 0) throw new InvalidOperationException("Пустая средняя линия.");
@@ -974,7 +1035,9 @@ public static class EngravingCenterlines
                     previous = current; current = next;
                     if (nodes[current].Links.Count != 2) break;
                 }
-                if (nodes[current].Links.Count >= 3 && length < nodes[current].Radius * 1.85 + step
+                // Acute miter corners create longer medial spurs than a right angle.
+                // Retain the radius-collapse test so full-width short stems survive.
+                if (nodes[current].Links.Count >= 3 && length < nodes[current].Radius * 4 + step
                     && nodes[i].Radius < nodes[current].Radius * 0.35) remove.AddRange(branch);
             }
             if (remove.Count == 0) break;
@@ -1032,11 +1095,215 @@ public static class EngravingCenterlines
         for (int i = p.Count - 2; i > 0; i--) if ((p[i] - p[i - 1]).Length < tolerance * 0.02) p.RemoveAt(i);
         if (stroke.Closed) p[p.Count - 1] = p[0];
     }
+    private sealed class StraightAxis
+    {
+        internal P Origin, Direction;
+        internal double Low, High, Radius;
+        internal readonly List<Segment> Sides = new List<Segment>();
+        internal double Parameter(P p) { return P.Dot(p - Origin, Direction); }
+        internal P Project(P p) { return Origin + Direction * Parameter(p); }
+        internal double Outside(P p) { double t = Parameter(p); return Math.Max(0, Math.Max(Low - t, t - High)); }
+    }
+    private sealed class StraightRun
+    {
+        internal int First, Last;
+        internal StraightAxis Axis;
+        internal bool JoinNext;
+        internal P Corner;
+    }
+    private static List<StraightAxis> StraightAxes(Region region, double tolerance)
+    {
+        List<Segment> sides = new List<Segment>(); double width = 2 * region.Area / region.Perimeter;
+        // Join only collinear outline pieces. Tessellated arcs must not become straight strokes.
+        foreach (List<P> loop in region.Loops)
+        {
+            List<P> p = new List<P>(loop); bool changed = true;
+            while (changed && p.Count > 3)
+            {
+                changed = false;
+                for (int i = p.Count - 1; i >= 0 && p.Count > 3; i--)
+                {
+                    P a = p[(i + p.Count - 1) % p.Count], b = p[i], c = p[(i + 1) % p.Count];
+                    if ((b - Closest(new Segment(a, c), b)).Length <= tolerance * 0.01)
+                    { p.RemoveAt(i); changed = true; }
+                }
+            }
+            for (int i = 0; i < p.Count; i++)
+            {
+                Segment side = new Segment(p[i], p[(i + 1) % p.Count]);
+                if ((side.B - side.A).Length >= Math.Max(width * 0.65, tolerance * 12)) sides.Add(side);
+            }
+        }
+        List<StraightAxis> axes = new List<StraightAxis>();
+        for (int i = 0; i < sides.Count; i++) for (int j = i + 1; j < sides.Count; j++)
+        {
+            Segment a = sides[i], b = sides[j]; P direction = (a.B - a.A).Unit();
+            if (Math.Abs(P.Cross(direction, (b.B - b.A).Unit())) > 1e-7) continue;
+            double gap = P.Cross(direction, b.A - a.A), radius = Math.Abs(gap) * 0.5;
+            if (radius < tolerance * 4 || radius > width) continue;
+            double b0 = P.Dot(b.A - a.A, direction), b1 = P.Dot(b.B - a.A, direction);
+            double low = Math.Max(0, Math.Min(b0, b1)), high = Math.Min((a.B - a.A).Length, Math.Max(b0, b1));
+            if (high - low < radius * 0.9) continue;
+            P origin = a.A + new P(-direction.Y, direction.X) * (gap * 0.5);
+            bool inside = true;
+            for (int k = 1; k <= 3; k++)
+            {
+                P q = origin + direction * (low + (high - low) * k / 4);
+                if (!region.Inside(q) || Math.Abs(region.Distance(q) - radius) > tolerance * 2) inside = false;
+            }
+            if (!inside) continue;
+            StraightAxis axis = new StraightAxis { Origin = origin, Direction = direction, Low = low, High = high, Radius = radius };
+            axis.Sides.Add(a); axis.Sides.Add(b); axes.Add(axis);
+        }
+        // Collinear arms may be split by a crossing stroke. Keep one axis across that junction.
+        for (int i = 0; i < axes.Count; i++) for (int j = axes.Count - 1; j > i; j--)
+        {
+            StraightAxis a = axes[i], b = axes[j];
+            if (Math.Abs(P.Cross(a.Direction, b.Direction)) > 1e-7 || Math.Abs(a.Radius - b.Radius) > tolerance
+                || (a.Project(b.Origin) - b.Origin).Length > tolerance * 0.1) continue;
+            double t0 = a.Parameter(b.Origin + b.Direction * b.Low), t1 = a.Parameter(b.Origin + b.Direction * b.High);
+            double low = Math.Min(t0, t1), high = Math.Max(t0, t1);
+            if (Math.Max(low - a.High, a.Low - high) > a.Radius * 4) continue;
+            P first = a.Origin + a.Direction * Math.Min(a.Low, low), last = a.Origin + a.Direction * Math.Max(a.High, high);
+            if (!region.SegmentInside(first, last, tolerance)) continue;
+            a.Low = Math.Min(a.Low, low); a.High = Math.Max(a.High, high); a.Sides.AddRange(b.Sides); axes.RemoveAt(j);
+        }
+        return axes;
+    }
+    private static int NearestAxis(P p, List<StraightAxis> axes, double tolerance)
+    {
+        int best = -1; double score = double.MaxValue;
+        for (int i = 0; i < axes.Count; i++)
+        {
+            StraightAxis a = axes[i]; double perpendicular = (p - a.Project(p)).Length, outside = a.Outside(p);
+            if (perpendicular > Math.Max(tolerance * 4, a.Radius * 0.35) || outside > a.Radius * 2) continue;
+            double distance = perpendicular + outside * 0.15;
+            if (distance < score) { score = distance; best = i; }
+        }
+        return best;
+    }
+    private static bool SharpIntersection(StraightAxis a, StraightAxis b, Region region, double tolerance, out P corner)
+    {
+        corner = new P(); double cross = P.Cross(a.Direction, b.Direction);
+        if (Math.Abs(cross) < 0.15) return false;
+        // Require an actual sharp outline vertex shared by the two directions. Preserve fillets.
+        bool sharp = false;
+        foreach (Segment x in a.Sides) foreach (Segment y in b.Sides)
+            if (Math.Min(Math.Min((x.A - y.A).Length, (x.A - y.B).Length), Math.Min((x.B - y.A).Length, (x.B - y.B).Length)) < tolerance * 0.1) sharp = true;
+        if (!sharp) return false;
+        corner = a.Origin + a.Direction * (P.Cross(b.Origin - a.Origin, b.Direction) / cross);
+        return a.Outside(corner) <= a.Radius * 4 && b.Outside(corner) <= b.Radius * 4
+            && region.Inside(corner) && region.Distance(corner) >= Math.Min(a.Radius, b.Radius) * 0.5;
+    }
+    private static void RestoreStraightStrokes(List<Stroke> strokes, Region region, double tolerance)
+    {
+        List<StraightAxis> axes = StraightAxes(region, tolerance); if (axes.Count == 0) return;
+        List<P> before = new List<P>(), after = new List<P>();
+        foreach (Stroke stroke in strokes) foreach (int index in new int[] { 0, stroke.Points.Count - 1 })
+        {
+            P p = stroke.Points[index]; if (before.Contains(p)) continue;
+            int nearest = NearestAxis(p, axes, tolerance); if (nearest < 0) continue;
+            StraightAxis axis = axes[nearest]; P q = axis.Project(p); double distance = double.MaxValue;
+            foreach (StraightAxis other in axes)
+            {
+                P corner; if (!SharpIntersection(axis, other, region, tolerance, out corner)) continue;
+                double d = (corner - p).Length;
+                if (d <= Math.Min(axis.Radius, other.Radius) * 0.6 && d < distance) { q = corner; distance = d; }
+            }
+            if (!region.Inside(q)) continue;
+            bool safe = true;
+            foreach (Stroke s in strokes)
+            {
+                if (s.Points[0].Equals(p) && !region.SegmentInside(q, s.Points[1], tolerance)) safe = false;
+                if (s.Points[s.Points.Count - 1].Equals(p) && !region.SegmentInside(q, s.Points[s.Points.Count - 2], tolerance)) safe = false;
+            }
+            if (safe) { before.Add(p); after.Add(q); }
+        }
+        // All incident branches must receive exactly the same new junction position.
+        foreach (Stroke stroke in strokes) foreach (int index in new int[] { 0, stroke.Points.Count - 1 })
+        { int found = before.IndexOf(stroke.Points[index]); if (found >= 0) stroke.Points[index] = after[found]; }
+        foreach (Stroke stroke in strokes)
+        {
+            List<P> p = stroke.Points; List<StraightRun> runs = new List<StraightRun>();
+            for (int i = 0; i < p.Count; )
+            {
+                int label = NearestAxis(p[i], axes, tolerance), first = i++;
+                while (i < p.Count && NearestAxis(p[i], axes, tolerance) == label) i++;
+                if (label < 0) continue;
+                StraightAxis axis = axes[label]; int last = i - 1;
+                if (Math.Abs(axis.Parameter(p[last]) - axis.Parameter(p[first])) >= Math.Max(axis.Radius * 0.5, tolerance * 8))
+                    runs.Add(new StraightRun { First = first, Last = last, Axis = axis });
+            }
+            if (runs.Count > 0)
+            {
+                StraightRun firstRun = runs[0], lastRun = runs[runs.Count - 1];
+                if (AxisReachesEndpoint(firstRun.Axis, p, 0, firstRun.First, tolerance)) firstRun.First = 0;
+                if (AxisReachesEndpoint(lastRun.Axis, p, p.Count - 1, lastRun.Last, tolerance)) lastRun.Last = p.Count - 1;
+            }
+            for (int i = 0; i + 1 < runs.Count; i++)
+            {
+                StraightRun a = runs[i], b = runs[i + 1]; P corner;
+                if (!SharpIntersection(a.Axis, b.Axis, region, tolerance, out corner)) continue;
+                double radius = Math.Max(a.Axis.Radius, b.Axis.Radius), distance = double.MaxValue, length = 0;
+                for (int k = a.Last; k < b.First; k++)
+                { distance = Math.Min(distance, (corner - Closest(new Segment(p[k], p[k + 1]), corner)).Length); length += (p[k + 1] - p[k]).Length; }
+                double cornerReach = Math.Max(radius, Math.Max(a.Axis.Outside(corner), b.Axis.Outside(corner)));
+                if (length <= radius * 8 && distance <= cornerReach * 0.65
+                    && region.SegmentInside(a.Axis.Project(p[a.First]), corner, tolerance)
+                    && region.SegmentInside(corner, b.Axis.Project(p[b.Last]), tolerance))
+                { a.JoinNext = true; a.Corner = corner; }
+            }
+            List<P> output = new List<P>(); HashSet<int> corners = new HashSet<int>(); int cursor = 0;
+            for (int i = 0; i < runs.Count; i++)
+            {
+                StraightRun run = runs[i]; bool joined = i > 0 && runs[i - 1].JoinNext;
+                int first = run.First, last = run.Last;
+                // A join to a genuinely curved part is adjusted only within the fitting tolerance.
+                if (!joined && first != 0) while (first < last && (p[first] - run.Axis.Project(p[first])).Length > tolerance) first++;
+                if (!run.JoinNext && last != p.Count - 1) while (last > first && (p[last] - run.Axis.Project(p[last])).Length > tolerance) last--;
+                if (!joined) { while (cursor < first) AddDistinct(output, p[cursor++], tolerance); AddDistinct(output, run.Axis.Project(p[first]), tolerance); }
+                if (run.JoinNext) { AddDistinct(output, run.Corner, tolerance); corners.Add(output.Count - 1); cursor = runs[i + 1].First; }
+                else { AddDistinct(output, run.Axis.Project(p[last]), tolerance); cursor = last + 1; }
+            }
+            while (cursor < p.Count) AddDistinct(output, p[cursor++], tolerance);
+            if (output.Count < 2) continue;
+            // Keep protected shared junctions and geometric loop closure exact.
+            output[0] = p[0]; output[output.Count - 1] = p[p.Count - 1];
+            bool safeOutput = true;
+            for (int i = 1; i < output.Count; i++) if (!region.SegmentInside(output[i - 1], output[i], tolerance)) safeOutput = false;
+            if (!safeOutput) continue;
+            p.Clear(); p.AddRange(output); foreach (int corner in corners) if (corner > 0 && corner < p.Count - 1) stroke.Corners.Add(corner);
+        }
+    }
+    private static void AddDistinct(List<P> points, P point, double tolerance)
+    { if (points.Count == 0 || (points[points.Count - 1] - point).Length > tolerance * 0.001) points.Add(point); }
+    private static bool AxisReachesEndpoint(StraightAxis axis, List<P> p, int endpoint, int runEnd, double tolerance)
+    {
+        if ((p[endpoint] - axis.Project(p[endpoint])).Length > tolerance * 0.1) return false;
+        double length = 0; int first = Math.Min(endpoint, runEnd), last = Math.Max(endpoint, runEnd);
+        for (int i = first; i <= last; i++)
+        {
+            if ((p[i] - axis.Project(p[i])).Length > axis.Radius * 0.6) return false;
+            if (i > first) length += (p[i] - p[i - 1]).Length;
+        }
+        return length <= axis.Radius * 3;
+    }
+
     public static List<Bezier> Fit(Stroke stroke, Region region, double tolerance)
     {
         List<Bezier> result = new List<Bezier>(); List<P> p = stroke.Points;
         if (p.Count < 2) return result;
-        if (stroke.Closed && p.Count >= 5)
+        if (stroke.Corners.Count > 0)
+        {
+            int first = 0;
+            for (int last = 1; last < p.Count; last++) if (stroke.Corners.Contains(last) || last == p.Count - 1)
+            {
+                FitRange(p, first, last, (p[first + 1] - p[first]).Unit(),
+                    (p[last - 1] - p[last]).Unit(), tolerance, region, result, 0);
+                first = last;
+            }
+        }
+        else if (stroke.Closed && p.Count >= 5)
         {
             int middle = (p.Count - 1) / 2;
             P t0 = (p[1] - p[p.Count - 2]).Unit(), tm = (p[middle + 1] - p[middle - 1]).Unit();

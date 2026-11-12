@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.01 · 2026-11-13** — the journal now selects planar engraving bottom faces instead of existing text and curves. It reconstructs approximate letter centerlines from the model and appends them to the selected PLANAR_MILL. A filled round dot becomes a concentric circle of diameter **D/2**.
+**V1.02 · 2026-11-13** — Straight stroke axes and sharp intersections between parallel outline sides are preserved. Engraving boundaries use Open / On, including complete loops and D/2 circles. New boundaries and members receive a local 0.001 mm tolerance, checked again after committing the operation.
 
 Source and working filename remain [NX_PlanarMill_Select_Curves.cs](../../scripts/NX_PlanarMill_Select_Curves.cs). Existing buttons need no change. The updater entry is now **«Оси гравировки для PLANAR_MILL»**. No Windows font or original text is required.
 
@@ -25,15 +25,17 @@ For assembly components, the CAM part must be both the work part and the display
 - Adjacent selected faces are joined across shared edges. Internal dividing edges are excluded.
 - Separate letters are not bridged across gaps. Circular arrangements in a common plane retain their positions.
 - Letter loops are retained; stroke junctions become separate branches without assigning any generated curve twice. Short terminal branches towards outline corners are pruned.
-- Straight portions become lines; curved portions become cubic splines. The output is checked to stay inside the selected region without crossing holes.
+- Parallel straight outline sides produce an exact midline. Sharp joins between these strokes retain their line intersection, including rotated letters. Actual outline fillets remain curved. Other portions are fitted with cubic splines. The output is checked to stay inside the selected region without crossing holes.
 - A filled circular dot becomes a true concentric circle with half the face diameter: Ø0.6 mm face → Ø0.3 mm curve. This is a geometric convention, not a cutter-radius compensation calculation.
 - Curves are named `PM_ENGRAVING_CENTER`. Source bodies and faces remain unchanged. Output is not associative; recreate it after changing the model.
 
 ## Boundaries and reruns
 
-New boundaries and members use **Stock = 0**; members use **Tool Position = On**. Existing local boundaries are retained and their count is reported. Cutter compensation, depths, feeds, tool and other operation parameters are not reset.
+New boundaries use **type Open** and members use **Tool Position = On**. Open selects the CAM profile condition; geometrically closed letters and dot circles remain complete without a gap or an added closing segment. **Stock = 0** and **Intol / Outtol = 0.001 mm** are explicitly enabled on both boundaries and members, with conversion for inch parts. These settings and boundary membership are checked before and after committing the operation. Existing local boundaries are retained and their count is reported. Cutter compensation, depths, feeds, tool and other operation parameters are not reset. Use **Cut Pattern = Profile**. Operation-level path smoothing and compensation remain active and require inspection; local boundary tolerance does not override them. Different curve and cutting-level heights can also look offset in a perspective view.
 
-An unchanged face group already processed for this operation is skipped. Changed source geometry, changed generated boundary membership or a partially selected previous group causes an explanatory stop. For a recalculation, remove the previous axes from the operation and model, or undo the previous run. Repeat detection uses attributes on generated curves; no attributes are added to source faces.
+**When upgrading from V1.01, recreate its previous axes:** undo that run or remove its curves from the operation boundaries and model. Previous results are not automatically replaced; the journal reports that they use the earlier algorithm.
+
+An unchanged face group processed by the current algorithm is skipped. Changed source geometry, changed generated boundary membership or a partially selected previous group causes an explanatory stop. For a recalculation, remove the previous axes from the operation and model, or undo the previous run. Repeat detection uses attributes on generated curves; no attributes are added to source faces.
 
 Operations inheriting existing boundaries first require local boundary geometry. Errors after the edit starts trigger a single Undo rollback of generated curves and new boundaries.
 
@@ -48,6 +50,6 @@ Operations inheriting existing boundaries first require local boundary geometry.
 
 ## Validation
 
-The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. 43 geometry scenarios exercise straight strokes, rings, C/L/plus/Phi and two-loop shapes, short strokes, rotated text, reflection, inch units, holes, separate regions, fitted curves staying inside the outline, duplicate/zero-length segments and the D/2 convention. Existing chain and plane checks remain enabled.
+The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. 122 geometry scenarios exercise straight strokes, rings, C/L/plus/Phi and two-loop shapes, short strokes, rotated text, reflection, inch units, holes, separate regions, fitted curves staying inside the outline, duplicate/zero-length segments and the D/2 convention. New checks cover exact straightness and corner intersections across 72 bend/rotation combinations, subdivided straight STEP edges, a closed square ring and preservation of an actual fillet. 70 checks exercise Open / On, stock and tolerance through a UF API contract double, including simulated settings loss at commit. The 21 existing chain and plane checks remain enabled. The contract double does not validate native NX behavior.
 
 A full interactive run on the user's STEP/PRT model and its resulting toolpath has not yet been tested. Compilation and geometry-engine tests do not replace that step.

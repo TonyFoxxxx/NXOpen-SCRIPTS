@@ -72,9 +72,9 @@
       "id": "NX_PlanarMill_Select_Curves",
       "name": "Оси гравировки для PLANAR_MILL",
       "file": "NX_PlanarMill_Select_Curves.cs",
-      "version": "V1.01",
+      "version": "V1.02",
       "path": "scripts/NX_PlanarMill_Select_Curves.cs",
-      "sha256": "2e7bccbb35d9beee47a71e91658be9b6deac4c0148703f4cabb10db18cf730f0",
+      "sha256": "08308322a5949700fa00b9e5b475575e4bac19de1c99d3c870301c086d9c0a61",
       "description": "Средние линии по плоским граням дна гравировки; круглые точки D/2; добавление в PLANAR_MILL с Tool Position On и Stock 0."
     },
     {

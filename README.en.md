@@ -20,7 +20,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Clean copy/instance suffixes and counters in all operation names while preserving Z. | [All features](docs/en/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
-| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.01 | Centerlines from engraving faces and D/2 circles for dots, assigned to PLANAR_MILL. | [Full guide](docs/en/planar-mill-curves.md) |
+| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.02 | Centerlines from engraving faces and D/2 circles for dots, assigned to PLANAR_MILL. | [Full guide](docs/en/planar-mill-curves.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Create single-stroke GOST A text from lines and smooth splines using an external FON. | [All features](docs/en/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Fill tool descriptions with diameter and T, H, D numbers. | [All features](docs/en/tool-description.md) |
@@ -36,11 +36,11 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Engraving centerlines for PLANAR_MILL V1.01 · 2026-11-13
+### Latest update — Engraving centerlines for PLANAR_MILL V1.02 · 2026-11-13
 
-Select planar letter-bottom faces, reconstruct centerlines and append them to PLANAR_MILL. Round dots become concentric D/2 circles. The working filename and existing button are retained.
+Straight stroke axes and sharp intersections between parallel outline sides are preserved. Engraving boundaries use Open / On, including complete loops and D/2 circles. New boundaries and members receive a local 0.001 mm tolerance, checked again after committing the operation.
 
-Update **«Оси гравировки для PLANAR_MILL»** to **V1.01** in the updater. [Workflow, limits and validation](docs/en/planar-mill-curves.md).
+Update **«Оси гравировки для PLANAR_MILL»** to **V1.02** in the updater. [Workflow, limits and validation](docs/en/planar-mill-curves.md).
 
 ## Installation
 

@@ -58,7 +58,26 @@ public class CenterlineChecks
         scenarios++;return result;
     }
     static void Reject(Action action,string label) { bool rejected=false;try{action();}catch(InvalidOperationException){rejected=true;}Require(rejected,label);scenarios++; }
+    static List<P> MiterBend(double angle)
+    {
+        P start=new P(-3,0),end=new P(3*Math.Cos(angle),3*Math.Sin(angle));
+        P n0=new P(0,1),n1=new P(-Math.Sin(angle),Math.Cos(angle));
+        P corner=(n0+n1)*(.2/(1+Math.Cos(angle)));
+        return new List<P>{start+n0*.2,corner,end+n1*.2,end-n1*.2,corner*-1,start-n0*.2};
+    }
+    static void SharpBend(List<P> outline,P corner,double tolerance=.002)
+    {
+        var result=Check(new List<List<P>>{outline},1,0,0,tolerance);
+        Require(result.Curves[0].Count==2,"a straight-sided bend must contain exactly two lines; got "+result.Curves[0].Count);
+        foreach(var c in result.Curves[0])Require(c.Line,"straight-sided bend replaced with a spline");
+        Require((result.Curves[0][0].D-corner).Length<tolerance*.01,"miter intersection moved");
+    }
     public static void Main()
+    {
+        Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+        try { Run(); } catch(Exception error) { Console.WriteLine(error); Environment.Exit(1); }
+    }
+    static void Run()
     {
         System.Threading.Thread.CurrentThread.CurrentCulture=CultureInfo.InvariantCulture;
         var rectangle=Check(new List<List<P>>{Poly(-2,-.2,2,-.2,2,.2,-2,.2)},1,0,0);
@@ -67,7 +86,7 @@ public class CenterlineChecks
         var ring=Check(new List<List<P>>{Circle(2.2),Circle(1.8)},1,1,0);
         foreach(var b in ring.Curves[0])for(int k=0;k<=64;k++)Require(Math.Abs(b.At(k/64.0).Length-2)<.004,"ring radial accuracy");
         Check(new List<List<P>>{ArcBand(2,.2,Math.PI*.2)},1,0,0);
-        Check(new List<List<P>>{Poly(-2,-2,2,-2,2,-1.6,-1.6,-1.6,-1.6,2,-2,2)},1,0,0);
+        SharpBend(Poly(-2,-2,2,-2,2,-1.6,-1.6,-1.6,-1.6,2,-2,2),new P(-1.8,-1.8));
         Check(new List<List<P>>{Poly(-1.2,-2,1.2,-2,1.2,2,-1.2,2),Poly(-.8,-1.6,.8,-1.6,.8,-.2,-.8,-.2),Poly(-.8,.2,.8,.2,.8,1.6,-.8,1.6)},3,0,0);
         var phi=Check(Phi(),5,0,0);
         double ymin=100,ymax=-100;foreach(var path in phi.Strokes)foreach(var p in path.Points){ymin=Math.Min(ymin,p.Y);ymax=Math.Max(ymax,p.Y);}
@@ -98,6 +117,33 @@ public class CenterlineChecks
         // An ellipse is not treated as a circular punctuation mark.
         var ellipse=Circle(.5);for(int i=0;i<ellipse.Count;i++)ellipse[i]=new P(ellipse[i].X*3,ellipse[i].Y);
         var er=EngravingCenterlines.Build(new R(new List<List<P>>{ellipse}),.002);Require(er.Circles.Count==0,"ellipse misclassified as dot");scenarios++;
+        for(int angle=35;angle<=145;angle+=22)
+            for(int rotate=0;rotate<12;rotate++)
+                try { SharpBend(Transform(MiterBend(angle*Math.PI/180),rotate*Math.PI/6,1,7,-3),new P(7,-3)); }
+                catch(Exception error) { throw new Exception("bend="+angle+", rotation="+rotate,error); }
+        SharpBend(Transform(MiterBend(1.1),.73,1/25.4,2,-4),new P(2,-4),.002/25.4);
+        SharpBend(Transform(MiterBend(1.1),.73,1,2,-4,true),new P(2,-4));
+        SharpBend(Transform(MiterBend(1.1),.73,1,10000,-20000),new P(10000,-20000));
+        // Split STEP edges must not change the analytic axes or the corner.
+        var split=MiterBend(1.3);var subdivided=new List<P>();
+        for(int i=0;i<split.Count;i++)for(int j=0;j<17;j++)subdivided.Add(split[i]+(split[(i+1)%split.Count]-split[i])*(j/17.0));
+        SharpBend(subdivided,new P());
+        var exactPlus=Check(new List<List<P>>{Plus()},4,0,0);
+        foreach(var path in exactPlus.Curves)
+        { Require(path.Count==1&&path[0].Line,"cross arm must be straight up to junction");Require(Math.Min(path[0].A.Length,path[0].D.Length)<1e-10,"cross junction off center"); }
+        // A geometrically closed, sharp-cornered loop must remain closed, without rounded corners.
+        var box=Check(new List<List<P>>{Poly(-2,-2,2,-2,2,2,-2,2),Poly(-1.6,-1.6,1.6,-1.6,1.6,1.6,-1.6,1.6)},1,1,0);
+        foreach(var path in box.Curves)foreach(var c in path)
+        { Require(c.Line,"square ring has rounded corner");for(int k=0;k<=8;k++){P q=c.At(k/8.0);Require(Math.Abs(Math.Max(Math.Abs(q.X),Math.Abs(q.Y))-1.8)<1e-8,"square ring off center");} }
+        // A real rounded corner must keep its radius rather than turn into a sharp miter.
+        var fillet=new List<P>{new P(-3,-.2)};
+        for(int i=0;i<=120;i++){double a=-Math.PI/2+Math.PI*i/240;fillet.Add(new P(-1+1.2*Math.Cos(a),1+1.2*Math.Sin(a)));}
+        fillet.Add(new P(.2,4));fillet.Add(new P(-.2,4));
+        for(int i=120;i>=0;i--){double a=-Math.PI/2+Math.PI*i/240;fillet.Add(new P(-1+.8*Math.Cos(a),1+.8*Math.Sin(a)));}
+        fillet.Add(new P(-3,.2));var rounded=Check(new List<List<P>>{fillet},1,0,0);int arcSamples=0;
+        foreach(var path in rounded.Curves)foreach(var c in path)for(int i=0;i<=100;i++)
+        { P q=c.At(i/100.0);if(q.X>-.95&&q.Y<.95){Require(Math.Abs((q-new P(-1,1)).Length-1)<.006,"real outline fillet was changed");arcSamples++;} }
+        Require(arcSamples>10,"rounded corner was lost");
         Console.WriteLine(scenarios+" engraving-centerline scenarios passed");
     }
 }

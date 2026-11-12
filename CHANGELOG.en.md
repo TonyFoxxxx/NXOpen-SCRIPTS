@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.02
+
+- Separate geometric curve closure from CAM boundary type: all new engraving profiles use Open / On. Remove the previous comparison against letter closure that caused rollback.
+- Preserve exact midlines between parallel sides and their sharp intersections while retaining real outline fillets.
+- Explicit local 0.001 mm Intol / Outtol and zero stock on new boundaries and members; verify saved settings again after Commit.
+- Match retained boundaries by member identity rather than temporary NX pointers. Previous V1.01 axes require recreation instead of being silently skipped.
+- 122 geometry scenarios, 70 UF adapter checks and 21 chain checks; compilation against DC 2606 SDK for .NET Framework and .NET 10. The user model and generated toolpath still need native NX validation.
+
 ## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.01
 
 - Select engraving bottom faces instead of existing curves; reconstruct medial curves while retaining holes and letter placement.
