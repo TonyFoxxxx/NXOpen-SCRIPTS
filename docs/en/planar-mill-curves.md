@@ -1,48 +1,53 @@
-# Curves for PLANAR_MILL
+# Engraving centerlines for PLANAR_MILL
 
 [Русский](../planar-mill-curves.md) | **English**
 
 ## Latest release
 
-**V1 · 2026-11-12** — initial release. Adds a text feature, sketch or selected curves to an existing PLANAR_MILL. Connected chains become separate open or closed boundaries. New members use Tool Position **On** and zero Stock.
+**V1.01 · 2026-11-13** — the journal now selects planar engraving bottom faces instead of existing text and curves. It reconstructs approximate letter centerlines from the model and appends them to the selected PLANAR_MILL. A filled round dot becomes a concentric circle of diameter **D/2**.
 
-Source: [NX_PlanarMill_Select_Curves.cs](../../scripts/NX_PlanarMill_Select_Curves.cs).
+Source and working filename remain [NX_PlanarMill_Select_Curves.cs](../../scripts/NX_PlanarMill_Select_Curves.cs). Existing buttons need no change. The updater entry is now **«Оси гравировки для PLANAR_MILL»**. No Windows font or original text is required.
 
 ## Workflow
 
-1. Prepare planar text using a single-stroke font, or sketch curves. Disable bounding-box creation in a Text feature.
-2. Create and configure a **PLANAR_MILL** operation: tool, profile machining method, depth, approach and retract. Close its editing dialog.
-3. Select **one** PLANAR_MILL operation in Operation Navigator.
-4. Run `NX_PlanarMill_Select_Curves.cs` using **Tools → Journal → Play**, or an assigned button.
-5. Select the complete **Text** or **Sketch** feature in Part Navigator. Individual curves can also be selected together or with a selection rectangle in the graphics window. Accept the selection.
-6. Review the reported curve/boundary counts, inspect the boundaries in the operation, and generate the toolpath using the normal NX command.
+1. Import the SolidWorks model, for example through STEP. Letters must have selectable planar groove-bottom faces.
+2. Configure **PLANAR_MILL** with the desired tool, profile machining, orientation, cut levels and non-cutting moves. An operation without previous boundaries is convenient for the first test. Close its editing dialog.
+3. Select **one PLANAR_MILL** in Operation Navigator and run the existing `NX_PlanarMill_Select_Curves.cs`.
+4. Select the planar **bottom faces of letters and round dots**. Do not select the overall front face of the part or groove side walls. All selected faces must lie in one plane.
+5. Accept the selection. The script creates standalone curves in the work CAM part and appends local **Part Boundary** geometry to the operation.
+6. Inspect the centerlines, boundaries, depth and tool orientation. Generate and verify the toolpath with NX. **Ctrl+Z** undoes the whole run.
 
-Selecting a whole sketch includes all its active curves; reference geometry is skipped. Selecting individual curves includes only those objects. Select the Text feature to include the entire inscription.
+For assembly components, the CAM part must be both the work part and the displayed part. Component and CAM-part length units must match. Component placement is applied when reading geometry.
 
-## Boundary behavior
+## Geometry
 
-- Curves connected at their endpoints are ordered into chains. Separate letters and strokes are not bridged across gaps.
-- Branches become separate chains. Intersections inside a curve do not split the source geometry.
-- Closed loops stay closed, including a circle or closed spline represented by one curve.
-- Local **Part Boundary** geometry is appended to the selected operation. Existing local boundaries are preserved.
-- Repeated objects are deduplicated by NX Tag. Objects already assigned to this operation are skipped. Geometrically coincident curves with different Tags are not automatically deleted or merged.
-- New boundaries and members use Stock = 0; new members use Tool Position = On. Other operation parameters are not assigned by the journal.
-- The plane is determined from the selected geometry. For a collinear selection, a valid plane is oriented relative to WCS. Align WCS with the intended engraving plane before running such a selection.
+- Approximate medial curves are calculated from outer and inner face loops. No text recognition or replacement font is involved.
+- Adjacent selected faces are joined across shared edges. Internal dividing edges are excluded.
+- Separate letters are not bridged across gaps. Circular arrangements in a common plane retain their positions.
+- Letter loops are retained; stroke junctions become separate branches without assigning any generated curve twice. Short terminal branches towards outline corners are pruned.
+- Straight portions become lines; curved portions become cubic splines. The output is checked to stay inside the selected region without crossing holes.
+- A filled circular dot becomes a true concentric circle with half the face diameter: Ø0.6 mm face → Ø0.3 mm curve. This is a geometric convention, not a cutter-radius compensation calculation.
+- Curves are named `PM_ENGRAVING_CENTER`. Source bodies and faces remain unchanged. Output is not associative; recreate it after changing the model.
 
-This journal does not convert outline TrueType text into single-stroke text. Outline source geometry remains outlines. It does not remove configured cutter compensation or choose an engraving depth.
+## Boundaries and reruns
 
-## Limits and undo
+New boundaries and members use **Stock = 0**; members use **Tool Position = On**. Existing local boundaries are retained and their count is reported. Cutter compensation, depths, feeds, tool and other operation parameters are not reset.
 
-- Supports lines, arcs, circles, ellipses and splines in the work part, all in one plane.
-- Assembly occurrences, solid edges, Drafting Notes and nonplanar inscriptions are unsupported in V1.
-- Operations inheriting existing parent boundaries are rejected before editing. First define local boundaries for that operation using NX.
-- Endpoint joining and coplanarity use a tolerance of 0.000001 mm, converted for inch parts. Larger gaps leave chains separate.
-- New boundary membership, open/closed state, tool position and stock are checked. Detected errors trigger rollback to the beginning of the edit.
-- A successful run is undone with one **Ctrl+Z**.
-- No automatic toolpath generation, PRT save, files, logs, INI files, copied curves or new CAM operations.
+An unchanged face group already processed for this operation is skipped. Changed source geometry, changed generated boundary membership or a partially selected previous group causes an explanatory stop. For a recalculation, remove the previous axes from the operation and model, or undo the previous run. Repeat detection uses attributes on generated curves; no attributes are added to source faces.
+
+Operations inheriting existing boundaries first require local boundary geometry. Errors after the edit starts trigger a single Undo rollback of generated curves and new boundaries.
+
+## Limits
+
+- Supports planar engraving with planar bottom faces. V grooves without a flat bottom, cylindrical surfaces, different-depth inscriptions and side-wall-only selections are unsupported. A single planar side wall cannot be distinguished automatically from a bottom face; selecting the intended faces is the user's responsibility.
+- Numerical medial-axis reconstruction does not recover the exact original font path. Variable stroke widths, serifs, acute corners and short strokes can produce extra branches or different endpoints; inspect the actual model result.
+- Fitting parameter: 0.002 mm; outline sampling: 0.0002 mm; endpoint joining: 0.000001 mm. Values are converted for inch parts. These values do not guarantee the overall medial reconstruction error.
+- Under-resolved, degenerate, excessively complex or disconnected results are rejected before editing. Maximum 10000 boundary samples per region; accuracy is never silently reduced.
+- The D/2 rule is not automatically applied to noncircular dots.
+- No automatic toolpath generation, PRT save, files, logs, INI files or new operations. Only the requested model curves and operation boundaries are created.
 
 ## Validation
 
-The source compiles against Designcenter 2606 libraries. Chain and plane algorithms pass 21 scenarios covering separate strokes, branches, closed loops, reversed curves, gaps, spatial-cell boundaries, inclined planes and rejection of nonplanar geometry.
+The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. Automated checks exercise straight strokes, rings, C/L/plus and two-loop shapes, rotated text, reflection, inch units, holes, separate regions, fitted curves staying inside the outline, duplicate/zero-length segments and the D/2 convention. Existing chain and plane checks remain enabled.
 
-A complete interactive NX run and generation of the resulting toolpath are not yet confirmed: the background NX process in the validation environment exits before executing the journal. Compilation and automated checks do not replace this validation.
+A full interactive run on the user's STEP/PRT model and its resulting toolpath has not yet been tested. Compilation and geometry-engine tests do not replace that step.

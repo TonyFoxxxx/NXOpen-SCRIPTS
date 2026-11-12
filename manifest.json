@@ -70,12 +70,12 @@
     },
     {
       "id": "NX_PlanarMill_Select_Curves",
-      "name": "Кривые для PLANAR_MILL",
+      "name": "Оси гравировки для PLANAR_MILL",
       "file": "NX_PlanarMill_Select_Curves.cs",
-      "version": "V1",
+      "version": "V1.01",
       "path": "scripts/NX_PlanarMill_Select_Curves.cs",
-      "sha256": "2c17e5e421102321a0270457e4d290594e6a676b6199f88f8b9ba7381e47c9a2",
-      "description": "Добавление надписи Text, эскиза или выбранных кривых в существующую PLANAR_MILL: связанные цепочки, Tool Position On и припуск 0."
+      "sha256": "fea10a06f6091adb5f0408b22855e01375eb0680d014b29f2e83f12763605b68",
+      "description": "Средние линии по плоским граням дна гравировки; круглые точки D/2; добавление в PLANAR_MILL с Tool Position On и Stock 0."
     },
     {
       "id": "NX_GOST_Smooth_Text",
