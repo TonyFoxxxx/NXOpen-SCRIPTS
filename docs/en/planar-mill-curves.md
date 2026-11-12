@@ -48,6 +48,6 @@ Operations inheriting existing boundaries first require local boundary geometry.
 
 ## Validation
 
-The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. Automated checks exercise straight strokes, rings, C/L/plus and two-loop shapes, rotated text, reflection, inch units, holes, separate regions, fitted curves staying inside the outline, duplicate/zero-length segments and the D/2 convention. Existing chain and plane checks remain enabled.
+The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. 43 geometry scenarios exercise straight strokes, rings, C/L/plus/Phi and two-loop shapes, short strokes, rotated text, reflection, inch units, holes, separate regions, fitted curves staying inside the outline, duplicate/zero-length segments and the D/2 convention. Existing chain and plane checks remain enabled.
 
 A full interactive run on the user's STEP/PRT model and its resulting toolpath has not yet been tested. Compilation and geometry-engine tests do not replace that step.

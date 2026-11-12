@@ -975,7 +975,7 @@ public static class EngravingCenterlines
                     if (nodes[current].Links.Count != 2) break;
                 }
                 if (nodes[current].Links.Count >= 3 && length < nodes[current].Radius * 1.85 + step
-                    && nodes[i].Radius < nodes[current].Radius * 0.8) remove.AddRange(branch);
+                    && nodes[i].Radius < nodes[current].Radius * 0.35) remove.AddRange(branch);
             }
             if (remove.Count == 0) break;
             foreach (Pair p in remove) { nodes[p.A].Links.Remove(p.B); nodes[p.B].Links.Remove(p.A); }

@@ -15,6 +15,15 @@ public class CenterlineChecks
         for(int i=300;i>=0;i--){double a=angle+(2*Math.PI-2*angle)*i/300;p.Add(new P((r-w)*Math.Cos(a),(r-w)*Math.Sin(a)));}return p;
     }
     static List<P> Plus() { return Poly(-2,-.2,-.2,-.2,-.2,-2,.2,-2,.2,-.2,2,-.2,2,.2,.2,.2,.2,2,-.2,2,-.2,.2,-2,.2); }
+    static void AddArc(List<P> p,double r,double start,double end) { for(int i=0;i<=240;i++){double a=start+(end-start)*i/240;p.Add(new P(r*Math.Cos(a),r*Math.Sin(a)));} }
+    static List<List<P>> Phi()
+    {
+        double a=Math.Acos(.2/2.2),b=Math.Acos(.2/1.8);
+        var outer=new List<P>{new P(-.2,2.7),new P(.2,2.7)};
+        AddArc(outer,2.2,a,-a);outer.Add(new P(.2,-2.7));outer.Add(new P(-.2,-2.7));AddArc(outer,2.2,-Math.PI+a,-Math.PI-a);
+        var right=new List<P>();AddArc(right,1.8,b,-b);var left=new List<P>();foreach(var p in right)left.Add(new P(-p.X,p.Y));
+        return new List<List<P>>{outer,right,left};
+    }
     static List<P> Transform(List<P> p,double angle,double scale,double x,double y,bool mirror=false)
     {
         var q=new List<P>();double c=Math.Cos(angle),s=Math.Sin(angle);foreach(var a in p){double xx=mirror?-a.X:a.X;q.Add(new P(x+scale*(c*xx-s*a.Y),y+scale*(s*xx+c*a.Y)));}return q;
@@ -60,6 +69,11 @@ public class CenterlineChecks
         Check(new List<List<P>>{ArcBand(2,.2,Math.PI*.2)},1,0,0);
         Check(new List<List<P>>{Poly(-2,-2,2,-2,2,-1.6,-1.6,-1.6,-1.6,2,-2,2)},1,0,0);
         Check(new List<List<P>>{Poly(-1.2,-2,1.2,-2,1.2,2,-1.2,2),Poly(-.8,-1.6,.8,-1.6,.8,-.2,-.8,-.2),Poly(-.8,.2,.8,.2,.8,1.6,-.8,1.6)},3,0,0);
+        var phi=Check(Phi(),5,0,0);
+        double ymin=100,ymax=-100;foreach(var path in phi.Strokes)foreach(var p in path.Points){ymin=Math.Min(ymin,p.Y);ymax=Math.Max(ymax,p.Y);}
+        Require(ymin< -2.45&&ymax>2.45,"short Phi stems were pruned");
+        var shortPlus=Plus();for(int i=0;i<shortPlus.Count;i++){P p=shortPlus[i];shortPlus[i]=new P(Math.Abs(p.X)>1?Math.Sign(p.X)*.6:p.X,Math.Abs(p.Y)>1?Math.Sign(p.Y)*.6:p.Y);}
+        Check(new List<List<P>>{shortPlus},4,0,0);
         for(int i=0;i<12;i++)
         {
             Check(new List<List<P>>{Transform(Plus(),i*Math.PI/6,1,15,-7)},4,0,0);

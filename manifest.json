@@ -74,7 +74,7 @@
       "file": "NX_PlanarMill_Select_Curves.cs",
       "version": "V1.01",
       "path": "scripts/NX_PlanarMill_Select_Curves.cs",
-      "sha256": "fea10a06f6091adb5f0408b22855e01375eb0680d014b29f2e83f12763605b68",
+      "sha256": "2e7bccbb35d9beee47a71e91658be9b6deac4c0148703f4cabb10db18cf730f0",
       "description": "Средние линии по плоским граням дна гравировки; круглые точки D/2; добавление в PLANAR_MILL с Tool Position On и Stock 0."
     },
     {
