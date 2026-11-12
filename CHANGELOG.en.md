@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.01
+
+- Select engraving bottom faces instead of existing curves; reconstruct medial curves while retaining holes and letter placement.
+- Filled round dots use concentric circles of diameter D/2.
+- Adjacent faces, same-unit assembly components, repeat-selection checks and a single undo transaction for curves and boundaries.
+- Existing working filename retained; new boundaries use Tool Position On and Stock 0.
+- .NET Framework/.NET 10 compilation and geometry scenarios checked; the user model and resulting toolpath are not yet validated.
+
 ## 2026-11-12 — Smooth GOST A text V1.01
 
 - Fixed .NET 10 journal compilation errors mentioning `IPersist.Interface`, `IHandle<>`, `System.Private.Windows.Core` and `System.Drawing.Common`.
