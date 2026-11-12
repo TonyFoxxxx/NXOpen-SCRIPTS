@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.03
+
+- Separate junctions into nonintersecting chains with at least 0.02 mm clearance: two elbows for plus, a stem and diagonals for K, and gaps at loop returns in P/4/Phi.
+- Merge nearby K junctions only when every external straight guide agrees on their intersection. Retain standalone rings and D/2 dot circles.
+- Replace UF appends with NXOpen BoundarySetPlanarMill creation and fresh post-Commit readback. Open chains must remain Open; Closed is accepted only for actually closed source chains with unchanged curve membership.
+- Set Tool Position On using the NXOpen convention already used in PlanarCHIK; retain zero stock, 0.001 mm tolerance and whole-run Undo. V1.01/V1.02 axes must be recreated.
+- 59 new routing scenarios, 102 adapter checks, 122 centerline scenarios and 21 chain checks. Compiles against DC 2606 SDK for .NET Framework and .NET 10. The user model and generated NX toolpath remain unverified.
+
 ## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.02
 
 - Separate geometric curve closure from CAM boundary type: all new engraving profiles use Open / On. Remove the previous comparison against letter closure that caused rollback.

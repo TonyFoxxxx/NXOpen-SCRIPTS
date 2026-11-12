@@ -1,8 +1,8 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.02
+// SCRIPT_VERSION: V1.03
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
 // Reconstructs approximate medial curves; round dots use a circle of half the face diameter.
-// Appends OPEN profile boundaries, Tool Position ON, stock 0, local CAM tolerance 0.001 mm.
+// Separates stroke junctions by 0.02 mm; requests Open / On profiles with stock 0 and CAM tolerance 0.001 mm.
 // Does not save files, generate a toolpath, or change the tool, depths, feeds or source body.
 
 using System;
@@ -17,13 +17,15 @@ using NXOpen.Utilities;
 using CamOperation = NXOpen.CAM.Operation;
 using V = PlanarCurveChains.V;
 using P = EngravingCenterlines.P;
+using B = EngravingCenterlines.Bezier;
+using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.02";
+    private const string SCRIPT_VERSION = "V1.03";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "2";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "3";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -77,7 +79,7 @@ public class NXPlanarMillSelectCurves
             List<Tag[]> oldMembers = new List<Tag[]>();
             foreach (IntPtr boundary in oldBoundaries) oldMembers.Add(MemberTags(uf, boundary));
             mark = session.SetUndoMark(Session.MarkVisibility.Visible, "Оси гравировки: " + operation.Name); hasMark = true;
-            List<CurveInfo> curves = new List<CurveInfo>(); List<PlanarCurveChains.Chain> chains = new List<PlanarCurveChains.Chain>(); int dots = 0;
+            List<CurveInfo> curves = new List<CurveInfo>(); List<PlanarCurveChains.Chain> chains = new List<PlanarCurveChains.Chain>(); int dots = 0, junctions = 0;
             foreach (FaceGroup group in groups)
             {
                 int expected = 0;
@@ -85,6 +87,7 @@ public class NXPlanarMillSelectCurves
                 { expected += result.Circles.Count; foreach (List<EngravingCenterlines.Bezier> stroke in result.Curves) expected += stroke.Count; }
                 foreach (EngravingCenterlines.Result result in group.Results)
                 {
+                    junctions += result.SeparatedJunctions;
                     for (int j = 0; j < result.Curves.Count; j++)
                     {
                         PlanarCurveChains.Chain chain = new PlanarCurveChains.Chain { Closed = result.Strokes[j].Closed };
@@ -105,19 +108,27 @@ public class NXPlanarMillSelectCurves
                     }
                 }
             }
-            foreach (PlanarCurveChains.Chain chain in chains)
-            {
-                Tag[] tags = new Tag[chain.Items.Count];
-                for (int i = 0; i < tags.Length; i++) tags[i] = curves[chain.Items[i]].Curve.Tag;
-                EngravingCamBoundary.Append(uf, operation.Tag, tags,
-                    new double[] { frame.Origin.X, frame.Origin.Y, frame.Origin.Z },
-                    new double[] { frame.X.X, frame.X.Y, frame.X.Z, frame.Y.X, frame.Y.Y, frame.Y.Z, frame.Z.X, frame.Z.Y, frame.Z.Z }, camTolerance);
-            }
-            VerifyNewBoundaries(uf, operation, oldMembers, curves, chains, camTolerance);
+            Plane boundaryPlane = part.Planes.CreatePlane(new Point3d(frame.Origin.X, frame.Origin.Y, frame.Origin.Z),
+                new Vector3d(frame.Z.X, frame.Z.Y, frame.Z.Z), SmartObject.UpdateOption.WithinModeling);
+            Matrix3x3 matrix = new Matrix3x3 { Xx = frame.X.X, Xy = frame.X.Y, Xz = frame.X.Z,
+                Yx = frame.Y.X, Yy = frame.Y.Y, Yz = frame.Y.Z, Zx = frame.Z.X, Zy = frame.Z.Y, Zz = frame.Z.Z };
             PlanarMillingBuilder builder = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
-            try { builder.Commit(); } finally { builder.Destroy(); }
-            // Verify saved parameters as well as the pre-commit objects. NX may recreate boundary handles.
-            VerifyNewBoundaries(uf, operation, oldMembers, curves, chains, camTolerance);
+            try
+            {
+                foreach (PlanarCurveChains.Chain chain in chains)
+                {
+                    NXObject[] objects = new NXObject[chain.Items.Count];
+                    for (int i = 0; i < objects.Length; i++) objects[i] = curves[chain.Items[i]].Curve;
+                    V startPoint = curves[chain.Items[0]].Start;
+                    BoundarySetPlanarMill set = EngravingCamBoundary.Append(builder.PartBoundary, objects,
+                        new Point3d(startPoint.X, startPoint.Y, startPoint.Z), matrix, boundaryPlane, camTolerance);
+                    EngravingCamBoundary.Verify(set, chain.Closed, camTolerance);
+                }
+                builder.Commit();
+            }
+            finally { builder.Destroy(); }
+            // Read saved boundary sets through the same NXOpen API used to create them.
+            VerifyNewBoundaries(part, operation, oldMembers, curves, chains, camTolerance);
             HashSet<Tag> expectedTags = new HashSet<Tag>(assigned); foreach (CurveInfo curve in curves) expectedTags.Add(curve.Curve.Tag);
             if (!AssignedCurves(uf, operation).SetEquals(expectedTags) || Boundaries(uf, operation.Tag).Length != oldBoundaries.Length + chains.Count)
                 throw new InvalidOperationException("NX сохранил другой состав границ. Изменение отменяется.");
@@ -128,7 +139,8 @@ public class NXPlanarMillSelectCurves
                 + "\nЦепочек кривых: " + chains.Count + " (разомкнутых: " + (chains.Count - closed) + ", замкнутых: " + closed + ")"
                 + "\nКруглых точек D/2: " + dots + (skipped > 0 ? "\nРанее обработанных граней пропущено: " + skipped : "")
                 + "\nСуществующих границ сохранено: " + oldBoundaries.Length
-                + "\n\nНовые кривые созданы в плоскости выбранных граней. Границы CAM: OPEN; Tool Position: ON; Stock: 0; допуск: 0,001 мм."
+                + "\nРазделено узлов: " + junctions + (junctions > 0 ? "; зазор не менее 0,02 мм." : "")
+                + "\n\nНовые кривые созданы в плоскости выбранных граней. Tool Position: ON; Stock: 0; допуск: 0,001 мм."
                 + "\nПроверьте средние линии, уровни резания и рассчитайте траекторию штатной командой NX.\nОтмена: Ctrl+Z.");
         }
         catch (Exception ex)
@@ -219,8 +231,9 @@ public class NXPlanarMillSelectCurves
         for (int i = 0; i < pending.Count; i++)
         {
             uf.Ui.SetStatus("Построение осей гравировки: " + (i + 1) + " / " + pending.Count);
+            double unit = part.PartUnits == BasePart.Units.Inches ? 1 / 25.4 : 1;
             foreach (EngravingCenterlines.Region region in GroupRegions(pending[i], frame, joinTolerance))
-                pending[i].Results.Add(EngravingCenterlines.Build(region, tolerance));
+                pending[i].Results.Add(EngravingRoutes.Build(EngravingCenterlines.Build(region, tolerance), region, 0.02 * unit, tolerance));
         }
         return pending;
     }
@@ -473,42 +486,38 @@ public class NXPlanarMillSelectCurves
         return result;
     }
 
-    private static void VerifyNewBoundaries(UFSession uf, PlanarMilling operation, List<Tag[]> old,
+    private static void VerifyNewBoundaries(Part part, PlanarMilling operation, List<Tag[]> old,
         List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains, double tolerance)
     {
-        IntPtr[] current = Boundaries(uf, operation.Tag);
-        if (current.Length != old.Count + chains.Count)
-            throw new InvalidOperationException("NX изменил существующие границы при добавлении. Изменение отменяется.");
-        Dictionary<Tag, int> remaining = new Dictionary<Tag, int>();
-        foreach (CurveInfo curve in curves) remaining.Add(curve.Curve.Tag, 1);
-        Dictionary<Tag, int> chainByTag = new Dictionary<Tag, int>();
-        for (int i = 0; i < chains.Count; i++)
-            foreach (int index in chains[i].Items) chainByTag.Add(curves[index].Curve.Tag, i);
-        HashSet<int> verifiedChains = new HashSet<int>(), verifiedOld = new HashSet<int>();
-        foreach (IntPtr boundary in current)
+        PlanarMillingBuilder reader = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
+        try
         {
-            Tag[] tags = MemberTags(uf, boundary);
-            bool previous = false;
-            for (int i = 0; i < old.Count; i++) if (!verifiedOld.Contains(i) && SameMembers(tags, old[i]))
-            { verifiedOld.Add(i); previous = true; break; }
-            if (previous) continue;
-            int newIndex;
-            if (tags.Length == 0 || !chainByTag.TryGetValue(tags[0], out newIndex) || !verifiedChains.Add(newIndex))
-                throw new InvalidOperationException("NX сформировал неожиданную новую границу.");
-            HashSet<Tag> expected = new HashSet<Tag>();
-            foreach (int index in chains[newIndex].Items) expected.Add(curves[index].Curve.Tag);
-            if (tags.Length != expected.Count || !expected.SetEquals(tags))
-                throw new InvalidOperationException("NX сформировал неожиданный состав новой границы.");
-            EngravingCamBoundary.Verify(uf, boundary, tolerance);
-            foreach (Tag tag in tags)
+            BoundarySet[] sets = reader.PartBoundary.BoundaryList.GetContents();
+            if (sets.Length != old.Count + chains.Count) throw new InvalidOperationException("NX изменил количество границ операции.");
+            Dictionary<Tag, int> chainByTag = new Dictionary<Tag, int>();
+            for (int i = 0; i < chains.Count; i++) foreach (int index in chains[i].Items) chainByTag.Add(curves[index].Curve.Tag, i);
+            HashSet<int> verifiedChains = new HashSet<int>(), verifiedOld = new HashSet<int>();
+            foreach (BoundarySet item in sets)
             {
-                if (!remaining.ContainsKey(tag) || --remaining[tag] < 0)
-                    throw new InvalidOperationException("Кривая была назначена несколько раз.");
+                BoundarySetPlanarMill set = item as BoundarySetPlanarMill;
+                if (set == null) throw new InvalidOperationException("NX вернул неподдерживаемый набор границ.");
+                Tag[] tags = EngravingCamBoundary.Tags(set, true); bool previous = false;
+                for (int i = 0; i < old.Count; i++) if (!verifiedOld.Contains(i) && SameMembers(tags, old[i]))
+                { verifiedOld.Add(i); previous = true; break; }
+                if (previous) continue;
+                tags = EngravingCamBoundary.Tags(set);
+                int index;
+                if (tags.Length == 0 || !chainByTag.TryGetValue(tags[0], out index) || !verifiedChains.Add(index))
+                    throw new InvalidOperationException("NX изменил состав цепочек гравировки.");
+                Tag[] expected = new Tag[chains[index].Items.Count];
+                for (int i = 0; i < expected.Length; i++) expected[i] = curves[chains[index].Items[i]].Curve.Tag;
+                if (!SameMembers(tags, expected)) throw new InvalidOperationException("NX добавил или пропустил элемент границы гравировки.");
+                EngravingCamBoundary.Verify(set, chains[index].Closed, tolerance);
             }
+            if (verifiedOld.Count != old.Count || verifiedChains.Count != chains.Count)
+                throw new InvalidOperationException("NX не сохранил все прежние и новые границы.");
         }
-        if (verifiedOld.Count != old.Count || verifiedChains.Count != chains.Count)
-            throw new InvalidOperationException("NX изменил состав прежних или новых границ.");
-        foreach (int count in remaining.Values) if (count != 0) throw new InvalidOperationException("Назначены не все выбранные кривые.");
+        finally { reader.Destroy(); }
     }
 
     private static bool SameMembers(Tag[] a, Tag[] b)
@@ -524,61 +533,399 @@ public class NXPlanarMillSelectCurves
     public static int GetUnloadOption(string unused) { return (int)Session.LibraryUnloadOption.Immediately; }
 }
 
+// BEGIN PORTABLE ENGRAVING ROUTING CORE
+public static class EngravingRoutes
+{
+    private sealed class Junction
+    {
+        internal P Point;
+        internal double Radius, Limit;
+        internal readonly List<int> Ports = new List<int>();
+    }
+    private sealed class Edge
+    {
+        internal List<B> Curves;
+        internal int Start, End;
+        internal bool Closed;
+    }
+    private sealed class Piece
+    {
+        internal P A, B;
+        internal Piece(P a, P b) { A = a; B = b; }
+    }
+    public static EngravingCenterlines.Result Build(EngravingCenterlines.Result source, R region, double gap, double tolerance)
+    {
+        if (!(gap > tolerance * 4) || double.IsInfinity(gap)) throw new ArgumentException("The junction gap must exceed four fitting tolerances.");
+        if (region.Loops.Count == 1) source = MergeSplitJunctions(source, region, tolerance);
+        List<Junction> nodes = new List<Junction>(); List<Edge> edges = new List<Edge>();
+        for (int i = 0; i < source.Curves.Count; i++)
+        {
+            List<B> path = source.Curves[i]; if (path.Count == 0) throw new InvalidOperationException("Пустая цепочка гравировки.");
+            int a = Node(nodes, path[0].A, tolerance * 0.01), b = Node(nodes, path[path.Count - 1].D, tolerance * 0.01);
+            nodes[a].Ports.Add(2 * i); nodes[b].Ports.Add(2 * i + 1);
+            edges.Add(new Edge { Curves = path, Start = a, End = b, Closed = source.Strokes[i].Closed });
+        }
+        int[] pairs = new int[edges.Count * 2], parent = new int[edges.Count];
+        for (int i = 0; i < pairs.Length; i++) pairs[i] = -1;
+        for (int i = 0; i < parent.Length; i++) parent[i] = i;
+        int junctions = 0;
+        foreach (Junction node in nodes) if (node.Ports.Count > 2)
+        {
+            junctions++; node.Radius = gap * 1.5; node.Limit = region.Distance(node.Point) * 0.85;
+            if (node.Radius > node.Limit) throw new InvalidOperationException("Штрих слишком узкий для зазора 0,02 мм в месте пересечения.");
+            PairPorts(node, edges, pairs, parent, region.Loops.Count > 1);
+        }
+        double flat = Math.Min(tolerance * 0.125, gap * 0.01);
+        List<List<B>> trimmed = null; Dictionary<int, B> links = null;
+        for (int attempt = 0; attempt < 9; attempt++)
+        {
+            trimmed = new List<List<B>>();
+            foreach (Edge edge in edges)
+            {
+                List<B> path = new List<B>(edge.Curves);
+                if (nodes[edge.Start].Ports.Count > 2) path = TrimStart(path, nodes[edge.Start].Point, nodes[edge.Start].Radius, flat);
+                if (nodes[edge.End].Ports.Count > 2) path = Reverse(TrimStart(Reverse(path), nodes[edge.End].Point, nodes[edge.End].Radius, flat));
+                trimmed.Add(path);
+            }
+            links = new Dictionary<int, B>();
+            foreach (Junction node in nodes) if (node.Ports.Count > 2)
+                foreach (int port in node.Ports) if (pairs[port] > port)
+                {
+                    P a = EndPoint(trimmed, port), b = EndPoint(trimmed, pairs[port]);
+                    B connector = Join(a, node.Point, b, tolerance);
+                    links.Add(port, connector); links.Add(pairs[port], Reverse(connector));
+                }
+            bool valid = true;
+            foreach (Junction node in nodes) if (node.Ports.Count > 2 && !Separated(node, trimmed, pairs, links, gap, flat))
+            {
+                valid = false; node.Radius *= 1.4;
+                if (node.Radius > node.Limit) throw new InvalidOperationException("Не удалось разделить пересечение с зазором 0,02 мм внутри грани. Выберите эту букву отдельно для проверки.");
+            }
+            if (valid) break;
+            if (attempt == 8) throw new InvalidOperationException("Не удалось разделить узел гравировки без касаний.");
+        }
+        var result = new EngravingCenterlines.Result { WidthEstimate = source.WidthEstimate, SamplingStep = source.SamplingStep,
+            BoundarySamples = source.BoundarySamples, SeparatedJunctions = junctions, JunctionGap = junctions > 0 ? gap : 0 };
+        result.Circles.AddRange(source.Circles); bool[] used = new bool[edges.Count];
+        for (int port = 0; port < pairs.Length; port++) if (pairs[port] < 0 && !used[port / 2])
+            Walk(port, edges, trimmed, pairs, links, used, result);
+        for (int i = 0; i < edges.Count; i++) if (!used[i])
+            throw new InvalidOperationException("Соединение ветвей создало неожиданный замкнутый маршрут.");
+        Validate(result, region, tolerance, flat);
+        return result;
+    }
+    private static int Node(List<Junction> nodes, P point, double tolerance)
+    {
+        for (int i = 0; i < nodes.Count; i++) if ((nodes[i].Point - point).Length <= tolerance) return i;
+        nodes.Add(new Junction { Point = point }); return nodes.Count - 1;
+    }
+    private sealed class Guide
+    {
+        internal int Port, Index;
+        internal List<B> Path;
+        internal B Line;
+    }
+    private static EngravingCenterlines.Result MergeSplitJunctions(EngravingCenterlines.Result source, R region, double tolerance)
+    {
+        // A K-shaped junction has two medial T nodes. Reconstruct their single straight-stroke
+        // intersection only when every external straight guide actually agrees on one point.
+        for (int pass = 0; pass < source.Curves.Count; pass++)
+        {
+            var nodes = new List<Junction>(); var edges = new List<Edge>();
+            for (int i = 0; i < source.Curves.Count; i++)
+            {
+                var path = source.Curves[i]; int a = Node(nodes, path[0].A, tolerance * 0.01), b = Node(nodes, path[path.Count - 1].D, tolerance * 0.01);
+                nodes[a].Ports.Add(2 * i); nodes[b].Ports.Add(2 * i + 1); edges.Add(new Edge { Curves = path, Start = a, End = b });
+            }
+            bool merged = false;
+            for (int bridge = 0; bridge < edges.Count && !merged; bridge++)
+            {
+                Edge edge = edges[bridge]; Junction a = nodes[edge.Start], b = nodes[edge.End];
+                if (edge.Start == edge.End || a.Ports.Count < 3 || b.Ports.Count < 3) continue;
+                double width = region.Distance(a.Point) + region.Distance(b.Point), length = 0;
+                foreach (B c in edge.Curves) length += c.Line ? (c.D - c.A).Length : (c.B - c.A).Length + (c.C - c.B).Length + (c.D - c.C).Length;
+                if (length > width * 1.5) continue;
+                var ports = new List<int>(a.Ports); ports.AddRange(b.Ports); var guides = new List<Guide>(); bool valid = true;
+                foreach (int port in ports) if (port / 2 != bridge)
+                {
+                    var path = port % 2 == 0 ? edges[port / 2].Curves : Reverse(edges[port / 2].Curves);
+                    int best = -1; double longest = width * 0.25, before = 0;
+                    for (int i = 0; i < path.Count; i++)
+                    {
+                        B c = path[i]; if (before > width * 2) break; double size = (c.D - c.A).Length;
+                        if (c.Line && size > longest) { best = i; longest = size; }
+                        before += size;
+                    }
+                    if (best < 0) { valid = false; break; }
+                    guides.Add(new Guide { Port = port, Index = best, Path = path, Line = path[best] });
+                }
+                if (!valid || guides.Count < 4) continue;
+                P center = new P(); bool found = false;
+                for (int i = 1; i < guides.Count && !found; i++)
+                {
+                    B x = guides[0].Line, y = guides[i].Line; P u = (x.D - x.A).Unit(), v = (y.D - y.A).Unit(); double cross = P.Cross(u, v);
+                    if (Math.Abs(cross) < 0.2) continue;
+                    center = x.A + u * (P.Cross(y.A - x.A, v) / cross); found = true;
+                }
+                if (!found || (center - a.Point).Length > width * 1.25 || (center - b.Point).Length > width * 1.25 || !region.Inside(center)) continue;
+                foreach (Guide guide in guides)
+                {
+                    P d = (guide.Line.D - guide.Line.A).Unit();
+                    if (Math.Abs(P.Cross(d, center - guide.Line.A)) > tolerance * 0.25 || !region.SegmentInside(center, guide.Line.D, tolerance)) valid = false;
+                }
+                if (!valid) continue;
+                var replacements = new Dictionary<int, List<B>>();
+                foreach (Guide guide in guides)
+                {
+                    if (replacements.ContainsKey(guide.Port / 2)) { valid = false; break; }
+                    var path = new List<B> { new B { A = center, D = guide.Line.D, Line = true } };
+                    for (int i = guide.Index + 1; i < guide.Path.Count; i++) path.Add(guide.Path[i]);
+                    replacements.Add(guide.Port / 2, guide.Port % 2 == 0 ? path : Reverse(path));
+                }
+                if (!valid) continue;
+                var next = new EngravingCenterlines.Result { WidthEstimate = source.WidthEstimate, SamplingStep = source.SamplingStep, BoundarySamples = source.BoundarySamples };
+                next.Circles.AddRange(source.Circles);
+                for (int i = 0; i < source.Curves.Count; i++) if (i != bridge)
+                {
+                    List<B> path; if (!replacements.TryGetValue(i, out path)) path = source.Curves[i];
+                    next.Curves.Add(path); next.Strokes.Add(source.Strokes[i]);
+                }
+                source = next; merged = true;
+            }
+            if (!merged) break;
+        }
+        return source;
+    }
+    private static int Root(int[] p, int i) { while (p[i] != i) { p[i] = p[p[i]]; i = p[i]; } return i; }
+    private static P Direction(List<Edge> edges, int port)
+    {
+        List<B> p = edges[port / 2].Curves; B b = port % 2 == 0 ? p[0] : Reverse(p[p.Count - 1]);
+        P d = b.Line ? b.D - b.A : b.B - b.A; if (d.Length < 1e-12) d = b.D - b.A;
+        return d.Unit();
+    }
+    private static void PairPorts(Junction node, List<Edge> edges, int[] pairs, int[] parent, bool hasHoles)
+    {
+        List<int> available = new List<int>(node.Ports);
+        available.Sort(delegate(int a, int b) { P x = Direction(edges, a), y = Direction(edges, b); return Math.Atan2(x.Y, x.X).CompareTo(Math.Atan2(y.Y, y.X)); });
+        // Without a loop, adjacent angular pairs give non-crossing elbows (+) or a stem and V (K).
+        // At loops, retain one through-stroke and leave the other arms short, opening P/4/Phi junctions.
+        while (available.Count >= 2)
+        {
+            int bestA = -1, bestB = -1; double cost = double.MaxValue;
+            for (int i = 0; i < available.Count; i++) for (int j = i + 1; j < available.Count; j++)
+            {
+                if (!hasHoles && available.Count > 3 && j != i + 1 && !(i == 0 && j == available.Count - 1)) continue;
+                int a = available[i], b = available[j]; if (Root(parent, a / 2) == Root(parent, b / 2)) continue;
+                double score = 1 + P.Dot(Direction(edges, a), Direction(edges, b));
+                if (score < cost) { cost = score; bestA = a; bestB = b; }
+            }
+            if (bestA < 0) break;
+            pairs[bestA] = bestB; pairs[bestB] = bestA; parent[Root(parent, bestA / 2)] = Root(parent, bestB / 2);
+            available.Remove(bestA); available.Remove(bestB);
+            if (hasHoles || node.Ports.Count == 3) break;
+        }
+    }
+    private static P EndPoint(List<List<B>> paths, int port)
+    { List<B> p = paths[port / 2]; return port % 2 == 0 ? p[0].A : p[p.Count - 1].D; }
+    private static B Reverse(B b) { return new B { A = b.D, B = b.C, C = b.B, D = b.A, Line = b.Line }; }
+    private static List<B> Reverse(List<B> path)
+    { var result = new List<B>(); for (int i = path.Count - 1; i >= 0; i--) result.Add(Reverse(path[i])); return result; }
+    private static void Split(B b, double t, out B left, out B right)
+    {
+        if (b.Line) { P m = b.At(t); left = new B { A = b.A, D = m, Line = true }; right = new B { A = m, D = b.D, Line = true }; return; }
+        P ab = b.A * (1 - t) + b.B * t, bc = b.B * (1 - t) + b.C * t, cd = b.C * (1 - t) + b.D * t;
+        P abc = ab * (1 - t) + bc * t, bcd = bc * (1 - t) + cd * t, middle = abc * (1 - t) + bcd * t;
+        left = new B { A = b.A, B = ab, C = abc, D = middle }; right = new B { A = middle, B = bcd, C = cd, D = b.D };
+    }
+    private static List<B> TrimStart(List<B> path, P center, double radius, double flat)
+    {
+        for (int i = 0; i < path.Count; i++)
+        {
+            B b = path[i]; double previous = 0;
+            // Control-polygon length bounds the number of probes even for a looping cubic.
+            double length = b.Line ? (b.D - b.A).Length : (b.B - b.A).Length + (b.C - b.B).Length + (b.D - b.C).Length;
+            int count = Math.Max(8, (int)Math.Ceiling(length / Math.Max(radius * 0.2, flat)));
+            if (count > 100000) throw new InvalidOperationException("Слишком длинный сегмент для разделения узла.");
+            for (int k = 1; k <= count; k++)
+            {
+                double t = (double)k / count;
+                if ((b.At(t) - center).Length >= radius)
+                {
+                    double low = previous, high = t;
+                    for (int n = 0; n < 45; n++) { double m = (low + high) * 0.5; if ((b.At(m) - center).Length < radius) low = m; else high = m; }
+                    B left, right; Split(b, high, out left, out right); var result = new List<B>();
+                    if ((right.D - right.A).Length > flat * 0.001 || !right.Line) result.Add(right);
+                    for (int j = i + 1; j < path.Count; j++) result.Add(path[j]);
+                    if (result.Count == 0) break; return result;
+                }
+                previous = t;
+            }
+        }
+        throw new InvalidOperationException("Зазор в узле поглотил короткий штрих. Кривые не создаются.");
+    }
+    private static B Join(P a, P center, P b, double tolerance)
+    {
+        var chord = new EngravingCenterlines.Segment(a, b);
+        if ((center - EngravingCenterlines.Closest(chord, center)).Length < tolerance * 0.001)
+            return new B { A = a, D = b, Line = true };
+        return new B { A = a, B = a + (center - a) * (2.0 / 3), C = b + (center - b) * (2.0 / 3), D = b };
+    }
+    private static List<Piece> Nearby(List<List<B>> paths, int port, Junction node, double flat)
+    {
+        var result = new List<Piece>(); List<B> curves = port % 2 == 0 ? paths[port / 2] : Reverse(paths[port / 2]);
+        foreach (B b in curves)
+        {
+            var pieces = new List<Piece>(); Flatten(b, flat, pieces, 0);
+            foreach (Piece piece in pieces) { result.Add(piece); if ((piece.B - node.Point).Length >= node.Radius * 2.5) return result; }
+        }
+        return result;
+    }
+    private static bool Separated(Junction node, List<List<B>> paths, int[] pairs, Dictionary<int, B> links, double gap, double flat)
+    {
+        var groups = new List<List<Piece>>(); var seen = new HashSet<int>();
+        foreach (int port in node.Ports) if (seen.Add(port))
+        {
+            List<Piece> pieces = Nearby(paths, port, node, flat);
+            if (pairs[port] >= 0) { seen.Add(pairs[port]); pieces.AddRange(Nearby(paths, pairs[port], node, flat)); Flatten(links[port], flat, pieces, 0); }
+            groups.Add(pieces);
+        }
+        for (int i = 0; i < groups.Count; i++) for (int j = i + 1; j < groups.Count; j++)
+            foreach (Piece a in groups[i]) foreach (Piece b in groups[j]) if (Distance(a, b) < gap + flat * 2) return false;
+        return true;
+    }
+    private static void Walk(int firstPort, List<Edge> edges, List<List<B>> paths, int[] pairs, Dictionary<int, B> links,
+        bool[] used, EngravingCenterlines.Result result)
+    {
+        var curves = new List<B>(); int port = firstPort, count = 0; bool closed = false;
+        while (true)
+        {
+            int edge = port / 2; if (used[edge]) throw new InvalidOperationException("Повторный проход по штриху гравировки.");
+            used[edge] = true; count++; curves.AddRange(port % 2 == 0 ? paths[edge] : Reverse(paths[edge]));
+            int exitPort = port ^ 1;
+            if (pairs[exitPort] < 0) { closed = count == 1 && edges[edge].Closed && pairs[port] < 0 && (curves[0].A - curves[curves.Count - 1].D).Length < 1e-12; break; }
+            curves.Add(links[exitPort]); port = pairs[exitPort];
+        }
+        var stroke = new EngravingCenterlines.Stroke { Closed = closed };
+        stroke.Points.Add(curves[0].A); foreach (B b in curves) stroke.Points.Add(b.D);
+        result.Curves.Add(curves); result.Strokes.Add(stroke);
+    }
+    private static void Flatten(B b, double tolerance, List<Piece> output, int depth)
+    {
+        var chord = new EngravingCenterlines.Segment(b.A, b.D);
+        double error = b.Line ? 0 : Math.Max((b.B - EngravingCenterlines.Closest(chord, b.B)).Length, (b.C - EngravingCenterlines.Closest(chord, b.C)).Length);
+        if (error <= tolerance) { if ((b.D - b.A).Length > tolerance * 0.00001) output.Add(new Piece(b.A, b.D)); return; }
+        if (depth >= 24) throw new InvalidOperationException("Не удалось проверить пересечения кривых.");
+        B left, right; Split(b, 0.5, out left, out right); Flatten(left, tolerance, output, depth + 1); Flatten(right, tolerance, output, depth + 1);
+    }
+    private static double Distance(Piece a, Piece b)
+    {
+        P u = a.B - a.A, v = b.B - b.A; double denominator = P.Cross(u, v);
+        if (Math.Abs(denominator) > 1e-30)
+        {
+            double t = P.Cross(b.A - a.A, v) / denominator, s = P.Cross(b.A - a.A, u) / denominator;
+            if (t >= 0 && t <= 1 && s >= 0 && s <= 1) return 0;
+        }
+        var x = new EngravingCenterlines.Segment(a.A, a.B); var y = new EngravingCenterlines.Segment(b.A, b.B);
+        return Math.Min(Math.Min((a.A - EngravingCenterlines.Closest(y, a.A)).Length, (a.B - EngravingCenterlines.Closest(y, a.B)).Length),
+            Math.Min((b.A - EngravingCenterlines.Closest(x, b.A)).Length, (b.B - EngravingCenterlines.Closest(x, b.B)).Length));
+    }
+    public static void Validate(EngravingCenterlines.Result result, R region, double tolerance, double flat)
+    {
+        var paths = new List<List<Piece>>();
+        foreach (List<B> curves in result.Curves)
+        {
+            var pieces = new List<Piece>();
+            for (int i = 0; i < curves.Count; i++)
+            {
+                if (i > 0 && (curves[i - 1].D - curves[i].A).Length > tolerance * 0.001) throw new InvalidOperationException("Разрыв внутри цепочки гравировки.");
+                Flatten(curves[i], flat, pieces, 0);
+            }
+            foreach (Piece p in pieces) if (!region.SegmentInside(p.A, p.B, flat)) throw new InvalidOperationException("Разделённая ось вышла за границу буквы.");
+            paths.Add(pieces);
+        }
+        for (int i = 0; i < paths.Count; i++)
+        {
+            List<Piece> p = paths[i];
+            for (int a = 0; a < p.Count; a++) for (int b = a + 2; b < p.Count; b++)
+            {
+                if (result.Strokes[i].Closed && a == 0 && b == p.Count - 1) continue;
+                if (Distance(p[a], p[b]) < flat * 0.01) throw new InvalidOperationException("Самопересечение цепочки гравировки.");
+            }
+            for (int j = i + 1; j < paths.Count; j++) foreach (Piece a in p) foreach (Piece b in paths[j])
+                if (Distance(a, b) < tolerance * 2 + flat * 2) throw new InvalidOperationException("Цепочки гравировки пересекаются или касаются друг друга.");
+        }
+    }
+}
+// END PORTABLE ENGRAVING ROUTING CORE
+
 // BEGIN ENGRAVING CAM BOUNDARY ADAPTER
 public static class EngravingCamBoundary
 {
-    public static void Append(UFSession uf, Tag operation, Tag[] tags, double[] origin, double[] matrix, double tolerance)
+    // BoundaryMemberSetPlanarMill uses its own integer convention: 0 = On.
+    // This is also the setting used by the recorded journal in PlanarCHIK.cs; UF uses a different enum.
+    private const int MemberOn = 0;
+    public static BoundarySetPlanarMill Append(BoundaryPlanarMill target, NXObject[] curves, Point3d start, Matrix3x3 matrix, Plane plane, double tolerance)
     {
-        if (tags == null || tags.Length == 0 || !(tolerance > 0) || double.IsInfinity(tolerance))
-            throw new ArgumentException("Empty engraving boundary or invalid tolerance.");
-        UFCambnd.AppData[] members = new UFCambnd.AppData[tags.Length];
-        for (int i = 0; i < tags.Length; i++) members[i] = ApplicationData(tolerance, true);
-        UFCambnd.BoundaryData boundary = new UFCambnd.BoundaryData
+        if (curves == null || curves.Length == 0 || !(tolerance > 0) || double.IsInfinity(tolerance)) throw new ArgumentException("Invalid engraving boundary.");
+        BoundarySetPlanarMill set = target.CreateBoundarySetPlanarMill();
+        set.PlaneType = BoundarySet.PlaneTypes.UserDefined; set.Plane = plane;
+        set.BoundaryType = BoundarySet.BoundaryTypes.Open; set.ToolPosition = BoundarySet.ToolPositionTypes.On;
+        set.ToolSide = BoundarySet.ToolSideTypes.InsideOrLeft;
+        BoundaryPlanarMill.ToolPositionTypes initial = target.InitialToolPosition;
+        try { target.InitialToolPosition = BoundaryPlanarMill.ToolPositionTypes.On; set.AppendCurves(curves, start, matrix); }
+        finally { target.InitialToolPosition = initial; }
+        // AppendCurves can infer defaults. Apply the engraving settings after the members exist.
+        set.BoundaryType = BoundarySet.BoundaryTypes.Open; set.ToolPosition = BoundarySet.ToolPositionTypes.On;
+        set.CustomStock = true; set.Stock = 0; set.CustomTolerance = true; set.InTolerance = tolerance; set.OutTolerance = tolerance;
+        foreach (BoundaryMemberSet item in set.BoundaryMemberList.GetContents())
         {
-            // OPEN is the CAM profile condition, not a statement about the curve's endpoints.
-            // Rings and D/2 dots keep their complete closed geometry, with ON on every member.
-            boundary_type = CamBoundaryType.CamBoundaryTypeOpen,
-            plane_type = 0, origin = origin, matrix = matrix,
-            material_side = CamMaterialSide.CamMaterialSideInLeft,
-            app_data = new UFCambnd.AppData[] { ApplicationData(tolerance, false) }
-        };
-        uf.Cambnd.AppendBndFromCurve(operation, CamGeomType.CamPart, tags.Length, tags, ref boundary, members);
+            BoundaryMemberSetPlanarMill member = item as BoundaryMemberSetPlanarMill;
+            if (member == null) throw new InvalidOperationException("NX создал неподдерживаемый элемент границы.");
+            member.ToolPosition = MemberOn; member.CustomStock = true; member.Stock = 0;
+            member.CustomTolerance = true; member.InTolerance = tolerance; member.OutTolerance = tolerance;
+        }
+        target.BoundaryList.Append(set); return set;
     }
-    private static UFCambnd.AppData ApplicationData(double tolerance, bool member)
+    public static Tag[] Tags(BoundarySetPlanarMill set, bool allowMissing = false)
     {
-        return new UFCambnd.AppData { has_stock = 1, stock = 0, has_tolerances = 1,
-            tolerances = new double[] { tolerance, tolerance }, has_tool_position = member ? 1 : 0,
-            tool_position = CamToolPosition.CamToolPositionOn };
-    }
-    public static void Verify(UFSession uf, IntPtr boundary, double tolerance)
-    {
-        UFCambnd.BoundaryData data; uf.Cambnd.AskBoundaryData(boundary, out data);
-        if (data.boundary_type != CamBoundaryType.CamBoundaryTypeOpen)
-            throw new InvalidOperationException("NX не сохранил границу гравировки в режиме Open / On.");
-        UFCambnd.AppData boundaryData; uf.Cambnd.AskBoundaryAppData(boundary, out boundaryData);
-        VerifyApplicationData(boundaryData, tolerance, false);
-        int count; IntPtr[] members; uf.Cambnd.AskBoundaryItems(boundary, out count, out members);
-        if (count < 1 || members == null || members.Length != count)
-            throw new InvalidOperationException("NX сохранил неполный состав элементов границы гравировки.");
-        foreach (IntPtr member in members)
+        BoundaryMemberSet[] members = set.BoundaryMemberList.GetContents(); Tag[] tags = new Tag[members.Length];
+        for (int i = 0; i < tags.Length; i++)
         {
-            UFCambnd.AppData app; uf.Cambnd.AskItemAppData(member, out app);
-            VerifyApplicationData(app, tolerance, true);
+            if (members[i] == null || members[i].Geometry == null)
+            {
+                if (!allowMissing) throw new InvalidOperationException("NX добавил элемент границы без исходной кривой.");
+                tags[i] = Tag.Null;
+            }
+            else tags[i] = members[i].Geometry.Tag;
+        }
+        return tags;
+    }
+    public static void Verify(BoundarySetPlanarMill set, bool geometricLoop, double tolerance)
+    {
+        // A complete circle may be reported as Closed. It is safe only for an actually closed source chain.
+        // Open chains must stay Open: otherwise CAM could insert an implicit closing cut.
+        if (set.BoundaryType != BoundarySet.BoundaryTypes.Open && !(geometricLoop && set.BoundaryType == BoundarySet.BoundaryTypes.Closed))
+            throw new InvalidOperationException("NX замкнул разомкнутую цепочку гравировки. Тип границы: " + set.BoundaryType + ".");
+        Check(set.CustomStock, set.Stock, set.CustomTolerance, set.InTolerance, set.OutTolerance, tolerance);
+        BoundaryMemberSet[] members = set.BoundaryMemberList.GetContents();
+        if (members.Length == 0) throw new InvalidOperationException("NX сохранил пустую границу гравировки.");
+        foreach (BoundaryMemberSet item in members)
+        {
+            BoundaryMemberSetPlanarMill member = item as BoundaryMemberSetPlanarMill;
+            if (member == null || member.ToolPosition != MemberOn)
+                throw new InvalidOperationException("NX не сохранил Tool Position = On у элемента границы.");
+            Check(member.CustomStock, member.Stock, member.CustomTolerance, member.InTolerance, member.OutTolerance, tolerance);
         }
     }
-    private static void VerifyApplicationData(UFCambnd.AppData app, double tolerance, bool member)
+    private static void Check(bool customStock, double stock, bool customTolerance, double inside, double outside, double tolerance)
     {
-        if (app.has_stock == 0 || double.IsNaN(app.stock) || Math.Abs(app.stock) > 1e-12
-            || (member && (app.has_tool_position == 0 || app.tool_position != CamToolPosition.CamToolPositionOn)))
-            throw new InvalidOperationException("NX не подтвердил движение по кривой или нулевой припуск.");
-        if (app.has_tolerances == 0 || app.tolerances == null || app.tolerances.Length != 2)
-            throw new InvalidOperationException("NX не сохранил локальный допуск границы гравировки.");
-        foreach (double value in app.tolerances)
-            if (!(value > 0) || double.IsInfinity(value) || value > tolerance * (1 + 1e-8))
-                throw new InvalidOperationException("NX увеличил допуск границы гравировки.");
+        if (!customStock || double.IsNaN(stock) || Math.Abs(stock) > 1e-12) throw new InvalidOperationException("NX не сохранил нулевой припуск границы гравировки.");
+        if (!customTolerance || !(inside > 0) || !(outside > 0) || inside > tolerance * (1 + 1e-8) || outside > tolerance * (1 + 1e-8))
+            throw new InvalidOperationException("NX не сохранил допуск границы гравировки 0,001 мм.");
     }
 }
 // END ENGRAVING CAM BOUNDARY ADAPTER
+
 
 // BEGIN PORTABLE CURVE CHAIN CORE
 public static class PlanarCurveChains
@@ -733,7 +1080,8 @@ public static class EngravingCenterlines
         public readonly List<Stroke> Strokes = new List<Stroke>();
         public readonly List<List<Bezier>> Curves = new List<List<Bezier>>();
         public readonly List<Circle> Circles = new List<Circle>();
-        public int BoundarySamples;
+        public int BoundarySamples, SeparatedJunctions;
+        public double JunctionGap;
         public double WidthEstimate, SamplingStep;
     }
     public sealed class Region

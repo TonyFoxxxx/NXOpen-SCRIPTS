@@ -1,4 +1,4 @@
-"""Exercise the production CAM adapter against a UF API contract double."""
+"""Exercise the production CAM adapter against an NXOpen builder contract double."""
 from pathlib import Path
 import os
 import shutil
@@ -15,7 +15,7 @@ class EngravingBoundaryTests(unittest.TestCase):
         core = source.split('// BEGIN ENGRAVING CAM BOUNDARY ADAPTER\n', 1)[1].split('// END ENGRAVING CAM BOUNDARY ADAPTER', 1)[0]
         with tempfile.TemporaryDirectory(prefix='nx-engraving-centerline-') as folder:
             path = Path(folder)
-            (path / 'Core.cs').write_text('using System;\nusing NXOpen;\nusing NXOpen.UF;\n' + core, encoding='utf-8')
+            (path / 'Core.cs').write_text('using System;\nusing NXOpen;\nusing NXOpen.CAM;\n' + core, encoding='utf-8')
             shutil.copyfile(ROOT / 'tests/fixtures/EngravingCamBoundary.cs', path / 'Checks.cs')
             if os.name == 'nt':
                 compiler = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
