@@ -37,7 +37,7 @@ This reconstructs plotter-font roundings. It is not an exact medial-axis convers
 
 ## Validation and limits
 
-Compiled against Designcenter 2606 libraries. Passed 10 scenarios covering font parsing, metrics, slant, tangency, corners, closure, zero segments and retraces. A separate local check processed 180 installed-source glyphs into 1297 entities, including 683 cubic segments before the special parenthesis smoothing.
+Compiled against Designcenter 2606 libraries. Passed 10 scenarios covering font parsing, metrics, slant, tangency, corners, closure, zero segments and retraces. A separate local check processed 180 installed-source glyphs into 1297 entities, including 687 cubic segments.
 
 Supports one line up to 250 characters. Does not change existing Text features, sketches or operations. Requires a legacy vector FON 2.0 with byte coordinates. Raster/outline fonts, Unicode without corresponding Windows-1251 geometry and text on nonplanar surfaces are unsupported.
 
