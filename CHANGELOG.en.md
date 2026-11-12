@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-12 — Smooth GOST A text V1
+
+- Added `NX_GOST_Smooth_Text.cs` and the updater entry «Гладкий текст ГОСТ А».
+- Reads an external vector GOST_A.FON locally. Does not change or redistribute the source font.
+- Reconstructs rounded sections as cubic splines with matching tangent directions. Preserves straight strokes and intentional corners; removes retraced source segments within glyphs.
+- Accepts one line, height in mm and rotation. Pick the origin on WCS XY; letter slant is 15 degrees from vertical. Creates ordinary curves with one undo step.
+- Passed DC 2606 SDK compilation, 10 portable geometry scenarios and a local 180-glyph source-font check. Interactive NX execution remains unconfirmed.
+
 ## 2026-11-12 — Curves for PLANAR_MILL V1
 
 - Added `NX_PlanarMill_Select_Curves.cs` and the updater entry «Кривые для PLANAR_MILL».

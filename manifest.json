@@ -78,6 +78,15 @@
       "description": "Добавление надписи Text, эскиза или выбранных кривых в существующую PLANAR_MILL: связанные цепочки, Tool Position On и припуск 0."
     },
     {
+      "id": "NX_GOST_Smooth_Text",
+      "name": "Гладкий текст ГОСТ А",
+      "file": "NX_GOST_Smooth_Text.cs",
+      "version": "V1",
+      "path": "scripts/NX_GOST_Smooth_Text.cs",
+      "sha256": "4006087785ecc6dcedbeaa0bdfa07c73e22f57adc94859bf2d48632301457ce6",
+      "description": "Создание однолинейной надписи ГОСТ А из линий и гладких сплайнов по внешнему FON: текст, высота, положение и наклон 75°."
+    },
+    {
       "id": "NX_Number_Program_Folders",
       "name": "Нумерация папок программ",
       "file": "NX_Number_Program_Folders.cs",
