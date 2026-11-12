@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.05
+
+- Remove the forced 0.001 mm tolerance. New boundaries and their members inherit operation tolerance; numeric Intol / Outtol values are neither read nor written nor checked. Remove the resulting tolerance rollback.
+- Fix the false branch towards the outer vertex of an acute triangular 4. Removal requires two pairs of constant-width walls; genuine pointed arms remain intact.
+- Use the angle between sides to reconstruct acute corners instead of a fixed stroke-width limit. The triangle has three straight sides, retains the stem and crossbar, and keeps junction gaps.
+- Add 36 acute-4 variants checking shape, corners and absence of extra branches, plus a retained long pointed-arm case. The new regression reproduces the V1.04 defect. Total: 189 routing scenarios, 122 centerline scenarios, 118 adapter checks and 21 chain checks. Compiles against DC 2606 SDK for .NET Framework and .NET 10; the user model and final toolpath remain unverified.
+
 ## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.04
 
 - Fix the short-stroke gap failure by leaving through-pairs untrimmed, including short connectors between nearby junctions.

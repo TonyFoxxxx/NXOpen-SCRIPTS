@@ -16,7 +16,11 @@ namespace NXOpen.CAM
 {
     public class BoundaryMemberSet { public TaggedObject Geometry; }
     public class BoundaryMemberSetPlanarMill:BoundaryMemberSet
-    { public bool CustomStock,CustomTolerance;public double Stock,InTolerance,OutTolerance;public int ToolPosition; }
+    {
+        public bool CustomStock,CustomTolerance=true;public double Stock;public int ToolPosition;
+        public double InTolerance { get{throw new Exception("member tolerance read");} set{throw new Exception("member tolerance write");} }
+        public double OutTolerance { get{throw new Exception("member tolerance read");} set{throw new Exception("member tolerance write");} }
+    }
     public class BoundaryMemberSetList
     { public List<BoundaryMemberSet> Items=new List<BoundaryMemberSet>();public BoundaryMemberSet[] GetContents(){return Items.ToArray();} }
     public class BoundarySet
@@ -30,12 +34,14 @@ namespace NXOpen.CAM
     }
     public class BoundarySetPlanarMill:BoundarySet
     {
-        public bool CustomStock,CustomTolerance,ThrowAppend;public double Stock,InTolerance,OutTolerance;
+        public bool CustomStock,CustomTolerance=true,ThrowAppend;public double Stock;
+        public double InTolerance { get{throw new Exception("boundary tolerance read");} set{throw new Exception("boundary tolerance write");} }
+        public double OutTolerance { get{throw new Exception("boundary tolerance read");} set{throw new Exception("boundary tolerance write");} }
         public void AppendCurves(NXObject[] curves,Point3d point,Matrix3x3 matrix)
         {
             if(ThrowAppend)throw new InvalidOperationException("synthetic append failure");
             BoundaryType=BoundaryTypes.Closed;ToolPosition=ToolPositionTypes.Contact;
-            foreach(NXObject c in curves)BoundaryMemberList.Items.Add(new BoundaryMemberSetPlanarMill{Geometry=c,ToolPosition=17,Stock=4,InTolerance=.1,OutTolerance=.1});
+            foreach(NXObject c in curves)BoundaryMemberList.Items.Add(new BoundaryMemberSetPlanarMill{Geometry=c,ToolPosition=17,Stock=4});
         }
     }
     public class BoundarySetList
@@ -60,30 +66,32 @@ public class EngravingBoundaryChecks
         {
             var target=new BoundaryPlanarMill();var old=new BoundarySetPlanarMill{Stock=5,BoundaryType=BoundarySet.BoundaryTypes.Closed};target.BoundaryList.Append(old);
             var objects=new NXObject[tags.Length];for(int i=0;i<tags.Length;i++)objects[i]=new NXObject{Tag=tags[i]};
-            var plane=new Plane();double tolerance=.001*unit;
-            var set=EngravingCamBoundary.Append(target,objects,new Point3d{Z=8},new Matrix3x3{Xx=1,Yy=1,Zz=1},plane,tolerance);
-            Require(target.BoundaryList.Items.Count==2&&target.BoundaryList.Items[0]==old&&old.Stock==5,"existing boundary changed");
+            var plane=new Plane();
+            var set=EngravingCamBoundary.Append(target,objects,new Point3d{Z=8*unit},new Matrix3x3{Xx=1,Yy=1,Zz=1},plane);
+            Require(target.BoundaryList.Items.Count==2&&target.BoundaryList.Items[0]==old&&old.Stock==5&&old.CustomTolerance,"existing boundary changed");
             Require(target.InitialToolPosition==BoundaryPlanarMill.ToolPositionTypes.TangentTo,"initial defaults not restored");
             Require(set.PlaneType==BoundarySet.PlaneTypes.UserDefined&&set.Plane==plane,"plane lost");
             Require(set.BoundaryType==BoundarySet.BoundaryTypes.Open,"append inference overwrote profile type");
             var read=EngravingCamBoundary.Tags(set);Require(read.Length==tags.Length,"member count changed");
             for(int i=0;i<read.Length;i++)Require(read[i]==tags[i],"members reordered or closing member inserted");
-            EngravingCamBoundary.Verify(set,false,tolerance);checks++;
+            Require(!set.CustomTolerance,"boundary does not inherit operation tolerance");
+            foreach(BoundaryMemberSetPlanarMill m in set.BoundaryMemberList.Items)Require(!m.CustomTolerance,"member does not inherit operation tolerance");
+            EngravingCamBoundary.Verify(set,false);checks++;
             set.BoundaryType=BoundarySet.BoundaryTypes.Closed;
-            Reject(delegate{EngravingCamBoundary.Verify(set,false,tolerance);},"implicit closure of an open path accepted");
-            EngravingCamBoundary.Verify(set,true,tolerance);checks++;
+            Reject(delegate{EngravingCamBoundary.Verify(set,false);},"implicit closure of an open path accepted");
+            EngravingCamBoundary.Verify(set,true);checks++;
             set.BoundaryType=BoundarySet.BoundaryTypes.Open;
             var member=(BoundaryMemberSetPlanarMill)set.BoundaryMemberList.Items[0];
             Require(member.ToolPosition==0,"NXOpen member ON is not zero");
-            member.ToolPosition=1;Reject(delegate{EngravingCamBoundary.Verify(set,false,tolerance);},"UF integer convention silently accepted");member.ToolPosition=0;
-            member.CustomTolerance=false;Reject(delegate{EngravingCamBoundary.Verify(set,false,tolerance);},"lost tolerance accepted");member.CustomTolerance=true;
-            member.InTolerance=.1*unit;Reject(delegate{EngravingCamBoundary.Verify(set,false,tolerance);},"loosened tolerance accepted");member.InTolerance=tolerance;
-            member.Stock=double.NaN;Reject(delegate{EngravingCamBoundary.Verify(set,false,tolerance);},"non-finite stock accepted");member.Stock=0;
+            member.ToolPosition=1;Reject(delegate{EngravingCamBoundary.Verify(set,false);},"UF integer convention silently accepted");member.ToolPosition=0;
+            set.Stock=.1*unit;Reject(delegate{EngravingCamBoundary.Verify(set,false);},"boundary stock accepted");set.Stock=0;
+            member.Stock=.1*unit;Reject(delegate{EngravingCamBoundary.Verify(set,false);},"member stock accepted");member.Stock=0;
+            member.Stock=double.NaN;Reject(delegate{EngravingCamBoundary.Verify(set,false);},"non-finite stock accepted");member.Stock=0;
             member.Geometry=null;Reject(delegate{EngravingCamBoundary.Tags(set);},"implicit member without source geometry accepted");
             Require(EngravingCamBoundary.Tags(set,true)[0]==Tag.Null,"existing virtual member cannot be compared");
         }
         var fail=new BoundaryPlanarMill{ThrowAppend=true};
-        Reject(delegate{EngravingCamBoundary.Append(fail,new NXObject[]{new NXObject()},new Point3d(),new Matrix3x3(),new Plane(),.001);},"append exception swallowed");
+        Reject(delegate{EngravingCamBoundary.Append(fail,new NXObject[]{new NXObject()},new Point3d(),new Matrix3x3(),new Plane());},"append exception swallowed");
         Require(fail.InitialToolPosition==BoundaryPlanarMill.ToolPositionTypes.TangentTo&&fail.BoundaryList.Items.Count==0,"append failure changed defaults or list");
         Console.WriteLine(checks+" engraving-boundary contract checks passed");
     }

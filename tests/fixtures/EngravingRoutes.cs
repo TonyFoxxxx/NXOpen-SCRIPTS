@@ -13,6 +13,14 @@ public class RoutingChecks
     static List<List<P>> LetterP() { return new List<List<P>>{Poly(-.2,-2.2,.2,-2.2,.2,-.2,2.2,-.2,2.2,2.2,-.2,2.2),Poly(.2,.2,1.8,.2,1.8,1.8,.2,1.8)}; }
     static List<List<P>> Four()
     { double m=.2*(1+Math.Sqrt(2));return new List<List<P>>{Poly(.2,2+m,-2-m,-.2,-.2,-.2,-.2,-2.2,.2,-2.2,.2,-.2,1.2,-.2,1.2,.2,.2,.2),Poly(-.2,2-m,-2+m,.2,-.2,.2)}; }
+    static List<List<P>> AcuteFour(double width,double height,double radius)
+    {
+        double slope=height/width,offset=radius*Math.Sqrt(1+slope*slope);
+        return new List<List<P>>{
+            Poly(radius,height+slope*radius+offset,(-radius-height-offset)/slope,-radius,-radius,-radius,
+                -radius,-height,radius,-height,radius,-radius,1,-radius,1,radius,radius,radius),
+            Poly(-radius,height-slope*radius-offset,(radius-height+offset)/slope,radius,-radius,radius)};
+    }
     static List<P> Circle(double radius) { var p=new List<P>();for(int i=0;i<360;i++){double a=2*Math.PI*i/360;p.Add(new P(radius*Math.Cos(a),radius*Math.Sin(a)));}return p; }
     static void Arc(List<P> p,double r,double start,double end) { for(int i=0;i<=240;i++){double a=start+(end-start)*i/240;p.Add(new P(r*Math.Cos(a),r*Math.Sin(a)));} }
     static List<List<P>> Phi()
@@ -108,6 +116,47 @@ public class RoutingChecks
         var blocked=new EngravingCenterlines.Result();AddLine(blocked,new P(0,-1),new P(0,0));AddLine(blocked,new P(0,0),new P(0,1));AddLine(blocked,new P(0,0),new P(.003,0));
         Reject(delegate{EngravingRoutes.Build(blocked,new R(new List<List<P>>{Poly(-2,-2,2,-2,2,2,-2,2)}),.02,.002);},"unresolvable short branch silently dropped");
     }
+    static void AcuteTriangles()
+    {
+        // V1.04 creates a third path to the outside miter tip and rounds the triangular loop.
+        // Check geometry, not just successful execution: exactly three straight triangle sides,
+        // two genuine stem extensions, known corner locations and no extra branch after routing.
+        foreach(double width in new double[]{4,5,6})foreach(double scale in new double[]{.25,1.0})
+        foreach(double shear in new double[]{0,.268,.55})foreach(double unit in new double[]{1,1/25.4})
+        {
+            double angle=.73;bool mirror=width==5;
+            var loops=Transform(Shear(AcuteFour(width,2,.2),scale,shear),angle,unit,mirror);
+            var region=new R(loops);var raw=EngravingCenterlines.Build(region,.002*unit);
+            string name="acute 4 width="+width+" scale="+scale+" shear="+shear+" unit="+unit;
+            Require(raw.Curves.Count==3,name+" extra medial branch");
+            int segments=0,triangles=0;
+            foreach(var path in raw.Curves)
+            {
+                foreach(B c in path){Require(c.Line,name+" rounded a straight triangle");segments++;}
+                if(path.Count==3&&(path[0].A-path[path.Count-1].D).Length<1e-9*unit)triangles++;
+            }
+            Require(segments==5&&triangles==1,name+" not a triangle plus two stems");
+            var corners=Transform(Shear(new List<List<P>>{Poly(-width,0,0,2,0,0)},scale,shear),angle,unit,mirror)[0];
+            foreach(P corner in corners)
+            {
+                double error=double.MaxValue;
+                foreach(var path in raw.Curves)foreach(B c in path)error=Math.Min(error,Math.Min((corner-c.A).Length,(corner-c.D).Length));
+                Require(error<1e-8*unit,name+" displaced triangle corner "+error);
+            }
+            var result=EngravingRoutes.Build(raw,region,.02*unit,.002*unit);
+            CheckResult(name,region,result,2,0,unit,true);RetainedEnds(raw,result);
+            int routedSegments=0;foreach(var path in result.Curves)foreach(B c in path){Require(c.Line,name+" routing rounded a straight side");routedSegments++;}
+            Require(routedSegments==5,name+" extra routing segment");
+        }
+        // A genuine pointed arm has no pair of opposite constant-width walls.
+        // Its long terminal branch must not be mistaken for a triangular miter spur.
+        var pointed=new R(new List<List<P>>{Poly(-.2,-2,.2,-2,.2,2,-.2,2,-.2,.2,-6,0,-.2,-.2)});
+        var pointedRaw=EngravingCenterlines.Build(pointed,.002);bool retained=false;
+        foreach(var path in pointedRaw.Curves)if(path[0].A.X< -5.5||path[path.Count-1].D.X< -5.5)retained=true;
+        Require(retained,"genuine long tapered arm was pruned");
+        var pointedResult=EngravingRoutes.Build(pointedRaw,pointed,.02,.002);
+        CheckResult("pointed arm",pointed,pointedResult,2,0,1,true);RetainedEnds(pointedRaw,pointedResult);
+    }
     static void Reject(Action action,string label) { bool rejected=false;try{action();}catch(InvalidOperationException){rejected=true;}Require(rejected,label);scenarios++; }
     public static void Main()
     {
@@ -142,6 +191,7 @@ public class RoutingChecks
             Check("slanted Phi"+suffix,Shear(Phi(),scale,shear),2,0,1,true,3);
         }
         ShortBranches();
+        AcuteTriangles();
         Check("ring",new List<List<P>>{Circle(2.2),Circle(1.8)},1,1);
         var dot=Check("dot",new List<List<P>>{Circle(.3)},0);Require(dot.Circles.Count==1&&Math.Abs(dot.Circles[0].Radius-.15)<1e-10,"D/2 changed");
         var region=new R(new List<List<P>>{Poly(-3,-3,3,-3,3,3,-3,3)});

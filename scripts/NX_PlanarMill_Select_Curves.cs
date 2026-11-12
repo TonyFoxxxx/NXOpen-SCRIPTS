@@ -1,8 +1,8 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.04
+// SCRIPT_VERSION: V1.05
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
 // Reconstructs approximate medial curves; round dots use a circle of half the face diameter.
-// Preserves through-strokes; separates junctions by 0.004-0.02 mm with CAM tolerance 0.001 mm.
+// Preserves through-strokes; separates junctions by 0.004-0.02 mm and inherits operation tolerances.
 // Does not save files, generate a toolpath, or change the tool, depths, feeds or source body.
 
 using System;
@@ -22,10 +22,10 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.04";
+    private const string SCRIPT_VERSION = "V1.05";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "4";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "5";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -67,7 +67,7 @@ public class NXPlanarMillSelectCurves
             HashSet<Tag> assigned = AssignedCurves(uf, operation);
             Face[] faces = SelectFaces(); if (faces == null) return;
             double unit = part.PartUnits == BasePart.Units.Inches ? 1 / 25.4 : 1;
-            double tolerance = 0.002 * unit, joinTolerance = 0.000001 * unit, camTolerance = 0.001 * unit;
+            double tolerance = 0.002 * unit, joinTolerance = 0.000001 * unit;
             PlanarCurveChains.Frame frame; int skipped;
             List<FaceGroup> groups = Prepare(uf, part, faces, assigned, tolerance, joinTolerance, out frame, out skipped);
             if (groups.Count == 0) { Show(NXMessageBox.DialogType.Information, "Средние линии выбранных граней уже назначены этой операции."); return; }
@@ -123,14 +123,14 @@ public class NXPlanarMillSelectCurves
                     for (int i = 0; i < objects.Length; i++) objects[i] = curves[chain.Items[i]].Curve;
                     V startPoint = curves[chain.Items[0]].Start;
                     BoundarySetPlanarMill set = EngravingCamBoundary.Append(builder.PartBoundary, objects,
-                        new Point3d(startPoint.X, startPoint.Y, startPoint.Z), matrix, boundaryPlane, camTolerance);
-                    EngravingCamBoundary.Verify(set, chain.Closed, camTolerance);
+                        new Point3d(startPoint.X, startPoint.Y, startPoint.Z), matrix, boundaryPlane);
+                    EngravingCamBoundary.Verify(set, chain.Closed);
                 }
                 builder.Commit();
             }
             finally { builder.Destroy(); }
             // Read saved boundary sets through the same NXOpen API used to create them.
-            VerifyNewBoundaries(part, operation, oldMembers, curves, chains, camTolerance);
+            VerifyNewBoundaries(part, operation, oldMembers, curves, chains);
             HashSet<Tag> expectedTags = new HashSet<Tag>(assigned); foreach (CurveInfo curve in curves) expectedTags.Add(curve.Curve.Tag);
             if (!AssignedCurves(uf, operation).SetEquals(expectedTags) || Boundaries(uf, operation.Tag).Length != oldBoundaries.Length + chains.Count)
                 throw new InvalidOperationException("NX сохранил другой состав границ. Изменение отменяется.");
@@ -143,7 +143,7 @@ public class NXPlanarMillSelectCurves
                 + "\nСуществующих границ сохранено: " + oldBoundaries.Length
                 + "\nРазделено узлов: " + junctions + (junctions > 0 ? "; зазор: " + minimumGap.ToString("0.###")
                     + (maximumGap > minimumGap * 1.001 ? "–" + maximumGap.ToString("0.###") : "") + " мм." : "")
-                + "\n\nНовые кривые созданы в плоскости выбранных граней. Tool Position: ON; Stock: 0; допуск: 0,001 мм."
+                + "\n\nНовые кривые созданы в плоскости выбранных граней. Tool Position: ON; Stock: 0. Допуск задаётся в операции."
                 + "\nПроверьте средние линии, уровни резания и рассчитайте траекторию штатной командой NX.\nОтмена: Ctrl+Z.");
         }
         catch (Exception ex)
@@ -490,7 +490,7 @@ public class NXPlanarMillSelectCurves
     }
 
     private static void VerifyNewBoundaries(Part part, PlanarMilling operation, List<Tag[]> old,
-        List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains, double tolerance)
+        List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains)
     {
         PlanarMillingBuilder reader = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
         try
@@ -515,7 +515,7 @@ public class NXPlanarMillSelectCurves
                 Tag[] expected = new Tag[chains[index].Items.Count];
                 for (int i = 0; i < expected.Length; i++) expected[i] = curves[chains[index].Items[i]].Curve.Tag;
                 if (!SameMembers(tags, expected)) throw new InvalidOperationException("NX добавил или пропустил элемент границы гравировки.");
-                EngravingCamBoundary.Verify(set, chains[index].Closed, tolerance);
+                EngravingCamBoundary.Verify(set, chains[index].Closed);
             }
             if (verifiedOld.Count != old.Count || verifiedChains.Count != chains.Count)
                 throw new InvalidOperationException("NX не сохранил все прежние и новые границы.");
@@ -563,7 +563,7 @@ public static class EngravingRoutes
         if (!(gap > tolerance * 4) || double.IsInfinity(gap)) throw new ArgumentException("The junction gap must exceed four fitting tolerances.");
         if (region.Loops.Count == 1) source = MergeSplitJunctions(source, region, tolerance);
         // Retry only a geometric gap-fit failure, always from the original curves. Never lose a stroke.
-        // The minimum is 4 x the production CAM tolerance (0.001 mm), converted with the requested gap.
+        // The minimum geometric gap is 0.004 mm, converted with the requested gap.
         double minimum = gap * 0.2, current = gap;
         while (true)
         {
@@ -899,9 +899,9 @@ public static class EngravingCamBoundary
     // BoundaryMemberSetPlanarMill uses its own integer convention: 0 = On.
     // This is also the setting used by the recorded journal in PlanarCHIK.cs; UF uses a different enum.
     private const int MemberOn = 0;
-    public static BoundarySetPlanarMill Append(BoundaryPlanarMill target, NXObject[] curves, Point3d start, Matrix3x3 matrix, Plane plane, double tolerance)
+    public static BoundarySetPlanarMill Append(BoundaryPlanarMill target, NXObject[] curves, Point3d start, Matrix3x3 matrix, Plane plane)
     {
-        if (curves == null || curves.Length == 0 || !(tolerance > 0) || double.IsInfinity(tolerance)) throw new ArgumentException("Invalid engraving boundary.");
+        if (curves == null || curves.Length == 0) throw new ArgumentException("Invalid engraving boundary.");
         BoundarySetPlanarMill set = target.CreateBoundarySetPlanarMill();
         set.PlaneType = BoundarySet.PlaneTypes.UserDefined; set.Plane = plane;
         set.BoundaryType = BoundarySet.BoundaryTypes.Open; set.ToolPosition = BoundarySet.ToolPositionTypes.On;
@@ -911,13 +911,13 @@ public static class EngravingCamBoundary
         finally { target.InitialToolPosition = initial; }
         // AppendCurves can infer defaults. Apply the engraving settings after the members exist.
         set.BoundaryType = BoundarySet.BoundaryTypes.Open; set.ToolPosition = BoundarySet.ToolPositionTypes.On;
-        set.CustomStock = true; set.Stock = 0; set.CustomTolerance = true; set.InTolerance = tolerance; set.OutTolerance = tolerance;
+        set.CustomStock = true; set.Stock = 0; set.CustomTolerance = false;
         foreach (BoundaryMemberSet item in set.BoundaryMemberList.GetContents())
         {
             BoundaryMemberSetPlanarMill member = item as BoundaryMemberSetPlanarMill;
             if (member == null) throw new InvalidOperationException("NX создал неподдерживаемый элемент границы.");
             member.ToolPosition = MemberOn; member.CustomStock = true; member.Stock = 0;
-            member.CustomTolerance = true; member.InTolerance = tolerance; member.OutTolerance = tolerance;
+            member.CustomTolerance = false;
         }
         target.BoundaryList.Append(set); return set;
     }
@@ -935,13 +935,13 @@ public static class EngravingCamBoundary
         }
         return tags;
     }
-    public static void Verify(BoundarySetPlanarMill set, bool geometricLoop, double tolerance)
+    public static void Verify(BoundarySetPlanarMill set, bool geometricLoop)
     {
         // A complete circle may be reported as Closed. It is safe only for an actually closed source chain.
         // Open chains must stay Open: otherwise CAM could insert an implicit closing cut.
         if (set.BoundaryType != BoundarySet.BoundaryTypes.Open && !(geometricLoop && set.BoundaryType == BoundarySet.BoundaryTypes.Closed))
             throw new InvalidOperationException("NX замкнул разомкнутую цепочку гравировки. Тип границы: " + set.BoundaryType + ".");
-        Check(set.CustomStock, set.Stock, set.CustomTolerance, set.InTolerance, set.OutTolerance, tolerance);
+        CheckStock(set.CustomStock, set.Stock);
         BoundaryMemberSet[] members = set.BoundaryMemberList.GetContents();
         if (members.Length == 0) throw new InvalidOperationException("NX сохранил пустую границу гравировки.");
         foreach (BoundaryMemberSet item in members)
@@ -949,14 +949,12 @@ public static class EngravingCamBoundary
             BoundaryMemberSetPlanarMill member = item as BoundaryMemberSetPlanarMill;
             if (member == null || member.ToolPosition != MemberOn)
                 throw new InvalidOperationException("NX не сохранил Tool Position = On у элемента границы.");
-            Check(member.CustomStock, member.Stock, member.CustomTolerance, member.InTolerance, member.OutTolerance, tolerance);
+            CheckStock(member.CustomStock, member.Stock);
         }
     }
-    private static void Check(bool customStock, double stock, bool customTolerance, double inside, double outside, double tolerance)
+    private static void CheckStock(bool customStock, double stock)
     {
         if (!customStock || double.IsNaN(stock) || Math.Abs(stock) > 1e-12) throw new InvalidOperationException("NX не сохранил нулевой припуск границы гравировки.");
-        if (!customTolerance || !(inside > 0) || !(outside > 0) || inside > tolerance * (1 + 1e-8) || outside > tolerance * (1 + 1e-8))
-            throw new InvalidOperationException("NX не сохранил допуск границы гравировки 0,001 мм.");
     }
 }
 // END ENGRAVING CAM BOUNDARY ADAPTER
@@ -1279,7 +1277,7 @@ public static class EngravingCenterlines
             { nodes[a].Links.Add(b); nodes[b].Links.Add(a); }
         }
         nodes = MergeNearNodes(nodes, tolerance * 0.05, region);
-        PruneCorners(nodes, step);
+        PruneCorners(nodes, step, region, tolerance);
         nodes = MergeNearNodes(nodes, step * 2, region, true);
         nodes = MergeNearNodes(nodes, tolerance * 2, region);
         CheckTopology(nodes, region.Loops.Count - 1);
@@ -1401,10 +1399,11 @@ public static class EngravingCenterlines
         }
         return merged;
     }
-    private static void PruneCorners(List<Node> nodes, double step)
+    private static void PruneCorners(List<Node> nodes, double step, Region region, double tolerance)
     {
         // Remove only short terminal branches whose radius collapses towards a convex outline corner.
         // Genuine short strokes with a full-width rounded end survive this condition.
+        List<StraightAxis> axes = StraightAxes(region, tolerance);
         for (int pass = 0; pass < 4; pass++)
         {
             List<Pair> remove = new List<Pair>();
@@ -1421,12 +1420,50 @@ public static class EngravingCenterlines
                 }
                 // Acute miter corners create longer medial spurs than a right angle.
                 // Retain the radius-collapse test so full-width short stems survive.
-                if (nodes[current].Links.Count >= 3 && length < nodes[current].Radius * 4 + step
-                    && nodes[i].Radius < nodes[current].Radius * 0.35) remove.AddRange(branch);
+                if (nodes[current].Links.Count >= 3 && nodes[i].Radius < nodes[current].Radius * 0.35
+                    && (length < nodes[current].Radius * 4 + step
+                        || IsMiterSpur(nodes, branch, i, current, axes, region, step, tolerance))) remove.AddRange(branch);
             }
             if (remove.Count == 0) break;
             foreach (Pair p in remove) { nodes[p.A].Links.Remove(p.B); nodes[p.B].Links.Remove(p.A); }
         }
+    }
+    private static bool IsMiterSpur(List<Node> nodes, List<Pair> branch, int tip, int junction,
+        List<StraightAxis> axes, Region region, double step, double tolerance)
+    {
+        // An acute corner can have a long medial branch, even on a thin triangular ring.
+        // Prove it belongs to the miter of TWO constant-width strokes: both outline walls
+        // must have an opposite parallel wall and their center axes must meet inside the face.
+        // A real tapered arm or a short flat-ended stem does not satisfy this construction.
+        for (int i = 0; i < axes.Count; i++) for (int j = i + 1; j < axes.Count; j++)
+        {
+            StraightAxis a = axes[i], b = axes[j]; P center;
+            if (!SharpIntersection(a, b, region, tolerance, out center)) continue;
+            double radius = Math.Max(a.Radius, b.Radius);
+            double miterReach = (a.Radius + b.Radius) / Math.Abs(P.Cross(a.Direction, b.Direction));
+            if ((nodes[junction].Point - center).Length > Math.Max(radius * 3, miterReach)) continue;
+            foreach (Segment x in a.Sides) foreach (Segment y in b.Sides)
+                foreach (P vertex in new P[] { x.A, x.B })
+                {
+                    if (Math.Min((vertex - y.A).Length, (vertex - y.B).Length) > tolerance * 0.1) continue;
+                    if ((nodes[tip].Point - vertex).Length > step * 3) continue;
+                    P alongX = ((vertex - x.A).Length < tolerance * 0.1 ? x.B : x.A) - vertex;
+                    P alongY = ((vertex - y.A).Length < tolerance * 0.1 ? y.B : y.A) - vertex;
+                    P direction = (alongX.Unit() + alongY.Unit()).Unit(); double reach = (center - vertex).Length;
+                    if (reach <= radius || direction.Length < 0.5 || P.Dot(nodes[junction].Point - center, direction) < -radius) continue;
+                    bool miter = true;
+                    foreach (Pair edge in branch) foreach (int index in new int[] { edge.A, edge.B })
+                    {
+                        P p = nodes[index].Point; double along = P.Dot(p - vertex, direction);
+                        if (along < -step || along > reach + Math.Max(radius * 3, miterReach)
+                            || Math.Abs(P.Cross(direction, p - vertex)) > step * 2
+                            || Math.Abs((p - Closest(x, p)).Length - nodes[index].Radius) > step
+                            || Math.Abs((p - Closest(y, p)).Length - nodes[index].Radius) > step) miter = false;
+                    }
+                    if (miter) return true;
+                }
+        }
+        return false;
     }
     private static List<Stroke> Trace(List<Node> nodes)
     {
@@ -1612,7 +1649,10 @@ public static class EngravingCenterlines
             if (Math.Min(Math.Min((x.A - y.A).Length, (x.A - y.B).Length), Math.Min((x.B - y.A).Length, (x.B - y.B).Length)) < tolerance * 0.1) sharp = true;
         if (!sharp) return false;
         corner = a.Origin + a.Direction * (P.Cross(b.Origin - a.Origin, b.Direction) / cross);
-        return a.Outside(corner) <= a.Radius * 4 && b.Outside(corner) <= b.Radius * 4
+        // A fixed four-radius reach clips the miter of acute triangles (e.g. the digit 4).
+        // Offset-line intersections have an angle-dependent reach, bounded by these two widths.
+        double reach = (a.Radius + b.Radius) / Math.Abs(cross) + tolerance;
+        return a.Outside(corner) <= reach && b.Outside(corner) <= reach
             && region.Inside(corner) && region.Distance(corner) >= Math.Min(a.Radius, b.Radius) * 0.5;
     }
     private static void RestoreStraightStrokes(List<Stroke> strokes, Region region, double tolerance)
@@ -1628,7 +1668,7 @@ public static class EngravingCenterlines
             {
                 P corner; if (!SharpIntersection(axis, other, region, tolerance, out corner)) continue;
                 double d = (corner - p).Length;
-                if (d <= Math.Min(axis.Radius, other.Radius) * 0.6 && d < distance) { q = corner; distance = d; }
+                if (d <= Math.Min(axis.Radius, other.Radius) && d < distance) { q = corner; distance = d; }
             }
             if (!region.Inside(q)) continue;
             bool safe = true;
@@ -1668,7 +1708,7 @@ public static class EngravingCenterlines
                 for (int k = a.Last; k < b.First; k++)
                 { distance = Math.Min(distance, (corner - Closest(new Segment(p[k], p[k + 1]), corner)).Length); length += (p[k + 1] - p[k]).Length; }
                 double cornerReach = Math.Max(radius, Math.Max(a.Axis.Outside(corner), b.Axis.Outside(corner)));
-                if (length <= radius * 8 && distance <= cornerReach * 0.65
+                if (length <= Math.Max(radius * 8, cornerReach * 4) && distance <= cornerReach + tolerance * 2
                     && region.SegmentInside(a.Axis.Project(p[a.First]), corner, tolerance)
                     && region.SegmentInside(corner, b.Axis.Project(p[b.Last]), tolerance))
                 { a.JoinNext = true; a.Corner = corner; }
