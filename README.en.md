@@ -32,24 +32,23 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1 | Trial reflection of one part and MCS transfer; no components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.01 | Trial reflection of one part and MCS transfer; no components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Engraving centerlines for PLANAR_MILL V1.10 · 2026-11-14
+### Latest update — Mirrored CAM project trial V1.01 · 2026-11-14
+
+Pick a planar face or datum plane directly in NX, including oblique planes. Fix the stop at 1345005 by querying the geometry provider and explicitly listing unavailable channels. A complete NX run is not yet confirmed.
+
+Update **«Зеркальная копия CAM-проекта — тест» to V1.01** in the updater. [Test workflow and limitations](docs/en/mirror-project.md).
+
+
+### Also released — Engraving centerlines for PLANAR_MILL V1.10 · 2026-11-14
 
 Rework junction handling from the supporting outline walls. Distinguish an outer corner bevel from a true stroke cap and extend support for tapering straight strokes. Remove short false branches on curved portions only when neighbouring boundary walls support that classification. These rules do not depend on character or font names.
 
 Update **«Оси гравировки для PLANAR_MILL»** to **V1.10** in the updater. [Workflow, limits and validation](docs/en/planar-mill-curves.md).
-
-### Also released — Mirrored CAM project trial V1 · 2026-11-14
-
-First experiment without components: a separate PRT copy, geometry reflection, MCS/RCS transfer and removal of calculated toolpaths while retaining operations. The result is not saved automatically. Numerical spatial settings are not reflected yet; execution in NX remains unverified.
-
-In the updater, select **«Зеркальная копия CAM-проекта — тест» V1**. [Test workflow and limitations](docs/en/mirror-project.md).
-
-
 
 ## Installation
 

@@ -13,16 +13,47 @@ M = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(M)
 
 
+def axis_plane(axis=0, offset=0.0):
+    origin, normal = [0.0]*3, [0.0]*3
+    origin[axis], normal[axis] = offset, 1.0
+    return M.MirrorPlane(origin, normal)
+
+
 class GeometryTests(unittest.TestCase):
+    def test_oblique_plane_reflection_and_opposite_normal(self):
+        plane = M.MirrorPlane([1, 1, 0], [1, 1, 0])
+        opposite = M.MirrorPlane([1, 1, 0], [-7, -7, 0])
+        point = [3, 0, 5]
+        self.assertTrue(M.close_values(plane.point(point), [2, -1, 5]))
+        self.assertTrue(M.close_values(plane.point(plane.point(point)), point))
+        self.assertTrue(M.close_values(plane.point(point), opposite.point(point)))
+        frame = [1,0,0,0,1,0,0,0,1]
+        mirrored = M.reflected_frame(frame, plane)
+        self.assertAlmostEqual(M.dot(M.cross(mirrored[:3], mirrored[3:6]), mirrored[6:]), 1.0)
+
+    def test_tilted_box_is_checked_in_fixed_plane_frame(self):
+        plane = M.MirrorPlane([7,-4,2], [1,2,3])
+        basis = [plane.basis[i:i+3] for i in (0,3,6)]
+        corner, lengths = [12,-2,9], [4,8,3]
+        before = M.local_box(plane, corner, basis, lengths)
+        reflected_directions = [plane.vector(row) for row in basis]
+        after = M.local_box(plane, plane.point(corner), reflected_directions, lengths)
+        self.assertTrue(M.close_values(after, M.reflected_box(before, 0, 0)))
+
+    def test_invalid_plane_normal_is_rejected(self):
+        for normal in ([0,0,0], [float('nan'),0,1]):
+            with self.assertRaises(ValueError):
+                M.MirrorPlane([0,0,0], normal)
+
     def test_offset_reflection_is_involution_and_fixes_plane(self):
         for axis in range(3):
             for offset in (-42.5, 0.0, 17.0):
                 point = [8.0, -12.0, 36.0]
-                reflected = M.reflect(point, axis, offset)
-                self.assertEqual(point, M.reflect(reflected, axis, offset))
+                reflected = axis_plane(axis, offset).point(point)
+                self.assertEqual(point, axis_plane(axis, offset).point(reflected))
                 on_plane = list(point)
                 on_plane[axis] = offset
-                self.assertEqual(on_plane, M.reflect(on_plane, axis, offset))
+                self.assertEqual(on_plane, axis_plane(axis, offset).point(on_plane))
 
     def test_bounding_box_encloses_reflected_corners(self):
         box = [-8.0, 3.0, -2.0, 19.0, 41.0, 10.0]
@@ -38,16 +69,16 @@ class GeometryTests(unittest.TestCase):
         frames = [[1,0,0,0,1,0,0,0,1], [1,0,0,0,-1,0,0,0,-1], [c,s,0,-s,c,0,0,0,1]]
         for frame in frames:
             for axis in range(3):
-                mirrored = M.reflected_frame(frame, axis)
+                mirrored = M.reflected_frame(frame, axis_plane(axis))
                 x, y, z = mirrored[:3], mirrored[3:6], mirrored[6:]
                 self.assertAlmostEqual(M.dot(M.cross(x, y), z), 1.0)
-                self.assertTrue(M.close_values(M.reflected_frame(mirrored, axis), frame))
+                self.assertTrue(M.close_values(M.reflected_frame(mirrored, axis_plane(axis)), frame))
                 self.assertEqual(z, M.reflect(frame[6:], axis))
 
     def test_invalid_mcs_and_nonfinite_verification_are_rejected(self):
         for frame in ([1,0,0,0,1,0,0,0,-1], [2,0,0,0,1,0,0,0,1]):
             with self.assertRaises(ValueError):
-                M.reflected_frame(frame, 0)
+                M.reflected_frame(frame, axis_plane())
         self.assertFalse(M.close_values([float("nan")], [float("nan")]))
 
 
@@ -147,7 +178,119 @@ class NativeArrayTests(unittest.TestCase):
                 result[index] = point[index]
         reader.map_point = broken_map
         with self.assertRaisesRegex(RuntimeError, "Матрица NX"):
-            reader.reflection_matrix(0, 17.0)
+            reader.reflection_matrix(axis_plane(0, 17.0))
+
+
+class ChannelTests(unittest.TestCase):
+    def test_snapshot_retains_provider_geometry_and_marks_unsupported_channel(self):
+        reader = object.__new__(M.NativeCam)
+        reader.items, reader.boundaries, reader.item_entity = object(), object(), object()
+        def pointers(function, tag, kind):
+            if function is reader.items and kind == 0:
+                if tag == 1:
+                    raise M.NativeApiError(1345005, 'ask_items', 'wrong type')
+                return [1234]
+            if function is reader.items and kind == 3:
+                raise M.NativeApiError(1345005, 'ask_items', 'wrong type')
+            return []
+        reader.pointers = pointers
+        reader.geometry_provider = lambda tag, kind: 2 if kind == 0 else 0
+        reader.entity = lambda *a, **kw: 700
+        trial = object.__new__(M.Trial)
+        trial.nodes = [types.SimpleNamespace(Tag=1, Name='WORKPIECE')]
+        trial.native = reader
+        trial.unavailable, trial.refs = set(), {}
+        trial.reference = lambda tag: trial.refs.setdefault(tag, 'face')
+        trial.nx = types.SimpleNamespace(ScCollector=type('Collector', (), {}),
+            TaggedObjectManager=types.SimpleNamespace(GetTaggedObject=lambda tag: object()),
+            CAM=types.SimpleNamespace(Operation=type('Operation', (), {})))
+        snapshot = trial.geometry_snapshot(collect=True)
+        self.assertEqual(snapshot[(1,0)][0:2], ('provider',2))
+        self.assertEqual(snapshot[(1,0)][4], (700,))
+        self.assertEqual(snapshot[(1,3)][0], 'unavailable')
+        self.assertIn(700, trial.refs)
+        self.assertEqual(len(trial.unavailable), 1)
+        self.assertEqual(snapshot, trial.geometry_snapshot())
+
+    def test_wrong_type_on_container_uses_real_geometry_provider(self):
+        reader = object.__new__(M.NativeCam)
+        calls = []
+        def pointers(function, tag, kind):
+            calls.append(tag)
+            if tag == 1:
+                raise M.NativeApiError(1345005, 'ask_items', 'Object is not the desired type')
+            return [1234]
+        reader.pointers = pointers
+        reader.geometry_provider = lambda tag, kind: 2
+        self.assertEqual(reader.channel(None, 1, 0), ('provider', 2, [1234]))
+        self.assertEqual(calls, [1,2])
+
+    def test_unavailable_is_not_reported_as_valid_empty_geometry(self):
+        reader = object.__new__(M.NativeCam)
+        def fail(*args):
+            raise M.NativeApiError(1345005, 'ask_items', 'wrong type')
+        reader.pointers = fail
+        reader.geometry_provider = lambda tag, kind: 0
+        self.assertEqual(reader.channel(None, 1, 0), ('unavailable', 0, []))
+        reader.pointers = lambda *args: []
+        self.assertEqual(reader.channel(None, 1, 0), ('read', 1, []))
+
+    def test_unknown_error_is_not_ignored(self):
+        reader = object.__new__(M.NativeCam)
+        def fail(*args):
+            raise M.NativeApiError(99999, 'ask_items', 'unexpected')
+        reader.pointers = fail
+        reader.geometry_provider = lambda *args: self.fail('must not retry unrelated errors')
+        with self.assertRaises(M.NativeApiError):
+            reader.channel(None, 1, 0)
+
+    def test_wrong_type_at_provider_is_reported_without_loop(self):
+        reader = object.__new__(M.NativeCam)
+        def fail(*args):
+            raise M.NativeApiError(1345005, 'ask_items', 'wrong type')
+        reader.pointers = fail
+        reader.geometry_provider = lambda *args: 1
+        self.assertEqual(reader.channel(None, 1, 0), ('unavailable', 1, []))
+
+
+class PlaneSelectionTests(unittest.TestCase):
+    def test_plane_comes_from_face_surface_not_cursor_position(self):
+        class Face:
+            Tag = 10
+            IsOccurrence = False
+            OwningPart = types.SimpleNamespace(Tag=1)
+        nx = types.SimpleNamespace(Face=Face, DatumPlane=type('Datum', (), {}))
+        uf = types.SimpleNamespace(Modl=types.SimpleNamespace(AskFaceData=lambda tag: (22,[1,1,0],[1,1,0],None,0,0,1)))
+        plane = M.plane_from_object(Face(), types.SimpleNamespace(Tag=1), nx, uf)
+        self.assertTrue(M.close_values(plane.point([3,0,5]), [2,-1,5]))
+        uf.Modl.AskFaceData = lambda tag: (16,[1,1,0],[1,1,0],None,0,0,1)
+        with self.assertRaisesRegex(ValueError, 'плоская'):
+            M.plane_from_object(Face(), types.SimpleNamespace(Tag=1), nx, uf)
+
+    def test_datum_plane_and_other_part_rejection(self):
+        class Datum:
+            Tag = 20
+            IsOccurrence = False
+            OwningPart = types.SimpleNamespace(Tag=1)
+            Origin = types.SimpleNamespace(X=2,Y=0,Z=0)
+            Normal = types.SimpleNamespace(X=3,Y=0,Z=0)
+        nx = types.SimpleNamespace(Face=type('Face', (), {}), DatumPlane=Datum)
+        plane = M.plane_from_object(Datum(), types.SimpleNamespace(Tag=1), nx, None)
+        self.assertEqual(plane.point([7,8,9]), [-3,8,9])
+        with self.assertRaisesRegex(ValueError, 'текущей детали'):
+            M.plane_from_object(Datum(), types.SimpleNamespace(Tag=2), nx, None)
+
+    def test_cancel_selection_does_not_read_geometry(self):
+        selection = types.SimpleNamespace(
+            MaskTriple=lambda: types.SimpleNamespace(),
+            SelectionScope=types.SimpleNamespace(WorkPart=1),
+            SelectionAction=types.SimpleNamespace(ClearAndEnableSpecific=1),
+            Response=types.SimpleNamespace(Cancel=2, Back=3))
+        ui = types.SimpleNamespace(SelectionManager=types.SimpleNamespace(SelectTaggedObject=lambda *a: (2,None,None)))
+        nx = types.SimpleNamespace(Selection=selection, UI=types.SimpleNamespace(GetUI=lambda: ui),
+            UF=types.SimpleNamespace(UFConstants=types.SimpleNamespace(UF_solid_type=70,UF_UI_SEL_FEATURE_PLANAR_FACE=20,UF_datum_plane_type=197)))
+        with patch.object(M, 'plane_from_object', side_effect=AssertionError('must not read')):
+            self.assertIsNone(M.select_mirror_plane(nx, None, None))
 
 
 class TransactionTests(unittest.TestCase):
@@ -160,7 +303,7 @@ class TransactionTests(unittest.TestCase):
             session = types.SimpleNamespace(Parts=types.SimpleNamespace(Display=part, Work=part))
             with patch.object(M, "copy_exclusive", side_effect=AssertionError("must not copy")):
                 with self.assertRaisesRegex(RuntimeError, "несохранённые"):
-                    M.execute(session, None, None, 0, 0)
+                    M.execute(session, None, None, axis_plane())
             self.assertEqual(len(list(Path(folder).iterdir())), 1)
 
     def run_with_trial(self, fails):
@@ -196,7 +339,7 @@ class TransactionTests(unittest.TestCase):
                     if self.part.Tag != 2:
                         raise AssertionError("source mutated")
             with patch.object(M, "Trial", Trial):
-                report = M.execute(session, nx, None, 0, 0)
+                report = M.execute(session, nx, None, axis_plane())
             self.assertEqual(source.read_bytes(), b"prt-binary")
             target = Path(folder) / "source_MIRROR_TEST_001.prt"
             self.assertEqual(target.read_bytes(), b"prt-binary")

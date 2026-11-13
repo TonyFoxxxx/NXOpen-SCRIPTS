@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.01
+
+Pick a planar face or datum plane directly in NX, including oblique planes. Check bounds in the selected-plane frame. On wrong-type error 1345005, query the geometry provider; explicitly record unavailable channels instead of treating them as empty. Other errors stop the trial.
+
+Twenty-six portable checks passed. A complete successful V1.01 run in NX remains unconfirmed; numerical spatial settings are still not transformed.
+
 ## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.10
 
 Rework junction handling from the supporting outline walls. Distinguish an outer corner bevel from a true stroke cap and extend support for tapering straight strokes. Remove short false branches on curved portions only when neighbouring boundary walls support that classification. These rules do not depend on character or font names.

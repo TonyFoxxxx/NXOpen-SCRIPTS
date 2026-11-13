@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1
-SCRIPT_VERSION = "V1"
+# SCRIPT_VERSION: V1.01
+SCRIPT_VERSION = "V1.01"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -42,14 +42,45 @@ def dot(a, b):
     return sum(x*y for x, y in zip(a, b))
 
 
-def reflected_frame(matrix, axis):
+class MirrorPlane:
+    def __init__(self, origin, normal):
+        self.origin = tuple(float(v) for v in origin)
+        vector = tuple(float(v) for v in normal)
+        if len(self.origin) != 3 or len(vector) != 3 or not all(math.isfinite(v) for v in self.origin + vector):
+            raise ValueError("Некорректная плоскость отражения")
+        length = math.sqrt(dot(vector, vector))
+        if length < 1e-12:
+            raise ValueError("Нормаль плоскости имеет нулевую длину")
+        self.normal = tuple(v / length for v in vector)
+        seed = [0.0, 0.0, 0.0]
+        seed[min(range(3), key=lambda i: abs(self.normal[i]))] = 1.0
+        y = cross(seed, self.normal)
+        size = math.sqrt(dot(y, y))
+        y = [v / size for v in y]
+        self.basis = tuple(self.normal) + tuple(y) + tuple(cross(self.normal, y))
+
+    def vector(self, value):
+        distance = dot(value, self.normal)
+        return [float(value[i]) - 2.0 * distance * self.normal[i] for i in range(3)]
+
+    def point(self, value):
+        delta = [float(value[i]) - self.origin[i] for i in range(3)]
+        delta = self.vector(delta)
+        return [self.origin[i] + delta[i] for i in range(3)]
+
+    def local(self, value):
+        delta = [float(value[i]) - self.origin[i] for i in range(3)]
+        return [dot(delta, self.basis[i:i+3]) for i in (0, 3, 6)]
+
+
+def reflected_frame(matrix, plane):
     """Preserve reflected X and Z; reconstruct Y for a right-handed MCS."""
     if len(matrix) != 9 or not all(math.isfinite(x) for x in matrix):
         raise ValueError("Некорректная матрица MCS")
     x, y, z = matrix[:3], matrix[3:6], matrix[6:9]
     if max(abs(dot(v, v)-1.0) for v in (x, y, z)) > 1e-6 or dot(cross(x, y), z) < 0.999999:
         raise ValueError("MCS не является ортонормированной правой системой")
-    x, z = reflect(x, axis), reflect(z, axis)
+    x, z = plane.vector(x), plane.vector(z)
     return x + cross(z, x) + z
 
 
@@ -63,6 +94,22 @@ def reflected_box(box, axis, offset):
 def close_values(a, b, tolerance=1e-5):
     return len(a) == len(b) and all(math.isfinite(x) and math.isfinite(y) and
         abs(x-y) <= tolerance + 1e-9*max(abs(x), abs(y)) for x, y in zip(a, b))
+
+
+def local_box(plane, corner, directions, distances):
+    """Convert an exact NX oriented box into the fixed mirror-plane frame."""
+    if len(directions) == 9:
+        directions = [directions[i:i+3] for i in (0, 3, 6)]
+    if len(corner) != 3 or len(directions) != 3 or any(len(row) != 3 for row in directions) or len(distances) != 3:
+        raise RuntimeError("Некорректный ориентированный габарит NX")
+    corners = []
+    for bits in range(8):
+        point = [corner[i] + sum(directions[j][i] * distances[j]
+                 for j in range(3) if bits & (1 << j)) for i in range(3)]
+        corners.append(plane.local(point))
+    if not all(math.isfinite(v) for p in corners for v in p):
+        raise RuntimeError("Неконечные координаты габарита NX")
+    return [min(p[i] for p in corners) for i in range(3)] + [max(p[i] for p in corners) for i in range(3)]
 
 
 def digest(path):
@@ -105,6 +152,12 @@ def copy_exclusive(source):
             raise
 
 
+class NativeApiError(RuntimeError):
+    def __init__(self, code, context, message):
+        self.code, self.context = int(code), context
+        super().__init__(context + ": " + str(code) + " — " + message)
+
+
 class NativeCam:
     """Documented UF C readers; avoids language-specific CAM enum aliases.
 
@@ -136,6 +189,7 @@ class NativeCam:
         self.free = self.bind("UF_free", (p,), None)
         self.fail_message = self.bind("UF_get_fail_message", (i, p))
         self.items = self.bind("UF_CAMGEOM_ask_items", (u, i, ip, pp))
+        self.provider = self.bind("UF_CAMGEOM_ask_geom_provider", (u, i, ctypes.POINTER(u)))
         self.item_entity = self.bind("UF_CAMGEOM_ask_item_entity", (p, ctypes.POINTER(u)))
         self.collector = self.bind("UF_CAMGEOM_ask_collector_items", (p, ip, pp))
         self.boundaries = self.bind("UF_CAMBND_ask_boundaries", (u, i, ip, pp))
@@ -159,7 +213,37 @@ class NativeCam:
             buffer = ctypes.create_string_buffer(2048)
             self.fail_message(code, buffer)
             message = buffer.value.decode("utf-8", errors="replace")
-            raise RuntimeError(context + ": " + str(code) + " — " + message)
+            raise NativeApiError(code, context, message)
+
+    def geometry_provider(self, tag, kind):
+        provider = ctypes.c_uint32()
+        self.check(self.provider(tag, kind, ctypes.byref(provider)), "UF_CAMGEOM_ask_geom_provider")
+        return int(provider.value)
+
+    def channel(self, function, node_tag, kind):
+        """Wrong-type means unavailable, never an empty validated selection.
+
+        Query the geometry provider when a container cannot own this channel.
+        All other errors remain fatal; the caller records unavailable coverage.
+        """
+        try:
+            return ("read", node_tag, self.pointers(function, node_tag, kind))
+        except NativeApiError as exc:
+            if exc.code != 1345005:
+                raise
+        try:
+            provider = self.geometry_provider(node_tag, kind)
+        except NativeApiError as exc:
+            if exc.code != 1345005:
+                raise
+            return ("unavailable", 0, [])
+        if provider and provider != node_tag:
+            try:
+                return ("provider", provider, self.pointers(function, provider, kind))
+            except NativeApiError as exc:
+                if exc.code != 1345005:
+                    raise
+        return ("unavailable", provider, [])
 
     def pointers(self, function, *args):
         count, data = ctypes.c_int(), ctypes.c_void_p()
@@ -179,7 +263,7 @@ class NativeCam:
         tag = ctypes.c_uint32()
         self.check(function(item, ctypes.byref(tag)), function.__name__)
         if not tag.value and not allow_zero:
-            raise RuntimeError("Найдена неассоциативная граница без ссылки на геометрию. V1 её пока не переносит.")
+            raise RuntimeError("Найдена неассоциативная граница без ссылки на геометрию. Тестовая версия её пока не переносит.")
         return tag.value
 
     def collector_entities(self, item):
@@ -214,16 +298,16 @@ class NativeCam:
                             self.free(ctypes.c_void_p(entries[n]))
                 self.free(data)
 
-    def reflection_matrix(self, axis, offset):
-        origin, normal = (ctypes.c_double * 3)(), (ctypes.c_double * 3)()
-        origin[axis], normal[axis] = offset, 1.0
+    def reflection_matrix(self, plane):
+        origin = (ctypes.c_double * 3)(*plane.origin)
+        normal = (ctypes.c_double * 3)(*plane.normal)
         matrix = (ctypes.c_double * 16)()
         self.check(self.mirror_matrix(origin, normal, matrix), "UF_MTX4_mirror")
         # Verify using NX's own point/matrix convention before touching geometry.
         for point in ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]):
             result = (ctypes.c_double * 3)()
             self.map_point((ctypes.c_double * 3)(*point), matrix, result)
-            if not close_values(result, reflect(point, axis, offset), 1e-9):
+            if not close_values(result, plane.point(point), 1e-9):
                 raise RuntimeError("Матрица NX не прошла проверку отражения контрольных точек")
         return list(matrix)
 
@@ -269,9 +353,9 @@ def cam_nodes(setup, nx):
 
 
 class Trial:
-    def __init__(self, session, nx, uf, part, axis, offset, lines):
+    def __init__(self, session, nx, uf, part, plane, lines):
         self.session, self.nx, self.uf, self.part = session, nx, uf, part
-        self.axis, self.offset, self.lines = axis, offset, lines
+        self.plane, self.lines = plane, lines
         self.stage = "Подготовка копии"
         self.native = NativeCam()
         self.bodies = list(part.Bodies)
@@ -280,6 +364,8 @@ class Trial:
         self.root, self.nodes = cam_nodes(self.setup, nx)
         self.refs, self.bounds, self.frames, self.mcs_bindings = {}, {}, {}, []
         self.raw_spatial = []
+        self.unavailable = set()
+        self.box_csys = None
         self.mcs_expected = {}
         if not self.bodies or not self.operations:
             raise RuntimeError("В копии должны быть тела и CAM-операции")
@@ -310,7 +396,7 @@ class Trial:
         obj = self.nx.TaggedObjectManager.GetTaggedObject(tag)
         owner = getattr(obj, "OwningPart", None)
         if owner is not None and int(owner.Tag) != int(self.part.Tag):
-            raise RuntimeError("Обнаружена ссылка на другую деталь. V1 работает только с одной деталью.")
+            raise RuntimeError("Обнаружена ссылка на другую деталь. Тестовая версия работает только с одной деталью.")
         if bool(getattr(obj, "IsOccurrence", False)):
             raise RuntimeError("Обнаружено вхождение компонента")
         self.refs[tag] = obj
@@ -319,8 +405,11 @@ class Trial:
         result = {}
         for node in self.nodes:
             for kind, label in enumerate(GEOMETRY_KINDS):
-                context = str(node.Name) + "/" + label
-                items = self.native.pointers(self.native.items, int(node.Tag), kind)
+                context = str(node.Name) + " [" + type(node).__name__ + "]/" + label
+                self.stage = "Чтение геометрии: " + context + " / элементы"
+                item_state, item_owner, items = self.native.channel(self.native.items, int(node.Tag), kind)
+                if collect and item_state == "unavailable":
+                    self.unavailable.add(context + " / элементы")
                 tags = []
                 for item in items:
                     tag = self.native.entity(self.native.item_entity, item, allow_zero=True)
@@ -330,26 +419,43 @@ class Trial:
                     else:
                         tags.append(tag)
                 boundaries = []
-                for handle in self.native.pointers(self.native.boundaries, int(node.Tag), kind):
+                self.stage = "Чтение геометрии: " + context + " / границы"
+                bnd_state, bnd_owner, handles = self.native.channel(self.native.boundaries, int(node.Tag), kind)
+                if collect and bnd_state == "unavailable":
+                    self.unavailable.add(context + " / границы")
+                for handle in handles:
                     data = self.uf.Cambnd.AskBoundaryData(handle)
                     # Face-derived boundaries use an automatically evaluated plane.
                     # Preserving a manual plane also requires orientation/material-side handling.
                     if int(field(data, "plane_type")) != 1:
-                        raise RuntimeError(context + ": граница с заданной плоскостью пока не поддерживается в V1")
+                        raise RuntimeError(context + ": граница с заданной плоскостью пока не поддерживается в этой версии")
                     members = self.native.pointers(self.native.members, handle)
                     member_tags = [self.native.entity(self.native.member_entity, item) for item in members]
                     boundaries.append(tuple(member_tags))
                     tags.extend(member_tags)
-                result[(int(node.Tag), kind)] = (tuple(tags), tuple(boundaries))
+                result[(int(node.Tag), kind)] = (item_state, item_owner, bnd_state, bnd_owner,
+                                               tuple(tags), tuple(boundaries))
                 if collect:
                     for tag in tags:
                         self.reference(tag)
-            if collect and isinstance(node, self.nx.CAM.Operation):
+            if isinstance(node, self.nx.CAM.Operation):
                 kinds = {"PlanarMilling": (0, 1), "VolumeBased25DMillingOperation": (0, 1),
                          "SurfaceContour": (1,), "TpMultiAxisDeburring": ()}[type(node).__name__]
                 for kind in kinds:
-                    if self.native.custom_count(int(node.Tag), kind):
-                        raise RuntimeError(str(node.Name) + ": пользовательские стартовые/предсверлильные точки пока не поддерживаются в V1")
+                    self.stage = "Чтение пользовательских точек: " + str(node.Name) + " / " + str(kind)
+                    try:
+                        count = self.native.custom_count(int(node.Tag), kind)
+                    except NativeApiError as exc:
+                        if exc.code != 1345005:
+                            raise
+                        count = "unavailable"
+                        if collect:
+                            self.unavailable.add(str(node.Name) + " / пользовательские точки " + str(kind))
+                    result[(int(node.Tag), "custom", kind)] = count
+                    if isinstance(count, int) and count:
+                        raise RuntimeError(str(node.Name) + ": пользовательские стартовые/предсверлильные точки пока не поддерживаются в этой версии")
+        if collect and not self.refs:
+            raise RuntimeError("Не удалось получить ни одной CAM-ссылки на геометрию. Недоступные каналы: " + "; ".join(sorted(self.unavailable)[:12]))
         return result
 
     def capture_parameters(self):
@@ -368,7 +474,7 @@ class Trial:
                         if tag not in self.frames:
                             matrix, origin = self.uf.Csys.AskCsysInfo(tag)
                             axes = list(self.uf.Csys.AskMatrixValues(matrix))
-                            reflected_frame(axes, self.axis)
+                            reflected_frame(axes, self.plane)
                             self.frames[tag] = (list(origin), axes)
                         if state == 2 or int(node.Tag) == int(self.root.Tag):
                             self.mcs_bindings.append((node, index, tag))
@@ -384,6 +490,8 @@ class Trial:
             raise RuntimeError("Не найдены системы координат MCS")
 
     def capture_topology(self):
+        matrix_tag = self.uf.Csys.CreateMatrix(self.plane.basis)
+        self.box_csys = self.uf.Csys.CreateTempCsys(self.plane.origin, matrix_tag)
         result = {}
         for body in self.bodies:
             self.reference(body.Tag)
@@ -391,8 +499,17 @@ class Trial:
             result[int(body.Tag)] = (tuple(sorted(int(f.Tag) for f in faces)),
                                      tuple(sorted(int(e.Tag) for e in edges)))
             for obj in [body] + faces + edges:
-                self.bounds[int(obj.Tag)] = list(self.uf.Modl.AskBoundingBox(obj.Tag))
+                self.bounds[int(obj.Tag)] = self.bounding_box(obj.Tag)
         return result
+
+    def bounding_box(self, tag):
+        obj = self.refs.get(int(tag))
+        if obj is not None and isinstance(obj, self.nx.Point):
+            value = obj.Coordinates
+            point = self.plane.local((value.X, value.Y, value.Z))
+            return point + point
+        corner, directions, distances = self.uf.Modl.AskBoundingBoxExact(tag, self.box_csys)
+        return local_box(self.plane, corner, directions, distances)
 
     def operation_snapshot(self):
         return [(int(op.Tag), str(op.Name), type(op).__name__,
@@ -414,19 +531,19 @@ class Trial:
             if isinstance(obj, transformable):
                 targets[tag] = obj
                 if isinstance(obj, (self.nx.Curve, self.nx.Point)):
-                    self.bounds[tag] = list(self.uf.Modl.AskBoundingBox(tag))
+                    self.bounds[tag] = self.bounding_box(tag)
         self.lines.append("Тела: " + str(len(self.bodies)) + "; операции: " + str(len(self.operations)))
         self.lines.append("Проверяемые тела/грани/рёбра/кривые/точки: " + str(len(self.bounds)))
         self.lines.append("MCS/RCS, включая корневую систему: " + str(len(self.frames)))
         self.stage = "Создание матрицы отражения"
-        matrix = self.native.reflection_matrix(self.axis, self.offset)
+        matrix = self.native.reflection_matrix(self.plane)
         self.stage = "Отражение геометрии и её модельных родителей"
         self.uf.Modl.TransformEntities(len(targets), list(targets), matrix)
         self.stage = "Перенос систем координат"
         replacement = {}
         for tag, (old_origin, axes) in self.frames.items():
-            origin = reflect(old_origin, self.axis, self.offset)
-            axes = reflected_frame(axes, self.axis)
+            origin = self.plane.point(old_origin)
+            axes = reflected_frame(axes, self.plane)
             matrix_tag = self.uf.Csys.CreateMatrix(axes)
             replacement[tag] = self.uf.Csys.CreateCsys(origin, matrix_tag)
         for node, index, old_tag in self.mcs_bindings:
@@ -448,10 +565,10 @@ class Trial:
             if current != topology[int(body.Tag)]:
                 raise RuntimeError("Изменились идентификаторы граней/рёбер; привязки не подтверждены")
         for tag, box in self.bounds.items():
-            actual = list(self.uf.Modl.AskBoundingBox(tag))
-            if not close_values(actual, reflected_box(box, self.axis, self.offset)):
+            actual = self.bounding_box(tag)
+            if not close_values(actual, reflected_box(box, 0, 0.0)):
                 raise RuntimeError("Не подтверждено отражение объекта " + str(tag) +
-                                   "\nОжидалось: " + str(reflected_box(box, self.axis, self.offset)) +
+                                   "\nОжидалось в СК плоскости: " + str(reflected_box(box, 0, 0.0)) +
                                    "\nПолучено: " + str(actual))
         if self.geometry_snapshot() != geometry:
             raise RuntimeError("Изменились ссылки на выбранную CAM-геометрию/границы")
@@ -462,14 +579,20 @@ class Trial:
             matrix_tag, origin = self.uf.Csys.AskCsysInfo(actual)
             axes = self.uf.Csys.AskMatrixValues(matrix_tag)
             expected_origin, expected_axes = self.frames[old_tag]
-            if not close_values(origin, reflect(expected_origin, self.axis, self.offset)) or not close_values(axes, reflected_frame(expected_axes, self.axis)):
+            if not close_values(origin, self.plane.point(expected_origin)) or not close_values(axes, reflected_frame(expected_axes, self.plane)):
                 raise RuntimeError("MCS/RCS не соответствует ожидаемому отражению")
+        self.uf.Obj.DeleteObject(self.box_csys)
+        self.box_csys = None
         self.lines.append("ПРОЙДЕНО: отражение проверенных объектов, сохранение их идентификаторов,")
-        self.lines.append("ссылок выбранной CAM-геометрии, состава операций и переноса MCS/RCS.")
+        self.lines.append("доступных ссылок CAM-геометрии, состава операций и переноса MCS/RCS.")
         self.lines.append("Рассчитанные траектории удалены; зеркальные операции не создавались.")
+        if self.unavailable:
+            self.lines.append("\nНЕ ПРОВЕРЕНЫ через UF (код 1345005): " + str(len(self.unavailable)) + " разделов.")
+            self.lines.extend(sorted(self.unavailable))
+            self.lines.append("Недоступный раздел не считался пустой геометрией. Его содержимое не подтверждено.")
         self.lines.append("\nГРАНИЦЫ ТЕСТА: это не подтверждение корректности будущей обработки.")
         self.lines.append("Подачи, припуски, стратегии и остальные настройки скрипт не редактирует.")
-        self.lines.append("Числовые направления/координаты внутри настроек V1 оставляет как есть:")
+        self.lines.append("Числовые направления/координаты внутри настроек скрипт оставляет как есть:")
         self.lines.extend(self.raw_spatial or ["Локальные ненулевые 3D-параметры не найдены."])
         self.lines.append("Их смысл и соответствие зеркальной детали нужно проверить в операциях.")
 
@@ -480,7 +603,7 @@ def preflight_source(session):
         raise RuntimeError("Откройте тестовую деталь и сделайте её рабочей и отображаемой")
     root = part.ComponentAssembly.RootComponent
     if root is not None and list(root.GetChildren()):
-        raise RuntimeError("V1 работает без компонентов сборки")
+        raise RuntimeError("Тестовая версия работает без компонентов сборки")
     if not part.IsFullyLoaded:
         raise RuntimeError("Сначала полностью загрузите тестовую деталь")
     source = str(part.FullPath)
@@ -491,8 +614,8 @@ def preflight_source(session):
     return part, source
 
 
-def execute(session, nx, uf, axis, offset):
-    lines = [TITLE, "Плоскость ABS: " + "XYZ"[axis] + " = " + str(offset)]
+def execute(session, nx, uf, plane):
+    lines = [TITLE, "Выбранная плоскость ABS: точка " + str(plane.origin) + "; нормаль " + str(plane.normal)]
     source_part, source = preflight_source(session)
     target, source_hash = copy_exclusive(source)
     lines.append("Файл тестовой копии: " + target)
@@ -511,7 +634,7 @@ def execute(session, nx, uf, axis, offset):
             raise RuntimeError("Копия не стала отображаемой деталью")
         mark = session.SetUndoMark(nx.Session.MarkVisibility.Visible, TITLE)
         stage = "Инициализация CAM в копии"
-        trial = Trial(session, nx, uf, part, axis, offset, lines)
+        trial = Trial(session, nx, uf, part, plane, lines)
         trial.run()
         if digest(source) != source_hash:
             raise RuntimeError("Исходный файл изменился во время выполнения; результат теста не подтверждён")
@@ -519,7 +642,7 @@ def execute(session, nx, uf, axis, offset):
             raise RuntimeError("NX выставил исходной детали признак изменения. Исходник не сохранялся; нужно выяснить причину.")
         lines.append("\nИсходный файл на диске: контрольная сумма не изменилась.")
         lines.append("\nРЕЗУЛЬТАТ ОТКРЫТ В NX, НО ЕЩЁ НЕ СОХРАНЁН.")
-        lines.append("На диске пока лежит исходная копия PRT. Проверьте тела, обе MCS и геометрию операций;")
+        lines.append("На диске пока лежит исходная копия PRT. Проверьте тела, MCS и геометрию операций;")
         lines.append("после проверки сохраните открытую копию штатной командой NX.")
         lines.append("Затем рассчитайте операции заново. Исходный проект скрипт не сохранял.")
     except Exception as exc:
@@ -540,93 +663,45 @@ def execute(session, nx, uf, axis, offset):
     return "\r\n".join(lines)
 
 
-def configuration():
-    """Small in-memory Win32 dialog; no .dlx, temp files or preferences."""
-    def word(value):
-        return (value + "\0").encode("utf-16le")
-    data = bytearray(struct.pack("<LLHhhhh", 0x90C80040, 0, 8, 0, 0, 380, 153))
-    data += b"\0\0\0\0" + word(TITLE) + struct.pack("<H", 9) + word("Segoe UI")
-    controls = (
-        (0x50000000, 10, 9, 360, 31, 110, 0x82, "Тест без компонентов. Создаётся отдельный PRT рядом с исходником.\nГотовые траектории в копии будут удалены для нового расчёта."),
-        (0x50000000, 10, 46, 205, 12, 111, 0x82, "Плоскость абсолютной системы координат:"),
-        (0x50210003, 220, 43, 150, 75, 101, 0x85, ""),
-        (0x50000000, 10, 72, 205, 12, 112, 0x82, "Координата плоскости (в единицах детали):"),
-        (0x50810080, 220, 69, 150, 16, 102, 0x81, "0"),
-        (0x50000000, 10, 96, 360, 22, 113, 0x82, "MCS: оси X и Z отражаются; Y достраивается для правой системы.\nРезультат сначала остаётся в NX без сохранения."),
-        (0x50010001, 174, 126, 96, 18, 1, 0x80, "Создать копию"),
-        (0x50010000, 278, 126, 92, 18, 2, 0x80, "Отмена"),
-    )
-    for style, x, y, width, height, ident, atom, caption in controls:
-        data += b"\0" * ((-len(data)) % 4)
-        data += struct.pack("<LLhhhhH", style, 0, x, y, width, height, ident)
-        data += struct.pack("<HH", 0xffff, atom) + word(caption) + b"\0\0"
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    result_type = ctypes.c_ssize_t
-    callback_type = ctypes.WINFUNCTYPE(result_type, W.HWND, W.UINT, W.WPARAM, W.LPARAM)
-    user.DialogBoxIndirectParamW.argtypes = (W.HINSTANCE, ctypes.c_void_p, W.HWND, callback_type, W.LPARAM)
-    user.DialogBoxIndirectParamW.restype = result_type
-    user.GetDlgItem.argtypes, user.GetDlgItem.restype = (W.HWND, ctypes.c_int), W.HWND
-    user.SendMessageW.argtypes = (W.HWND, W.UINT, W.WPARAM, W.LPARAM)
-    user.SendMessageW.restype = result_type
-    user.GetDlgItemTextW.argtypes = (W.HWND, ctypes.c_int, W.LPWSTR, ctypes.c_int)
-    user.GetDlgItemTextW.restype = W.UINT
-    user.EndDialog.argtypes = (W.HWND, result_type)
-    user.EndDialog.restype = W.BOOL
-    user.MessageBoxW.argtypes = (W.HWND, W.LPCWSTR, W.LPCWSTR, W.UINT)
-    user.MessageBoxW.restype = ctypes.c_int
-    user.GetActiveWindow.restype = W.HWND
-    kernel.GetModuleHandleW.argtypes, kernel.GetModuleHandleW.restype = (W.LPCWSTR,), W.HMODULE
-    answer, errors = [], []
+def plane_from_object(obj, part, nx, uf):
+    if bool(getattr(obj, "IsOccurrence", False)) or int(obj.OwningPart.Tag) != int(part.Tag):
+        raise ValueError("Выберите плоскость текущей детали, без компонентов")
+    if isinstance(obj, nx.Face):
+        data = uf.Modl.AskFaceData(obj.Tag)
+        if int(data[0]) != 22:  # UF_MODL planar surface type
+            raise ValueError("Нужна плоская грань, а не цилиндрическая или криволинейная поверхность")
+        return MirrorPlane(data[1], data[2])
+    if isinstance(obj, nx.DatumPlane):
+        origin, normal = obj.Origin, obj.Normal
+        return MirrorPlane((origin.X, origin.Y, origin.Z), (normal.X, normal.Y, normal.Z))
+    raise ValueError("Выберите плоскую грань или базовую плоскость")
 
-    @callback_type
-    def procedure(hwnd, message, wparam, lparam):
+
+def select_mirror_plane(nx, uf, part):
+    ui = nx.UI.GetUI()
+    masks = []
+    for object_type, solid_type in (
+        (nx.UF.UFConstants.UF_solid_type, nx.UF.UFConstants.UF_UI_SEL_FEATURE_PLANAR_FACE),
+        (nx.UF.UFConstants.UF_datum_plane_type, 0),
+    ):
+        mask = nx.Selection.MaskTriple()
+        mask.Type, mask.Subtype, mask.SolidBodySubtype = object_type, 0, solid_type
+        masks.append(mask)
+    while True:
+        response, obj, cursor = ui.SelectionManager.SelectTaggedObject(
+            "Выберите плоскую грань или базовую плоскость отражения",
+            TITLE + " — Выбор плоскости",
+            nx.Selection.SelectionScope.WorkPart,
+            nx.Selection.SelectionAction.ClearAndEnableSpecific,
+            False, False, masks)
+        if response in (nx.Selection.Response.Cancel, nx.Selection.Response.Back) or obj is None:
+            return None
         try:
-            if message == 0x110:
-                combo = user.GetDlgItem(hwnd, 101)
-                for text in ("YZ: X = координата", "XZ: Y = координата", "XY: Z = координата"):
-                    buffer = ctypes.create_unicode_buffer(text)
-                    user.SendMessageW(combo, 0x143, 0, ctypes.addressof(buffer))
-                user.SendMessageW(combo, 0x14e, 0, 0)
-                return 1
-            if message == 0x111:
-                ident = wparam & 0xffff
-                if ident == 1:
-                    buffer = ctypes.create_unicode_buffer(100)
-                    user.GetDlgItemTextW(hwnd, 102, buffer, len(buffer))
-                    try:
-                        offset = float(buffer.value.strip().replace(",", "."))
-                        if not math.isfinite(offset):
-                            raise ValueError()
-                    except ValueError:
-                        user.MessageBoxW(hwnd, "Введите конечное число, например 0 или 25,5.", TITLE + " — Координата", 0x30)
-                        return 1
-                    axis = int(user.SendMessageW(user.GetDlgItem(hwnd, 101), 0x147, 0, 0))
-                    if axis not in (0, 1, 2):
-                        raise RuntimeError("Не выбрана плоскость")
-                    answer.append((axis, offset))
-                    user.EndDialog(hwnd, 1)
-                    return 1
-                if ident == 2:
-                    user.EndDialog(hwnd, 0)
-                    return 1
-            if message == 0x10:
-                user.EndDialog(hwnd, 0)
-                return 1
-        except Exception as exc:
-            errors.append(exc)
-            user.EndDialog(hwnd, -2)
-            return 1
-        return 0
-
-    template = ctypes.create_string_buffer(bytes(data))
-    result = user.DialogBoxIndirectParamW(kernel.GetModuleHandleW(None), template,
-                                        user.GetActiveWindow(), procedure, 0)
-    if errors:
-        raise errors[0]
-    if result == -1:
-        raise ctypes.WinError(ctypes.get_last_error())
-    return answer[0] if answer else None
+            # Only numerical plane data cross into the copied part. Cursor
+            # position is not used as the plane origin and no source tag is reused.
+            return plane_from_object(obj, part, nx, uf)
+        except ValueError as exc:
+            ui.NXMessageBox.Show(TITLE + " — Выбор плоскости", nx.NXMessageBox.DialogType.Information, str(exc))
 
 
 def _dialog_template():
@@ -745,13 +820,14 @@ def main():
         sys.dont_write_bytecode = previous
     try:
         session = NXOpen.Session.GetSession()
-        preflight_source(session)
-        options = configuration()
-        if options is None:
+        part, source = preflight_source(session)
+        uf = NXOpen.UF.UFSession.GetUFSession()
+        plane = select_mirror_plane(NXOpen, uf, part)
+        if plane is None:
             return
         # Recheck after the dialog; no CAM access or mutations on the source.
         preflight_source(session)
-        report = execute(session, NXOpen, NXOpen.UF.UFSession.GetUFSession(), *options)
+        report = execute(session, NXOpen, uf, plane)
         show_result(report)
     except Exception:
         show_result(TITLE + "\r\n\r\n" + traceback.format_exc().replace("\n", "\r\n"))
