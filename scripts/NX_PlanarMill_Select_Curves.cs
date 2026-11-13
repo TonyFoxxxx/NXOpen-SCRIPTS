@@ -1,5 +1,5 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.05
+// SCRIPT_VERSION: V1.06
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
 // Reconstructs approximate medial curves; round dots use a circle of half the face diameter.
 // Preserves through-strokes; separates junctions by 0.004-0.02 mm and inherits operation tolerances.
@@ -22,10 +22,10 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.05";
+    private const string SCRIPT_VERSION = "V1.06";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "5";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "6";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -623,6 +623,7 @@ public static class EngravingRoutes
             foreach (Junction node in nodes) if (node.Ports.Count > 2)
                 foreach (int port in node.Ports) if (pairs[port] > port)
                 {
+                    SharpSeparateElbow(node, port, pairs[port], trimmed, through, region, flat);
                     P a = EndPoint(trimmed, port), b = EndPoint(trimmed, pairs[port]);
                     B connector = Join(a, node.Point, b, tolerance);
                     links.Add(port, connector); links.Add(pairs[port], Reverse(connector));
@@ -640,7 +641,7 @@ public static class EngravingRoutes
             BoundarySamples = source.BoundarySamples, SeparatedJunctions = junctions, JunctionGap = junctions > 0 ? gap : 0 };
         result.Circles.AddRange(source.Circles); bool[] used = new bool[edges.Count];
         for (int port = 0; port < pairs.Length; port++) if (pairs[port] < 0 && !used[port / 2])
-            Walk(port, edges, trimmed, pairs, links, used, result);
+            Walk(port, edges, trimmed, pairs, links, used, result, tolerance);
         for (int i = 0; i < edges.Count; i++) if (!used[i])
             throw new InvalidOperationException("Соединение ветвей создало неожиданный замкнутый маршрут.");
         Validate(result, region, tolerance, flat);
@@ -659,8 +660,8 @@ public static class EngravingRoutes
     }
     private static EngravingCenterlines.Result MergeSplitJunctions(EngravingCenterlines.Result source, R region, double tolerance)
     {
-        // A K-shaped junction has two medial T nodes. Reconstruct their single straight-stroke
-        // intersection only when every external straight guide actually agrees on one point.
+        // A K-shaped junction has two medial T nodes. Reconstruct one junction only if
+        // four straight guides prove a through-stem and two arms on the same side of it.
         for (int pass = 0; pass < source.Curves.Count; pass++)
         {
             var nodes = new List<Junction>(); var edges = new List<Edge>();
@@ -674,9 +675,14 @@ public static class EngravingRoutes
             {
                 Edge edge = edges[bridge]; Junction a = nodes[edge.Start], b = nodes[edge.End];
                 if (edge.Start == edge.End || a.Ports.Count < 3 || b.Ports.Count < 3) continue;
-                double width = region.Distance(a.Point) + region.Distance(b.Point), length = 0;
-                foreach (B c in edge.Curves) length += c.Line ? (c.D - c.A).Length : (c.B - c.A).Length + (c.C - c.B).Length + (c.D - c.C).Length;
-                if (length > width * 1.5) continue;
+                double width = region.Distance(a.Point) + region.Distance(b.Point);
+                if ((a.Point - b.Point).Length > width * 1.5) continue;
+                var bridgePieces = new List<Piece>();
+                foreach (B c in edge.Curves) Flatten(c, tolerance * 0.125, bridgePieces, 0);
+                P middle = (a.Point + b.Point) * 0.5; bool local = true;
+                foreach (Piece piece in bridgePieces)
+                    if ((piece.A - middle).Length > width || (piece.B - middle).Length > width) local = false;
+                if (!local) continue;
                 var ports = new List<int>(a.Ports); ports.AddRange(b.Ports); var guides = new List<Guide>(); bool valid = true;
                 foreach (int port in ports) if (port / 2 != bridge)
                 {
@@ -691,19 +697,32 @@ public static class EngravingRoutes
                     if (best < 0) { valid = false; break; }
                     guides.Add(new Guide { Port = port, Index = best, Path = path, Line = path[best] });
                 }
-                if (!valid || guides.Count < 4) continue;
+                if (!valid || guides.Count != 4) continue;
                 P center = new P(); bool found = false;
-                for (int i = 1; i < guides.Count && !found; i++)
+                double concurrence = Math.Max(tolerance * 0.25, width * 0.04);
+                for (int i = 0; i < guides.Count && !found; i++) for (int j = i + 1; j < guides.Count && !found; j++)
                 {
-                    B x = guides[0].Line, y = guides[i].Line; P u = (x.D - x.A).Unit(), v = (y.D - y.A).Unit(); double cross = P.Cross(u, v);
+                    B x = guides[i].Line, y = guides[j].Line;
+                    if (P.Dot((x.D - x.A).Unit(), (y.D - y.A).Unit()) > -0.995) continue;
+                    P stem = (y.D - x.D).Unit();
+                    if (Math.Abs(P.Cross(stem, x.A - x.D)) > concurrence
+                        || Math.Abs(P.Cross(stem, y.A - x.D)) > concurrence) continue;
+                    int k = -1, m = -1;
+                    for (int n = 0; n < guides.Count; n++) if (n != i && n != j) { if (k < 0) k = n; else m = n; }
+                    B armA = guides[k].Line, armB = guides[m].Line;
+                    if (P.Cross(stem, armA.D - x.D) * P.Cross(stem, armB.D - x.D) <= 0) continue;
+                    P u = (armA.D - armA.A).Unit(), v = (armB.D - armB.A).Unit(); double cross = P.Cross(u, v);
                     if (Math.Abs(cross) < 0.2) continue;
-                    center = x.A + u * (P.Cross(y.A - x.A, v) / cross); found = true;
+                    P apex = armA.A + u * (P.Cross(armB.A - armA.A, v) / cross);
+                    center = x.D + stem * P.Dot(apex - x.D, stem);
+                    if ((apex - center).Length > concurrence) continue;
+                    found = true;
                 }
                 if (!found || (center - a.Point).Length > width * 1.25 || (center - b.Point).Length > width * 1.25 || !region.Inside(center)) continue;
                 foreach (Guide guide in guides)
                 {
                     P d = (guide.Line.D - guide.Line.A).Unit();
-                    if (Math.Abs(P.Cross(d, center - guide.Line.A)) > tolerance * 0.25 || !region.SegmentInside(center, guide.Line.D, tolerance)) valid = false;
+                    if (Math.Abs(P.Cross(d, center - guide.Line.A)) > concurrence || !region.SegmentInside(center, guide.Line.D, tolerance)) valid = false;
                 }
                 if (!valid) continue;
                 var replacements = new Dictionary<int, List<B>>();
@@ -729,6 +748,31 @@ public static class EngravingRoutes
         return source;
     }
     private static int Root(int[] p, int i) { while (p[i] != i) { p[i] = p[p[i]]; i = p[i]; } return i; }
+    private static void SharpSeparateElbow(Junction node, int a, int b, List<List<B>> paths,
+        bool[] through, R region, double flat)
+    {
+        // K-like junction: a continuous straight stem and two straight arms on one side.
+        // Give the two arms ONE sharp vertex clear of the stem, retaining their terminal ends.
+        // Curved branches and the two-elbow layout of a plus retain their own construction.
+        if (through[a] || through[b]) return;
+        int stem = -1; foreach (int port in node.Ports) if (through[port]) { stem = port; break; }
+        if (stem < 0) return;
+        List<B> stemPath = paths[stem / 2];
+        if (!(stem % 2 == 0 ? stemPath[0] : stemPath[stemPath.Count - 1]).Line) return;
+        List<B> pa = paths[a / 2], pb = paths[b / 2];
+        int ia = a % 2 == 0 ? 0 : pa.Count - 1, ib = b % 2 == 0 ? 0 : pb.Count - 1;
+        B ca = pa[ia], cb = pb[ib]; if (!ca.Line || !cb.Line) return;
+        P farA = a % 2 == 0 ? ca.D : ca.A, farB = b % 2 == 0 ? cb.D : cb.A;
+        P u = (farA - node.Point).Unit(), v = (farB - node.Point).Unit();
+        if (Math.Abs(P.Cross(u, v)) < 0.15) return;
+        P bisector = (u + v).Unit(), apex = node.Point + bisector * node.Radius;
+        if ((farA - node.Point).Length <= node.Radius * 2 || (farB - node.Point).Length <= node.Radius * 2
+            || !region.SegmentInside(apex, farA, flat) || !region.SegmentInside(apex, farB, flat))
+            throw new GapFitException("Недостаточно места для углового соединения двух прямых штрихов.");
+        // Do not mutate source Bezier instances: gap retries start with the original geometry.
+        pa[ia] = new B { A = a % 2 == 0 ? apex : farA, D = a % 2 == 0 ? farA : apex, Line = true };
+        pb[ib] = new B { A = b % 2 == 0 ? apex : farB, D = b % 2 == 0 ? farB : apex, Line = true };
+    }
     private static P Direction(List<Edge> edges, int port)
     {
         List<B> p = edges[port / 2].Curves; B b = port % 2 == 0 ? p[0] : Reverse(p[p.Count - 1]);
@@ -743,19 +787,32 @@ public static class EngravingRoutes
         // At loops, retain one through-stroke and leave the other arms short, opening P/4/Phi junctions.
         while (available.Count >= 2)
         {
-            int bestA = -1, bestB = -1; double cost = double.MaxValue;
+            int bestA = -1, bestB = -1; double cost = double.MaxValue, support = -1;
             for (int i = 0; i < available.Count; i++) for (int j = i + 1; j < available.Count; j++)
             {
                 if (!hasHoles && available.Count > 3 && j != i + 1 && !(i == 0 && j == available.Count - 1)) continue;
                 int a = available[i], b = available[j]; if (Root(parent, a / 2) == Root(parent, b / 2)) continue;
                 double score = 1 + P.Dot(Direction(edges, a), Direction(edges, b));
-                if (score < cost) { cost = score; bestA = a; bestB = b; }
+                double length = StraightReach(edges, a) + StraightReach(edges, b);
+                if (score < cost - 1e-8 || (Math.Abs(score - cost) <= 1e-8 && length > support))
+                { cost = score; support = length; bestA = a; bestB = b; }
             }
             if (bestA < 0) break;
             pairs[bestA] = bestB; pairs[bestB] = bestA; parent[Root(parent, bestA / 2)] = Root(parent, bestB / 2);
             available.Remove(bestA); available.Remove(bestB);
             if (hasHoles || node.Ports.Count == 3) break;
         }
+    }
+    private static double StraightReach(List<Edge> edges, int port)
+    {
+        List<B> path = port % 2 == 0 ? edges[port / 2].Curves : Reverse(edges[port / 2].Curves);
+        P direction = Direction(edges, port); double length = 0;
+        foreach (B curve in path)
+        {
+            if (!curve.Line || P.Dot((curve.D - curve.A).Unit(), direction) < 1 - 1e-8) break;
+            length += (curve.D - curve.A).Length;
+        }
+        return length;
     }
     private static P EndPoint(List<List<B>> paths, int port)
     { List<B> p = paths[port / 2]; return port % 2 == 0 ? p[0].A : p[p.Count - 1].D; }
@@ -797,6 +854,7 @@ public static class EngravingRoutes
     }
     private static B Join(P a, P center, P b, double tolerance)
     {
+        if ((a - b).Length < tolerance * 0.001) return new B { A = a, D = b, Line = true };
         var chord = new EngravingCenterlines.Segment(a, b);
         if ((center - EngravingCenterlines.Closest(chord, center)).Length < tolerance * 0.001)
             return new B { A = a, D = b, Line = true };
@@ -826,7 +884,7 @@ public static class EngravingRoutes
         return true;
     }
     private static void Walk(int firstPort, List<Edge> edges, List<List<B>> paths, int[] pairs, Dictionary<int, B> links,
-        bool[] used, EngravingCenterlines.Result result)
+        bool[] used, EngravingCenterlines.Result result, double tolerance)
     {
         var curves = new List<B>(); int port = firstPort, count = 0; bool closed = false;
         while (true)
@@ -839,6 +897,17 @@ public static class EngravingRoutes
             port = pairs[exitPort];
         }
         var stroke = new EngravingCenterlines.Stroke { Closed = closed };
+        // A through-stroke remains one geometric line, regardless of its medial graph nodes.
+        for (int i = curves.Count - 1; i > 0; i--)
+        {
+            B a = curves[i - 1], b = curves[i]; P direction = b.D - a.A;
+            var chord = new EngravingCenterlines.Segment(a.A, b.D);
+            double t = P.Dot(a.D - a.A, direction), length2 = P.Dot(direction, direction);
+            if (a.Line && b.Line && t > 0 && t < length2
+                && (a.D - EngravingCenterlines.Closest(chord, a.D)).Length <= tolerance * 0.01
+                && (b.A - EngravingCenterlines.Closest(chord, b.A)).Length <= tolerance * 0.01)
+            { curves[i - 1] = new B { A = a.A, D = b.D, Line = true }; curves.RemoveAt(i); }
+        }
         stroke.Points.Add(curves[0].A); foreach (B b in curves) stroke.Points.Add(b.D);
         result.Curves.Add(curves); result.Strokes.Add(stroke);
     }
@@ -1090,6 +1159,7 @@ public static class EngravingCenterlines
     {
         public readonly List<P> Points = new List<P>();
         public bool Closed;
+        internal bool ContractedJunction;
         public readonly HashSet<int> Corners = new HashSet<int>();
     }
     public sealed class Bezier
@@ -1520,13 +1590,17 @@ public static class EngravingCenterlines
     {
         // Snapping two nearby branch nodes to the same straight-axis intersection contracts
         // their connecting edge. Retaining it would create a false out-and-back loop.
-        // Remove it only inside an empty disk of the face, never a loop surrounding an island.
+        // Keep loops around islands. In a simply connected face, an explicitly contracted
+        // connector may also be removed within a small neighborhood visible from its new node.
         for (int i = strokes.Count - 1; i >= 0; i--)
         {
             Stroke stroke = strokes[i]; List<P> p = stroke.Points;
             if (stroke.Closed || p.Count < 2 || (p[0] - p[p.Count - 1]).Length > tolerance * 0.01) continue;
-            double radius = region.Distance(p[0]) * 0.8; bool insideDisk = radius > tolerance;
-            foreach (P point in p) if ((point - p[0]).Length > radius) insideDisk = false;
+            bool contracted = stroke.ContractedJunction && region.Loops.Count == 1;
+            double radius = region.Distance(p[0]) * (contracted ? 1.5 : 0.8); bool insideDisk = radius > tolerance;
+            foreach (P point in p)
+                if ((point - p[0]).Length > radius || (contracted && (point - p[0]).Length > tolerance * 0.01
+                    && !region.SegmentInside(p[0], point, tolerance))) insideDisk = false;
             int incident = 0;
             for (int j = 0; j < strokes.Count; j++) if (j != i)
             {
@@ -1594,19 +1668,31 @@ public static class EngravingCenterlines
         List<StraightAxis> axes = new List<StraightAxis>();
         for (int i = 0; i < sides.Count; i++) for (int j = i + 1; j < sides.Count; j++)
         {
-            Segment a = sides[i], b = sides[j]; P direction = (a.B - a.A).Unit();
-            if (Math.Abs(P.Cross(direction, (b.B - b.A).Unit())) > 1e-7) continue;
-            double gap = P.Cross(direction, b.A - a.A), radius = Math.Abs(gap) * 0.5;
-            if (radius < tolerance * 4 || radius > width) continue;
-            double b0 = P.Dot(b.A - a.A, direction), b1 = P.Dot(b.B - a.A, direction);
-            double low = Math.Max(0, Math.Min(b0, b1)), high = Math.Min((a.B - a.A).Length, Math.Max(b0, b1));
-            if (high - low < radius * 0.9) continue;
-            P origin = a.A + new P(-direction.Y, direction.X) * (gap * 0.5);
+            Segment a = sides[i], b = sides[j]; P ua = (a.B - a.A).Unit(), ub = (b.B - b.A).Unit();
+            if (P.Dot(ua, ub) < 0) ub = ub * -1;
+            // Font outlines can have slightly tapered walls. Use their internal angle bisector,
+            // not an exact-parallel test which discards otherwise straight letter strokes.
+            if (Math.Abs(P.Cross(ua, ub)) > 0.035) continue;
+            P direction = (ua + ub).Unit(), normal = new P(-direction.Y, direction.X);
+            P na = new P(-ua.Y, ua.X), nb = new P(-ub.Y, ub.X);
+            P origin = a.A + normal * (P.Dot(nb, b.A - a.A) / P.Dot(na + nb, normal));
+            double a0 = P.Dot(a.A - origin, direction), a1 = P.Dot(a.B - origin, direction);
+            double b0 = P.Dot(b.A - origin, direction), b1 = P.Dot(b.B - origin, direction);
+            double low = Math.Max(Math.Min(a0, a1), Math.Min(b0, b1)), high = Math.Min(Math.Max(a0, a1), Math.Max(b0, b1));
+            double r0 = Math.Abs(P.Cross(ua, origin + direction * low - a.A));
+            double r1 = Math.Abs(P.Cross(ua, origin + direction * high - a.A)), radius = (r0 + r1) * 0.5;
+            if (Math.Min(r0, r1) < tolerance * 4 || Math.Max(r0, r1) > width
+                || Math.Max(r0, r1) > Math.Min(r0, r1) * 1.35 || high - low < radius * 0.9) continue;
             bool inside = true;
             for (int k = 1; k <= 3; k++)
             {
                 P q = origin + direction * (low + (high - low) * k / 4);
-                if (!region.Inside(q) || Math.Abs(region.Distance(q) - radius) > tolerance * 2) inside = false;
+                P footA = a.A + ua * P.Dot(q - a.A, ua), footB = b.A + ub * P.Dot(q - b.A, ub);
+                // The cap of a short stroke can be nearer than either wall. Require visible
+                // opposite walls, not a constant nearest-boundary distance near that cap.
+                if ((footA - Closest(a, footA)).Length > tolerance * 2 || (footB - Closest(b, footB)).Length > tolerance * 2
+                    || !region.SegmentInside(q, q + (footA - q) * 0.999, tolerance)
+                    || !region.SegmentInside(q, q + (footB - q) * 0.999, tolerance)) inside = false;
             }
             if (!inside) continue;
             StraightAxis axis = new StraightAxis { Origin = origin, Direction = direction, Low = low, High = high, Radius = radius };
@@ -1616,14 +1702,22 @@ public static class EngravingCenterlines
         for (int i = 0; i < axes.Count; i++) for (int j = axes.Count - 1; j > i; j--)
         {
             StraightAxis a = axes[i], b = axes[j];
-            if (Math.Abs(P.Cross(a.Direction, b.Direction)) > 1e-7 || Math.Abs(a.Radius - b.Radius) > tolerance
-                || (a.Project(b.Origin) - b.Origin).Length > tolerance * 0.1) continue;
+            double angle = Math.Abs(P.Cross(a.Direction, b.Direction));
+            if (angle > 0.035 || Math.Abs(a.Radius - b.Radius) > Math.Max(tolerance, Math.Min(a.Radius, b.Radius) * 0.15)) continue;
             double t0 = a.Parameter(b.Origin + b.Direction * b.Low), t1 = a.Parameter(b.Origin + b.Direction * b.High);
             double low = Math.Min(t0, t1), high = Math.Max(t0, t1);
-            if (Math.Max(low - a.High, a.Low - high) > a.Radius * 4) continue;
-            P first = a.Origin + a.Direction * Math.Min(a.Low, low), last = a.Origin + a.Direction * Math.Max(a.High, high);
-            if (!region.SegmentInside(first, last, tolerance)) continue;
-            a.Low = Math.Min(a.Low, low); a.High = Math.Max(a.High, high); a.Sides.AddRange(b.Sides); axes.RemoveAt(j);
+            P middle = b.Origin + b.Direction * ((b.Low + b.High) * 0.5);
+            if ((a.Project(middle) - middle).Length > Math.Max(tolerance * 0.1, Math.Min(a.Radius, b.Radius) * 0.08)) continue;
+            if (Math.Max(low - a.High, a.Low - high) > a.Radius * 6) continue;
+            P bFirst = b.Origin + b.Direction * (t0 < t1 ? b.Low : b.High), bLast = b.Origin + b.Direction * (t0 < t1 ? b.High : b.Low);
+            P first = low < a.Low ? bFirst : a.Origin + a.Direction * a.Low;
+            P last = high > a.High ? bLast : a.Origin + a.Direction * a.High;
+            // Extents can lie exactly on a terminal cap. Test the interior of the stroke,
+            // since a boundary point has no stable inside/outside classification after rotation.
+            P direction = (last - first).Unit(); double inset = Math.Min((last - first).Length * 0.1, Math.Min(a.Radius, b.Radius) * 0.1);
+            if (!region.SegmentInside(first + direction * inset, last - direction * inset, tolerance)) continue;
+            a.Origin = first; a.Direction = (last - first).Unit(); a.Low = 0; a.High = (last - first).Length;
+            a.Radius = (a.Radius + b.Radius) * 0.5; a.Sides.AddRange(b.Sides); axes.RemoveAt(j);
         }
         return axes;
     }
@@ -1680,8 +1774,13 @@ public static class EngravingCenterlines
             if (safe) { before.Add(p); after.Add(q); }
         }
         // All incident branches must receive exactly the same new junction position.
-        foreach (Stroke stroke in strokes) foreach (int index in new int[] { 0, stroke.Points.Count - 1 })
-        { int found = before.IndexOf(stroke.Points[index]); if (found >= 0) stroke.Points[index] = after[found]; }
+        foreach (Stroke stroke in strokes)
+        {
+            bool distinct = (stroke.Points[0] - stroke.Points[stroke.Points.Count - 1]).Length > tolerance * 0.01;
+            foreach (int index in new int[] { 0, stroke.Points.Count - 1 })
+            { int found = before.IndexOf(stroke.Points[index]); if (found >= 0) stroke.Points[index] = after[found]; }
+            stroke.ContractedJunction = distinct && (stroke.Points[0] - stroke.Points[stroke.Points.Count - 1]).Length <= tolerance * 0.01;
+        }
         foreach (Stroke stroke in strokes)
         {
             List<P> p = stroke.Points; List<StraightRun> runs = new List<StraightRun>();
@@ -1721,9 +1820,15 @@ public static class EngravingCenterlines
                 // A join to a genuinely curved part is adjusted only within the fitting tolerance.
                 if (!joined && first != 0) while (first < last && (p[first] - run.Axis.Project(p[first])).Length > tolerance) first++;
                 if (!run.JoinNext && last != p.Count - 1) while (last > first && (p[last] - run.Axis.Project(p[last])).Length > tolerance) last--;
-                if (!joined) { while (cursor < first) AddDistinct(output, p[cursor++], tolerance); AddDistinct(output, run.Axis.Project(p[first]), tolerance); }
+                // Protect the endpoints of each recovered straight run as well as sharp corners:
+                // a subsequent spline fit must not absorb a long line into a junction's bend.
+                if (!joined)
+                {
+                    while (cursor < first) AddDistinct(output, p[cursor++], tolerance);
+                    AddDistinct(output, run.Axis.Project(p[first]), tolerance); corners.Add(output.Count - 1);
+                }
                 if (run.JoinNext) { AddDistinct(output, run.Corner, tolerance); corners.Add(output.Count - 1); cursor = runs[i + 1].First; }
-                else { AddDistinct(output, run.Axis.Project(p[last]), tolerance); cursor = last + 1; }
+                else { AddDistinct(output, run.Axis.Project(p[last]), tolerance); corners.Add(output.Count - 1); cursor = last + 1; }
             }
             while (cursor < p.Count) AddDistinct(output, p[cursor++], tolerance);
             if (output.Count < 2) continue;

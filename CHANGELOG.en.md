@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.06
+
+- K: create the through-stem as one line and the diagonals as a separate sharp checkmark clear of the stem. Merge nearby junctions only with four confirmed straight guides; preserve independent adjacent junctions.
+- 4: recover straight axes between slightly nonparallel walls and retain short external strokes. Prefer the longer of equally straight through-strokes and separate the other arms on both sides. Keep sharp triangle corners without a false branch towards the outer vertex.
+- Protect recovered straight runs from subsequent spline fitting. Remove residual connectors after node contraction and redundant splits of a single line. Retain containment, intersection, genuine-loop and terminal-endpoint checks.
+- CAM tolerances remain inherited from the operation; D/2 circles for dots are retained. Recreate previous V1.01–V1.05 axes.
+- Add 192 K/4 shape checks with quantized wall coordinates, rotation, slant, reflection, smaller size and mm/inch units. V1.05 fails the new regression. Total: 381 routing scenarios, 122 centerline scenarios, 118 adapter checks and 21 chain checks. Compiles against DC 2606 SDK for .NET Framework and .NET 10. The user's STEP/PRT model and final toolpath remain unverified.
+
 ## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.05
 
 - Remove the forced 0.001 mm tolerance. New boundaries and their members inherit operation tolerance; numeric Intol / Outtol values are neither read nor written nor checked. Remove the resulting tolerance rollback.

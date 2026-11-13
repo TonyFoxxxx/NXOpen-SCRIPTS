@@ -146,7 +146,7 @@ public class RoutingChecks
             var result=EngravingRoutes.Build(raw,region,.02*unit,.002*unit);
             CheckResult(name,region,result,2,0,unit,true);RetainedEnds(raw,result);
             int routedSegments=0;foreach(var path in result.Curves)foreach(B c in path){Require(c.Line,name+" routing rounded a straight side");routedSegments++;}
-            Require(routedSegments==5,name+" extra routing segment");
+            Require(routedSegments==4,name+" expected three sharp sides with one through-extension and one separate stub");
         }
         // A genuine pointed arm has no pair of opposite constant-width walls.
         // Its long terminal branch must not be mistaken for a triangular miter spur.
@@ -158,6 +158,57 @@ public class RoutingChecks
         CheckResult("pointed arm",pointed,pointedResult,2,0,1,true);RetainedEnds(pointedRaw,pointedResult);
     }
     static void Reject(Action action,string label) { bool rejected=false;try{action();}catch(InvalidOperationException){rejected=true;}Require(rejected,label);scenarios++; }
+    static List<List<P>> Quantize(List<List<P>> loops,double angle,double grid)
+    {
+        var result=new List<List<P>>();foreach(var loop in loops){var p=new List<P>();foreach(P v in loop)
+        {P q=Rot(v.X,v.Y,angle,1);if(grid>0){q.X=Math.Round(q.X/grid)*grid;q.Y=Math.Round(q.Y/grid)*grid;}p.Add(q);}result.Add(p);}return result;
+    }
+    static void ImportedStraightStrokes()
+    {
+        // A font's integer outline coordinates produce slightly nonparallel walls after CAD
+        // import. V1.05 leaves rounded K elbows/three routes and an outer-tip branch on 4.
+        foreach(double angle in new double[]{.31,.73,1.23})foreach(double grid in new double[]{0,.002,.005,.01})
+        foreach(double shear in new double[]{0,.268})foreach(bool mirror in new bool[]{false,true})
+        foreach(double unit in new double[]{1,1/25.4})
+        {
+            double scale=mirror?.5:1;
+            foreach(string letter in new string[]{"K","4"})
+            {
+                var original=letter=="K"?new List<List<P>>{K()}:AcuteFour(4,2,.2);
+                // Short external upright, as in the user's reference: the long crossbar must
+                // continue through; the upright and the triangular return end on either side.
+                if(letter=="4"){original[0][3]=new P(-.2,-.75);original[0][4]=new P(.2,-.75);}
+                var loops=Transform(Shear(Quantize(original,angle,grid),scale,shear),.42,unit,mirror);
+                string name="imported "+letter+" angle="+angle+" grid="+grid+" shear="+shear+" mirror="+mirror+" unit="+unit;
+                var region=new R(loops);EngravingCenterlines.Result raw,result;
+                try {raw=EngravingCenterlines.Build(region,.002*unit);result=EngravingRoutes.Build(raw,region,.02*unit,.002*unit);}
+                catch(Exception ex){throw new Exception(name,ex);}
+                CheckResult(name,region,result,2,0,unit,true);RetainedEnds(raw,result);
+                var a=result.Curves[0];var b=result.Curves[1];if(a.Count>b.Count){var t=a;a=b;b=t;}
+                Require(a.Count==1&&b.Count==(letter=="K"?2:3),name+" incorrect straight stroke layout: "+a.Count+"/"+b.Count);
+                foreach(var path in result.Curves)foreach(B c in path)Require(c.Line,name+" rounded a straight stroke");
+                if(letter=="K")
+                {
+                    var stem=Transform(Shear(Quantize(new List<List<P>>{Poly(0,-2,0,2)},angle,0),scale,shear),.42,unit,mirror)[0];
+                    Require((a[0].D-a[0].A).Length>.95*(stem[1]-stem[0]).Length,name+" stem lost length");
+                    Require(Math.Abs(P.Cross((a[0].D-a[0].A).Unit(),(stem[1]-stem[0]).Unit()))<.01,name+" incorrect stem direction");
+                    Require((b[0].D-b[1].A).Length<1e-10*unit,name+" disconnected checkmark");
+                }
+                else
+                {
+                    var reference=Transform(Shear(Quantize(new List<List<P>>{Poly(-4,0,0,2,0,0)},angle,0),scale,shear),.42,unit,mirror)[0];
+                    for(int i=0;i<2;i++)
+                    {
+                        double distance=double.MaxValue;foreach(B c in b)distance=Math.Min(distance,Math.Min((c.A-reference[i]).Length,(c.D-reference[i]).Length));
+                        Require(distance<.035*scale*unit,name+" displaced triangle corner");
+                    }
+                    double throughDistance=double.MaxValue;
+                    foreach(B c in b)throughDistance=Math.Min(throughDistance,PointSegment(reference[2],c.A,c.D));
+                    Require(throughDistance<.012*scale*unit,name+" long crossbar is not continuous");
+                }
+            }
+        }
+    }
     public static void Main()
     {
         Console.OutputEncoding=new System.Text.UTF8Encoding(false);
@@ -192,6 +243,7 @@ public class RoutingChecks
         }
         ShortBranches();
         AcuteTriangles();
+        ImportedStraightStrokes();
         Check("ring",new List<List<P>>{Circle(2.2),Circle(1.8)},1,1);
         var dot=Check("dot",new List<List<P>>{Circle(.3)},0);Require(dot.Circles.Count==1&&Math.Abs(dot.Circles[0].Radius-.15)<1e-10,"D/2 changed");
         var region=new R(new List<List<P>>{Poly(-3,-3,3,-3,3,3,-3,3)});
