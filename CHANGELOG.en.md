@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.11
+
+Fix unintended rounding where a straight stroke meets a curved stroke. When the outline confirms a sharp joint, reconstruct it from the supporting walls while retaining the curved portion. Genuine tangential fillets stay smooth; terminal setbacks and circles for dots are retained.
+
+Add 168 checks for circular and noncircular joints, genuine fillet retention and terminal setbacks. Existing geometry checks and all 1104 variants of the previously supplied STEP model pass outside NX. An approximate outline reproduces the new screenshot; its STEP/PRT model was not supplied. Compile against DC 2606 SDK for .NET Framework and .NET 10; native NX execution and toolpaths remain untested. Recreate previous V1.01–V1.10 axes.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.03
 
 Replace the Python `Cambnd.AskBoundaryData` call that reported a memory access violation. Use `UF_CAMBND_ask_boundary_data` with a full-width pointer and a C structure; do not dereference application data. Boundary-plane validation and stopping on read errors are retained; the report identifies the boundary number and stage.
