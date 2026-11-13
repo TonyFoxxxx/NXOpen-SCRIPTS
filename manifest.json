@@ -197,6 +197,15 @@
       "description": "Штатное сохранение рабочего PRT и обновление одного ZIP рядом с проектом без временных файлов."
     },
     {
+      "id": "NX_Mirror_Project_Diagnostic",
+      "name": "Диагностика зеркального CAM-проекта",
+      "file": "NX_Mirror_Project_Diagnostic.py",
+      "version": "V1",
+      "path": "scripts/NX_Mirror_Project_Diagnostic.py",
+      "sha256": "1b05f88a31cf2fcf58ae6eb740737fb1bc3d03b6d387fd057172c7d35ddc63dd",
+      "description": "Чтение структуры сборки и геометрических привязок CAM для разработки зеркального проекта; без изменения модели."
+    },
+    {
       "id": "NX_Update_Scripts",
       "name": "Апдейтер скриптов",
       "file": "NX_Update_Scripts.py",
