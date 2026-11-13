@@ -2,6 +2,16 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.07
+
+Straight strokes are now reconstructed directly from pairs of opposite outline walls. Validate wall coverage, connectivity, hole count and area consistency. Sharp vertices are intersections of the recovered axes, without a branch towards the outer tip. Curved portions retain medial reconstruction. Slightly oval imported punctuation becomes D/2 circles. CAM tolerance remains inherited from the operation.
+
+The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. Validation includes 478 routing scenarios, 122 centerline scenarios, 118 CAM adapter contract checks and 21 chain/plane checks. The 97 new scenarios cover five independent straight-stroke layouts with rotation, slant, reflection and mm/inch units, slightly oval dots, and retention of an elongated mark. The 228 existing acute-triangle and branching-stroke cases additionally require wall-based reconstruction.
+
+Outlines were also read directly from a supplied STEP model outside NX. V1.06 reproduced the unwanted terminal branch on both triangular symbols. All 23 inscription faces passed V1.07 construction and route validation: each 4 has three-line and one-line chains, K has one-line and two-line chains, and each of three dots has a circle. The source model is not included in the repository.
+
+**Interactive V1.07 execution and the resulting NX toolpath remain untested.** The installed NX batch launcher failed before journal execution, and window automation could not attach to the working window. Geometry tests and compilation do not validate native CAM behavior. Inspect the result and the normally generated NX toolpath before machining.
+
 ## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.06
 
 - K: create the through-stem as one line and the diagonals as a separate sharp checkmark clear of the stem. Merge nearby junctions only with four confirmed straight guides; preserve independent adjacent junctions.

@@ -129,6 +129,7 @@ public class RoutingChecks
             var region=new R(loops);var raw=EngravingCenterlines.Build(region,.002*unit);
             string name="acute 4 width="+width+" scale="+scale+" shear="+shear+" unit="+unit;
             Require(raw.Curves.Count==3,name+" extra medial branch");
+            Require(raw.WallReconstruction,name+" did not reconstruct the paired walls");
             int segments=0,triangles=0;
             foreach(var path in raw.Curves)
             {
@@ -183,6 +184,7 @@ public class RoutingChecks
                 var region=new R(loops);EngravingCenterlines.Result raw,result;
                 try {raw=EngravingCenterlines.Build(region,.002*unit);result=EngravingRoutes.Build(raw,region,.02*unit,.002*unit);}
                 catch(Exception ex){throw new Exception(name,ex);}
+                Require(raw.WallReconstruction,name+" fell back instead of restoring the wall network");
                 CheckResult(name,region,result,2,0,unit,true);RetainedEnds(raw,result);
                 var a=result.Curves[0];var b=result.Curves[1];if(a.Count>b.Count){var t=a;a=b;b=t;}
                 Require(a.Count==1&&b.Count==(letter=="K"?2:3),name+" incorrect straight stroke layout: "+a.Count+"/"+b.Count);
@@ -208,6 +210,38 @@ public class RoutingChecks
                 }
             }
         }
+    }
+    static void WallOutlines()
+    {
+        // Independent stroke layouts, with no character identity or font templates.
+        var shapes=new List<List<List<P>>>{
+            new List<List<P>>{Poly(-.2,-.2,3,-.2,3,.2,.2,.2,.2,3,-.2,3)},
+            new List<List<P>>{Poly(-.2,-.2,3.2,-.2,3.2,3,2.8,3,2.8,.2,.2,.2,.2,3,-.2,3)},
+            new List<List<P>>{Poly(-.2,-2,.2,-2,.2,1.8,2,1.8,2,2.2,-2,2.2,-2,1.8,-.2,1.8)},
+            new List<List<P>>{Poly(-1.2,-2,-.8,-2,-.8,-.2,.8,-.2,.8,-2,1.2,-2,1.2,2,.8,2,.8,.2,-.8,.2,-.8,2,-1.2,2)},
+            new List<List<P>>{Poly(-2.2,-1.2,2.2,-1.2,2.2,1.2,-2.2,1.2),Poly(-1.8,-.8,1.8,-.8,1.8,.8,-1.8,.8)}
+        };
+        int[] expected={1,1,2,3,1};
+        foreach(double angle in new double[]{.0,.417,1.236})foreach(double shear in new double[]{0,.268,.51})
+        foreach(double unit in new double[]{1,1/25.4})for(int i=0;i<shapes.Count;i++)
+        {
+            var region=new R(Transform(Shear(shapes[i],.7,shear),angle,unit,angle>1));
+            var raw=EngravingCenterlines.Build(region,.002*unit);
+            string name="paired walls layout="+i+" angle="+angle+" shear="+shear+" unit="+unit;
+            Require(raw.WallReconstruction,name+" unexpectedly fell back to medial axis");
+            foreach(var path in raw.Curves)foreach(B b in path)Require(b.Line,name+" bent a straight stroke");
+            CheckResult(name,region,EngravingRoutes.Build(raw,region,.02*unit,.002*unit),expected[i],i==4?1:0,unit,true);
+        }
+        // An imported punctuation dot may be slightly oval; no tiny branches or filled area.
+        foreach(double unit in new double[]{1,1/25.4})foreach(double ratio in new double[]{1.04,1.10,1.14})
+        {
+            var oval=new List<P>();for(int i=0;i<240;i++){double a=2*Math.PI*i/240;oval.Add(new P(.15*unit*ratio*Math.Cos(a),.15*unit*Math.Sin(a)));}
+            var region=new R(new List<List<P>>{oval});var raw=EngravingCenterlines.Build(region,.002*unit);
+            Require(raw.Curves.Count==0&&raw.Circles.Count==1,"oval punctuation produced a branched skeleton");
+            Require(Math.Abs(raw.Circles[0].Radius-.075*unit*Math.Sqrt(ratio))<.00001*unit,"oval D/2 equivalent diameter");scenarios++;
+        }
+        var elongated=new List<P>();for(int i=0;i<240;i++){double a=2*Math.PI*i/240;elongated.Add(new P(.4*Math.Cos(a),.15*Math.Sin(a)));}
+        Require(EngravingCenterlines.Build(new R(new List<List<P>>{elongated}),.002).Circles.Count==0,"elongated mark mistaken for a dot");scenarios++;
     }
     public static void Main()
     {
@@ -244,6 +278,7 @@ public class RoutingChecks
         ShortBranches();
         AcuteTriangles();
         ImportedStraightStrokes();
+        WallOutlines();
         Check("ring",new List<List<P>>{Circle(2.2),Circle(1.8)},1,1);
         var dot=Check("dot",new List<List<P>>{Circle(.3)},0);Require(dot.Circles.Count==1&&Math.Abs(dot.Circles[0].Radius-.15)<1e-10,"D/2 changed");
         var region=new R(new List<List<P>>{Poly(-3,-3,3,-3,3,3,-3,3)});

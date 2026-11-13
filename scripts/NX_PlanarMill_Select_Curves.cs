@@ -1,7 +1,7 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.06
+// SCRIPT_VERSION: V1.07
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
-// Reconstructs approximate medial curves; round dots use a circle of half the face diameter.
+// Reconstructs straight wall-pair networks and curved centerlines; near-round dots use D/2 circles.
 // Preserves through-strokes; separates junctions by 0.004-0.02 mm and inherits operation tolerances.
 // Does not save files, generate a toolpath, or change the tool, depths, feeds or source body.
 
@@ -22,10 +22,10 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.06";
+    private const string SCRIPT_VERSION = "V1.07";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "6";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "7";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -638,7 +638,8 @@ public static class EngravingRoutes
             if (attempt == 8) throw new GapFitException("Не удалось разделить узел без касаний.");
         }
         var result = new EngravingCenterlines.Result { WidthEstimate = source.WidthEstimate, SamplingStep = source.SamplingStep,
-            BoundarySamples = source.BoundarySamples, SeparatedJunctions = junctions, JunctionGap = junctions > 0 ? gap : 0 };
+            BoundarySamples = source.BoundarySamples, SeparatedJunctions = junctions, JunctionGap = junctions > 0 ? gap : 0,
+            WallReconstruction = source.WallReconstruction };
         result.Circles.AddRange(source.Circles); bool[] used = new bool[edges.Count];
         for (int port = 0; port < pairs.Length; port++) if (pairs[port] < 0 && !used[port / 2])
             Walk(port, edges, trimmed, pairs, links, used, result, tolerance);
@@ -734,7 +735,8 @@ public static class EngravingRoutes
                     replacements.Add(guide.Port / 2, guide.Port % 2 == 0 ? path : Reverse(path));
                 }
                 if (!valid) continue;
-                var next = new EngravingCenterlines.Result { WidthEstimate = source.WidthEstimate, SamplingStep = source.SamplingStep, BoundarySamples = source.BoundarySamples };
+                var next = new EngravingCenterlines.Result { WidthEstimate = source.WidthEstimate, SamplingStep = source.SamplingStep,
+                    BoundarySamples = source.BoundarySamples, WallReconstruction = source.WallReconstruction };
                 next.Circles.AddRange(source.Circles);
                 for (int i = 0; i < source.Curves.Count; i++) if (i != bridge)
                 {
@@ -1186,6 +1188,7 @@ public static class EngravingCenterlines
         public int BoundarySamples, SeparatedJunctions;
         public double JunctionGap;
         public double WidthEstimate, SamplingStep;
+        public bool WallReconstruction;
     }
     public sealed class Region
     {
@@ -1322,6 +1325,7 @@ public static class EngravingCenterlines
         result.SamplingStep = step;
         Circle dot;
         if (RoundDot(region, tolerance, out dot)) { result.Circles.Add(dot); return result; }
+        if (WallGraph(region, tolerance, result)) return result;
         List<P> samples = Sample(region, step);
         result.BoundarySamples = samples.Count;
         if (samples.Count > 10000) throw new InvalidOperationException("Слишком сложная грань: более 10000 точек контура. Выбирайте отдельные грани букв.");
@@ -1381,11 +1385,22 @@ public static class EngravingCenterlines
         if (Math.Abs(area6) < 1e-20) return false; center = center * (1 / area6) + origin;
         double r = 0; foreach (P p in loop) r += (p - center).Length; r /= loop.Count;
         if (r < tolerance * 4 || !region.Inside(center)) return false;
-        foreach (P p in loop) if (Math.Abs((p - center).Length - r) > tolerance * 0.5) return false;
+        // Imported outline fonts often encode punctuation as a slightly oval spline.
+        // Accept compact near-circles by dimensionless shape tests, independently of CAM
+        // tolerance. Elongated marks, polygons and counters remain ordinary geometry.
+        bool nearCircle = loop.Count >= 16 && 4 * Math.PI * region.Area / (region.Perimeter * region.Perimeter) >= 0.985;
+        double radialLimit = nearCircle ? Math.Max(tolerance * 0.5, r * 0.08) : tolerance * 0.5;
+        bool exactCircle = true;
+        foreach (P p in loop)
+        {
+            double error = Math.Abs((p - center).Length - r);
+            if (error > radialLimit) return false;
+            if (error > tolerance * 0.5) exactCircle = false;
+        }
         // Check segment midpoints as well: vertices of a polygon alone may lie on a circle.
-        foreach (Segment e in region.Edges) if (Math.Abs(((e.A + e.B) * 0.5 - center).Length - r) > tolerance) return false;
+        foreach (Segment e in region.Edges) if (Math.Abs(((e.A + e.B) * 0.5 - center).Length - r) > Math.Max(tolerance, radialLimit)) return false;
         // The requested convention for a round punctuation mark: path diameter = face diameter / 2.
-        circle = new Circle { Center = center, Radius = r / 2 }; return true;
+        circle = new Circle { Center = center, Radius = (exactCircle ? r : Math.Sqrt(region.Area / Math.PI)) / 2 }; return true;
     }
     private static void CheckTopology(List<Node> nodes, int holes)
     {
@@ -1721,6 +1736,142 @@ public static class EngravingCenterlines
         }
         return axes;
     }
+    // Reconstruct the stroke graph from pairs of visible boundary walls. This path does
+    // not sample or prune a medial axis: pointed miters cannot introduce terminal spurs.
+    private sealed class WallJunction
+    {
+        internal P Point;
+        internal readonly HashSet<int> Axes = new HashSet<int>();
+    }
+    private static bool WallGraph(Region region, double tolerance, Result result)
+    {
+        List<StraightAxis> axes = StraightAxes(region, tolerance);
+        if (axes.Count == 0 || axes.Count > 100) return false;
+        double width = 2 * region.Area / region.Perimeter;
+        // Every long boundary run must have a measured opposite wall. Unmatched short
+        // runs are end caps; a curved/unpaired outline uses the curved-stroke solver.
+        double covered = 0;
+        foreach (List<P> loop in region.Loops)
+        {
+            bool[] supported = new bool[loop.Count]; double[] lengths = new double[loop.Count];
+            for (int i = 0; i < loop.Count; i++)
+            {
+                P a = loop[i], b = loop[(i + 1) % loop.Count]; lengths[i] = (b - a).Length;
+                foreach (StraightAxis axis in axes) foreach (Segment side in axis.Sides)
+                    if ((a - Closest(side, a)).Length <= tolerance * 0.1 && (b - Closest(side, b)).Length <= tolerance * 0.1) supported[i] = true;
+                if (supported[i]) covered += lengths[i];
+            }
+            int start = Array.FindIndex(supported, delegate(bool value) { return value; });
+            if (start < 0) return false;
+            double gap = 0;
+            for (int k = 1; k <= loop.Count; k++)
+            {
+                int i = (start + k) % loop.Count;
+                gap = supported[i] ? 0 : gap + lengths[i];
+                if (gap > width * 2.1) return false;
+            }
+        }
+        if (covered < region.Perimeter * 0.55) return false;
+        var junctions = new List<WallJunction>();
+        for (int i = 0; i < axes.Count; i++) for (int j = i + 1; j < axes.Count; j++)
+        {
+            StraightAxis a = axes[i], b = axes[j]; double cross = P.Cross(a.Direction, b.Direction);
+            if (Math.Abs(cross) < 0.08) continue;
+            P p = a.Origin + a.Direction * (P.Cross(b.Origin - a.Origin, b.Direction) / cross);
+            double reach = (a.Radius + b.Radius) / Math.Abs(cross) + tolerance;
+            if (a.Outside(p) > reach || b.Outside(p) > reach || !region.Inside(p)
+                || !region.SegmentInside(p, a.Origin + a.Direction * ((a.Low + a.High) * 0.5), tolerance)
+                || !region.SegmentInside(p, b.Origin + b.Direction * ((b.Low + b.High) * 0.5), tolerance)) continue;
+            var node = new WallJunction { Point = p }; node.Axes.Add(i); node.Axes.Add(j); junctions.Add(node);
+        }
+        // Several pairwise intersections can describe one finite-width junction. Merge
+        // only locally, never across a hole. The longest supported wall pair fixes the
+        // through direction; the remaining branches are fitted to that common junction.
+        for (int i = 0; i < junctions.Count; i++) for (int j = junctions.Count - 1; j > i; j--)
+        {
+            WallJunction a = junctions[i], b = junctions[j]; bool shared = false;
+            foreach (int k in a.Axes) if (b.Axes.Contains(k)) shared = true;
+            double distance = (a.Point - b.Point).Length;
+            if (!shared || distance > (region.Loops.Count == 1 ? width * 1.1 : tolerance * 0.01)
+                || (distance > tolerance * 0.01 && !region.SegmentInside(a.Point, b.Point, tolerance))) continue;
+            foreach (int k in b.Axes) a.Axes.Add(k);
+            P middle = (a.Point + b.Point) * 0.5; int longest = -1; double span = -1;
+            foreach (int k in a.Axes) if (axes[k].High - axes[k].Low > span) { longest = k; span = axes[k].High - axes[k].Low; }
+            a.Point = axes[longest].Project(middle); junctions.RemoveAt(j);
+        }
+        var nodes = new List<Node>();
+        foreach (WallJunction junction in junctions) nodes.Add(new Node { Point = junction.Point, Radius = region.Distance(junction.Point) });
+        for (int i = 0; i < axes.Count; i++)
+        {
+            StraightAxis axis = axes[i]; var sequence = new List<int>();
+            for (int j = 0; j < junctions.Count; j++) if (junctions[j].Axes.Contains(i)) sequence.Add(j);
+            sequence.Sort(delegate(int a, int b) { return axis.Parameter(nodes[a].Point).CompareTo(axis.Parameter(nodes[b].Point)); });
+            for (int end = 0; end < 2; end++)
+            {
+                double value = end == 0 ? axis.Low : axis.High; P cap;
+                bool hasCap = WallCap(axis, value, end == 0 ? -1 : 1, region, tolerance, out cap);
+                bool connected = sequence.Count > 0 && (end == 0
+                    ? axis.Parameter(nodes[sequence[0]].Point) <= value + axis.Radius * 2
+                    : axis.Parameter(nodes[sequence[sequence.Count - 1]].Point) >= value - axis.Radius * 2);
+                if (connected && !hasCap) continue;
+                P endpoint = hasCap ? cap : axis.Origin + axis.Direction * (value + (end == 0 ? 1 : -1) * axis.Radius * 0.1);
+                if (!region.Inside(endpoint)) return false;
+                int index = nodes.Count; nodes.Add(new Node { Point = endpoint, Radius = axis.Radius });
+                if (end == 0) sequence.Insert(0, index); else sequence.Add(index);
+            }
+            for (int j = 1; j < sequence.Count; j++)
+            {
+                int a = sequence[j - 1], b = sequence[j];
+                if ((nodes[a].Point - nodes[b].Point).Length < tolerance * 0.01) continue;
+                if (!region.SegmentInside(nodes[a].Point, nodes[b].Point, tolerance)) return false;
+                nodes[a].Links.Add(b); nodes[b].Links.Add(a);
+            }
+        }
+        try { CheckTopology(nodes, region.Loops.Count - 1); } catch (InvalidOperationException) { return false; }
+        List<Stroke> strokes = Trace(nodes); if (strokes.Count == 0) return false;
+        double restoredArea = 0;
+        foreach (Stroke stroke in strokes)
+        {
+            for (int i = 1; i < stroke.Points.Count; i++)
+            {
+                P a = stroke.Points[i - 1], b = stroke.Points[i]; double r = region.Distance((a + b) * 0.5);
+                restoredArea += 2 * r * (b - a).Length;
+            }
+        }
+        // Forward area consistency rejects an incomplete or excessive stroke network.
+        // Wall coverage and hole count above test the shape, not only its total area.
+        if (restoredArea < region.Area * 0.65 || restoredArea > region.Area * 1.4) return false;
+        foreach (Stroke stroke in strokes)
+        {
+            var path = new List<Bezier>();
+            for (int i = 1; i < stroke.Points.Count; i++)
+            {
+                path.Add(new Bezier { A = stroke.Points[i - 1], D = stroke.Points[i], Line = true });
+                stroke.Corners.Add(i - 1); stroke.Corners.Add(i);
+            }
+            result.Strokes.Add(stroke); result.Curves.Add(path);
+        }
+        result.WallReconstruction = true;
+        return true;
+    }
+    private static bool WallCap(StraightAxis axis, double parameter, int sign, Region region, double tolerance, out P endpoint)
+    {
+        endpoint = new P(); double best = double.MaxValue;
+        foreach (Segment edge in region.Edges)
+        {
+            P v = edge.B - edge.A; double cross = P.Cross(axis.Direction, v);
+            if (v.Length > axis.Radius * 4 || Math.Abs(cross) < v.Length * 0.5) continue;
+            double t = P.Cross(edge.A - axis.Origin, v) / cross;
+            double u = P.Cross(edge.A - axis.Origin, axis.Direction) / cross;
+            double distance = Math.Abs(t - parameter);
+            if (u < 0 || u > 1 || distance > axis.Radius * 1.5 || distance >= best) continue;
+            P cap = axis.Origin + axis.Direction * (t - sign * Math.Max(tolerance * 0.1, axis.Radius * 0.1));
+            if (!region.Inside(cap)) continue;
+            best = distance; endpoint = cap;
+        }
+        return best < double.MaxValue;
+    }
+
     private static int NearestAxis(P p, List<StraightAxis> axes, double tolerance)
     {
         int best = -1; double score = double.MaxValue;
