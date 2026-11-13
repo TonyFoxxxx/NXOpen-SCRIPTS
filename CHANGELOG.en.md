@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.02
+
+Fix the missing Python `Modl.AskFaceData` method after picking a face. Face and exact-bound reads, geometry transformation and model update call documented UF functions in the NX library. Entry points are checked before creating a copy; error codes and rollback are retained.
+
+Thirty-two portable checks passed, including ctypes calls without Python modelling methods. A complete V1.02 run in NX remains unverified. The single-part trial restrictions are retained.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.01
 
 Pick a planar face or datum plane directly in NX, including oblique planes. Check bounds in the selected-plane frame. On wrong-type error 1345005, query the geometry provider; explicitly record unavailable channels instead of treating them as empty. Other errors stop the trial.

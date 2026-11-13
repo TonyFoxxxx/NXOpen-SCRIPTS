@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.01
-SCRIPT_VERSION = "V1.01"
+# SCRIPT_VERSION: V1.02
+SCRIPT_VERSION = "V1.02"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -159,9 +159,10 @@ class NativeApiError(RuntimeError):
 
 
 class NativeCam:
-    """Documented UF C readers; avoids language-specific CAM enum aliases.
+    """Documented UF C calls, including methods absent from Python UF.Modl.
 
-    Signatures: Siemens uf_cam.h, uf_camgeom.h, uf_cambnd.h, uf.h.
+    Signatures: Siemens uf_cam.h, uf_camgeom.h, uf_cambnd.h, uf.h,
+    uf_modl.h, uf_modl_utilities.h and uf_trns.h.
     UF_CAM_geom_type_t is Part=0, Blank=1, Check=2, Trim=3,
     CutArea=4, Wall=5, Drive=6. tag_t is unsigned 32-bit on Windows.
     Opaque item handles are pointers, never tags; only the returned arrays
@@ -199,6 +200,12 @@ class NativeCam:
         dp = ctypes.POINTER(ctypes.c_double)
         self.mirror_matrix = self.bind("UF_MTX4_mirror", (dp, dp, dp))
         self.map_point = self.bind("UF_MTX4_vec3_multiply", (dp, dp, dp), None)
+        self.face_data = self.bind("UF_MODL_ask_face_data", (u, ip, dp, dp, dp, dp, dp, ip))
+        # double directions[3][3] is a pointer to rows of three doubles.
+        self.exact_box = self.bind("UF_MODL_ask_bounding_box_exact",
+                                   (u, u, dp, ctypes.POINTER(ctypes.c_double * 3), dp))
+        self.transform = self.bind("UF_MODL_transform_entities", (i, ctypes.POINTER(u), dp))
+        self.model_update = self.bind("UF_MODL_update", ())
 
     def bind(self, name, arguments, result=ctypes.c_int):
         for library in self.libs:
@@ -214,6 +221,39 @@ class NativeCam:
             self.fail_message(code, buffer)
             message = buffer.value.decode("utf-8", errors="replace")
             raise NativeApiError(code, context, message)
+
+    def face_plane(self, tag):
+        face_type, sense = ctypes.c_int(), ctypes.c_int()
+        point, normal = (ctypes.c_double * 3)(), (ctypes.c_double * 3)()
+        box = (ctypes.c_double * 6)()
+        radius, radial = ctypes.c_double(), ctypes.c_double()
+        self.check(self.face_data(int(tag), ctypes.byref(face_type), point, normal,
+                                 box, ctypes.byref(radius), ctypes.byref(radial),
+                                 ctypes.byref(sense)), "UF_MODL_ask_face_data")
+        if face_type.value != 22:
+            raise ValueError("Нужна плоская грань, а не цилиндрическая или криволинейная поверхность")
+        # Reflection is independent of the normal's sign / face sense.
+        return MirrorPlane(point, normal)
+
+    def bounding_box_exact(self, tag, csys):
+        corner, distances = (ctypes.c_double * 3)(), (ctypes.c_double * 3)()
+        directions = ((ctypes.c_double * 3) * 3)()
+        self.check(self.exact_box(int(tag), int(csys), corner, directions, distances),
+                   "UF_MODL_ask_bounding_box_exact")
+        return list(corner), [list(row) for row in directions], list(distances)
+
+    def transform_entities(self, tags, matrix):
+        tags = [int(tag) for tag in tags]
+        if not 0 < len(tags) <= MAX_OBJECTS or any(not 0 < tag <= 0xffffffff for tag in tags):
+            raise ValueError("Некорректный список объектов для отражения")
+        if len(matrix) != 16 or not all(math.isfinite(v) for v in matrix):
+            raise ValueError("Некорректная матрица отражения")
+        entities = (ctypes.c_uint32 * len(tags))(*tags)
+        values = (ctypes.c_double * 16)(*matrix)
+        self.check(self.transform(len(tags), entities, values), "UF_MODL_transform_entities")
+
+    def update_model(self):
+        self.check(self.model_update(), "UF_MODL_update")
 
     def geometry_provider(self, tag, kind):
         provider = ctypes.c_uint32()
@@ -353,11 +393,11 @@ def cam_nodes(setup, nx):
 
 
 class Trial:
-    def __init__(self, session, nx, uf, part, plane, lines):
+    def __init__(self, session, nx, uf, part, plane, lines, native=None):
         self.session, self.nx, self.uf, self.part = session, nx, uf, part
         self.plane, self.lines = plane, lines
         self.stage = "Подготовка копии"
-        self.native = NativeCam()
+        self.native = native if native is not None else NativeCam()
         self.bodies = list(part.Bodies)
         self.setup = part.CAMSetup
         self.operations = list(self.setup.CAMOperationCollection)
@@ -375,7 +415,7 @@ class Trial:
         for op in self.operations:
             if type(op).__name__ not in allowed_operations:
                 raise RuntimeError("В первом тесте пока не поддержан тип операции " + type(op).__name__)
-        # TransformEntities also transforms model parents. This first trial is
+        # UF_MODL_transform_entities also transforms model parents. This trial is
         # deliberately restricted to simple, local model histories.
         allowed = {"DATUM_CSYS", "DATUM_PLANE", "DATUM_AXIS", "SKETCH", "EXTRUDE",
                    "BLEND", "TOOLING BOX", "FSET", "BREP", "BLOCK", "CYLINDER",
@@ -508,7 +548,7 @@ class Trial:
             value = obj.Coordinates
             point = self.plane.local((value.X, value.Y, value.Z))
             return point + point
-        corner, directions, distances = self.uf.Modl.AskBoundingBoxExact(tag, self.box_csys)
+        corner, directions, distances = self.native.bounding_box_exact(tag, self.box_csys)
         return local_box(self.plane, corner, directions, distances)
 
     def operation_snapshot(self):
@@ -538,7 +578,7 @@ class Trial:
         self.stage = "Создание матрицы отражения"
         matrix = self.native.reflection_matrix(self.plane)
         self.stage = "Отражение геометрии и её модельных родителей"
-        self.uf.Modl.TransformEntities(len(targets), list(targets), matrix)
+        self.native.transform_entities(list(targets), matrix)
         self.stage = "Перенос систем координат"
         replacement = {}
         for tag, (old_origin, axes) in self.frames.items():
@@ -551,7 +591,7 @@ class Trial:
         self.stage = "Удаление рассчитанных траекторий в копии"
         self.setup.DeleteToolPath(self.operations)
         self.stage = "Обновление и проверка результата"
-        self.uf.Modl.Update()
+        self.native.update_model()
         if self.operation_snapshot() != operations:
             raise RuntimeError("Изменился состав операций или их геометрические родители")
         if any(op.IsMirror() or op.AskPathExists() for op in self.operations):
@@ -614,7 +654,7 @@ def preflight_source(session):
     return part, source
 
 
-def execute(session, nx, uf, plane):
+def execute(session, nx, uf, plane, native=None):
     lines = [TITLE, "Выбранная плоскость ABS: точка " + str(plane.origin) + "; нормаль " + str(plane.normal)]
     source_part, source = preflight_source(session)
     target, source_hash = copy_exclusive(source)
@@ -634,7 +674,7 @@ def execute(session, nx, uf, plane):
             raise RuntimeError("Копия не стала отображаемой деталью")
         mark = session.SetUndoMark(nx.Session.MarkVisibility.Visible, TITLE)
         stage = "Инициализация CAM в копии"
-        trial = Trial(session, nx, uf, part, plane, lines)
+        trial = Trial(session, nx, uf, part, plane, lines, native)
         trial.run()
         if digest(source) != source_hash:
             raise RuntimeError("Исходный файл изменился во время выполнения; результат теста не подтверждён")
@@ -663,21 +703,18 @@ def execute(session, nx, uf, plane):
     return "\r\n".join(lines)
 
 
-def plane_from_object(obj, part, nx, uf):
+def plane_from_object(obj, part, nx, native):
     if bool(getattr(obj, "IsOccurrence", False)) or int(obj.OwningPart.Tag) != int(part.Tag):
         raise ValueError("Выберите плоскость текущей детали, без компонентов")
     if isinstance(obj, nx.Face):
-        data = uf.Modl.AskFaceData(obj.Tag)
-        if int(data[0]) != 22:  # UF_MODL planar surface type
-            raise ValueError("Нужна плоская грань, а не цилиндрическая или криволинейная поверхность")
-        return MirrorPlane(data[1], data[2])
+        return native.face_plane(obj.Tag)
     if isinstance(obj, nx.DatumPlane):
         origin, normal = obj.Origin, obj.Normal
         return MirrorPlane((origin.X, origin.Y, origin.Z), (normal.X, normal.Y, normal.Z))
     raise ValueError("Выберите плоскую грань или базовую плоскость")
 
 
-def select_mirror_plane(nx, uf, part):
+def select_mirror_plane(nx, native, part):
     ui = nx.UI.GetUI()
     masks = []
     for object_type, solid_type in (
@@ -699,7 +736,7 @@ def select_mirror_plane(nx, uf, part):
         try:
             # Only numerical plane data cross into the copied part. Cursor
             # position is not used as the plane origin and no source tag is reused.
-            return plane_from_object(obj, part, nx, uf)
+            return plane_from_object(obj, part, nx, native)
         except ValueError as exc:
             ui.NXMessageBox.Show(TITLE + " — Выбор плоскости", nx.NXMessageBox.DialogType.Information, str(exc))
 
@@ -822,12 +859,14 @@ def main():
         session = NXOpen.Session.GetSession()
         part, source = preflight_source(session)
         uf = NXOpen.UF.UFSession.GetUFSession()
-        plane = select_mirror_plane(NXOpen, uf, part)
+        # Resolve the native entry points before selection or creating any copy.
+        native = NativeCam()
+        plane = select_mirror_plane(NXOpen, native, part)
         if plane is None:
             return
         # Recheck after the dialog; no CAM access or mutations on the source.
         preflight_source(session)
-        report = execute(session, NXOpen, uf, plane)
+        report = execute(session, NXOpen, uf, plane, native)
         show_result(report)
     except Exception:
         show_result(TITLE + "\r\n\r\n" + traceback.format_exc().replace("\n", "\r\n"))

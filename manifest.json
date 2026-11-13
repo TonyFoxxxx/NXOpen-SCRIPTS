@@ -200,9 +200,9 @@
       "id": "NX_Mirror_Project",
       "name": "Зеркальная копия CAM-проекта — тест",
       "file": "NX_Mirror_Project.py",
-      "version": "V1.01",
+      "version": "V1.02",
       "path": "scripts/NX_Mirror_Project.py",
-      "sha256": "8a0e8d3c81cb1ed1db13923f24849f9307c60bab5d5291905f8d119207b3d846",
+      "sha256": "51b861be8935c46c3f5ed2e58e553047b02c1f4e0ffecd59a5cd63f62f37a11c",
       "description": "Тест без компонентов: выбор плоскости щелчком, копия PRT и перенос MCS. Без расчёта траекторий и автосохранения; числовые пространственные настройки пока не отражаются."
     },
     {

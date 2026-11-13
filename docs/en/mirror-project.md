@@ -2,13 +2,13 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.01**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.02**.
 
 ## Latest release
 
-**V1.01 · 2026-11-14** — pick a planar face or datum plane directly in NX, including oblique planes. The manual XY/XZ/YZ and coordinate dialog has been removed. Bounds are checked in a fixed frame aligned with the selected plane.
+**V1.02 · 2026-11-14** — fix `AttributeError: NXOpen.UF.Modl has no attribute AskFaceData` after picking a face. Plane data now comes from `UF_MODL_ask_face_data` in the installed NX library, without the unavailable Python method.
 
-Fix the stop at `UF_CAMGEOM_ask_items: 1345005`. When a node cannot supply a geometry channel, the geometry provider is queried. A still-unavailable channel is explicitly reported instead of being treated as empty geometry. Other errors stop the trial with the node name, class and geometry kind. Transformation does not start if no CAM geometry reference can be read.
+Exact bounds, geometry transformation and model update also use their corresponding UF functions. Entry points are resolved before plane selection or copy creation. UF failures retain their code and function name; failures after changes begin use the existing Undo rollback. Picking planar faces or datum planes, including oblique planes, is retained.
 
 **This remains a trial. A complete successful run in NX / Designcenter 2606 is not yet confirmed. Numerical directions and coordinates inside operation settings are not transformed yet.**
 
@@ -16,7 +16,7 @@ Fix the stop at `UF_CAMGEOM_ask_items: 1345005`. When a node cannot supply a geo
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.01**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.02**.
 4. Click a **planar face** or **datum plane** in NX. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files are never replaced.
 6. Read and share the report using **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. Then save the open test copy using the normal NX command and regenerate operations.
@@ -46,4 +46,4 @@ Fix the stop at `UF_CAMGEOM_ask_items: 1345005`. When a node cannot supply a geo
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-Twenty-six portable checks passed, including error 1345005 on a container, geometry-provider routing, distinguishing empty from unavailable channels, oblique planes, face/datum selection and cancellation. A user reproduced the V1 pre-reflection failure and successful rollback. Plane selection and a complete V1.01 run in NX still need runtime validation.
+Thirty-two portable checks passed: face selection without Python modelling methods, ctypes arrays and 32-bit tags, oblique plane and exact-bound reads, UF error codes, and the existing CAM-reference, copying and rollback checks. These checks use stub C calls and do not replace execution in the NX kernel. V1 rollback after a CAM-geometry read error was confirmed; a user reproduced the V1.01 face-read failure before copy creation. A complete V1.02 run in NX remains unverified.

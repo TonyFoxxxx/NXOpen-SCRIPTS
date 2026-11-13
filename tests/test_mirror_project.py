@@ -253,19 +253,118 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(reader.channel(None, 1, 0), ('unavailable', 1, []))
 
 
-class PlaneSelectionTests(unittest.TestCase):
-    def test_plane_comes_from_face_surface_not_cursor_position(self):
+class NativeModellingTests(unittest.TestCase):
+    def reader(self):
+        reader = object.__new__(M.NativeCam)
+        reader.fail_message = lambda code, buffer: setattr(buffer, 'value', b'UF model error')
+        return reader
+
+    def face_reader(self, face_type=22, normal=(1,1,0), error=0):
+        reader = self.reader()
+        dp, ip = ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int)
+        @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint32, ip, dp, dp, dp, dp, dp, ip)
+        def ask(tag, kind, point, direction, box, radius, radial, sense):
+            reader.last_face = tag
+            if error:
+                return error
+            kind[0], sense[0] = face_type, -1
+            for i, v in enumerate((1,1,0)):
+                point[i], direction[i] = v, normal[i]
+            for i in range(6):
+                box[i] = i + 100.0
+            radius[0], radial[0] = 12.0, 34.0
+            return 0
+        reader.face_data = ask
+        return reader
+
+    def test_face_selection_without_python_modelling_methods(self):
         class Face:
-            Tag = 10
+            Tag = 0xf0000001
             IsOccurrence = False
             OwningPart = types.SimpleNamespace(Tag=1)
         nx = types.SimpleNamespace(Face=Face, DatumPlane=type('Datum', (), {}))
-        uf = types.SimpleNamespace(Modl=types.SimpleNamespace(AskFaceData=lambda tag: (22,[1,1,0],[1,1,0],None,0,0,1)))
-        plane = M.plane_from_object(Face(), types.SimpleNamespace(Tag=1), nx, uf)
+        native = self.face_reader()
+        # There is deliberately no Modl / AskFaceData Python wrapper.
+        plane = M.plane_from_object(Face(), types.SimpleNamespace(Tag=1), nx, native)
+        self.assertEqual(native.last_face, Face.Tag)
+        self.assertEqual(plane.origin, (1,1,0))
         self.assertTrue(M.close_values(plane.point([3,0,5]), [2,-1,5]))
-        uf.Modl.AskFaceData = lambda tag: (16,[1,1,0],[1,1,0],None,0,0,1)
+
+    def test_native_face_error_is_not_misreported_as_nonplanar(self):
+        with self.assertRaises(M.NativeApiError) as caught:
+            self.face_reader(error=12345).face_plane(10)
+        self.assertEqual(caught.exception.code, 12345)
+        self.assertEqual(caught.exception.context, 'UF_MODL_ask_face_data')
+
+    def test_curved_face_and_invalid_normal_are_rejected(self):
         with self.assertRaisesRegex(ValueError, 'плоская'):
-            M.plane_from_object(Face(), types.SimpleNamespace(Tag=1), nx, uf)
+            self.face_reader(face_type=16).face_plane(10)
+        with self.assertRaisesRegex(ValueError, 'нулевую'):
+            self.face_reader(normal=(0,0,0)).face_plane(10)
+        with self.assertRaisesRegex(ValueError, 'Некорректная'):
+            self.face_reader(normal=(0,float('nan'),0)).face_plane(10)
+
+    def test_exact_bounds_pass_csys_and_read_three_double_rows(self):
+        native = self.reader()
+        dp = ctypes.POINTER(ctypes.c_double)
+        seen = []
+        @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint32, ctypes.c_uint32,
+                         dp, ctypes.POINTER(ctypes.c_double * 3), dp)
+        def ask(tag, csys, corner, directions, distances):
+            seen.append((tag, csys))
+            rows = ((0,1,0), (0,0,1), (1,0,0))
+            for i in range(3):
+                corner[i], distances[i] = (1,2,3)[i], (5,7,10)[i]
+                for j in range(3):
+                    directions[i][j] = rows[i][j]
+            return 0
+        native.exact_box = ask
+        trial = object.__new__(M.Trial)
+        trial.refs, trial.plane, trial.box_csys = {}, axis_plane(), 0xf0000002
+        trial.native = native
+        trial.uf = types.SimpleNamespace(Modl=types.SimpleNamespace())
+        actual = trial.bounding_box(0xf0000001)
+        self.assertEqual(seen, [(0xf0000001,0xf0000002)])
+        self.assertEqual(actual, [1,-10,2,11,-3,7])
+
+    def test_transform_passes_unsigned_tags_and_all_sixteen_doubles(self):
+        native, seen = self.reader(), []
+        @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int,
+                         ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_double))
+        def transform(count, tags, matrix):
+            seen.append(([tags[i] for i in range(count)], [matrix[i] for i in range(16)]))
+            return 0
+        native.transform = transform
+        native.transform_entities([1,0xf0000001], list(range(16)))
+        self.assertEqual(seen, [([1,0xf0000001],list(range(16)))])
+
+    def test_invalid_transform_is_rejected_before_native_call(self):
+        native = self.reader()
+        native.transform = lambda *a: self.fail('invalid input must not reach NX')
+        for tags in ([], [0], [-1], [0x100000000]):
+            with self.assertRaises(ValueError):
+                native.transform_entities(tags, [0.0]*16)
+        for matrix in ([0.0]*15, [float('inf')]*16):
+            with self.assertRaises(ValueError):
+                native.transform_entities([1], matrix)
+
+    def test_all_native_modelling_failures_keep_code_and_function(self):
+        native = self.reader()
+        native.transform = lambda *a: 999
+        native.exact_box = lambda *a: 999
+        native.model_update = ctypes.CFUNCTYPE(ctypes.c_int)(lambda: 999)
+        for call, context in (
+            (lambda: native.bounding_box_exact(1,2), 'UF_MODL_ask_bounding_box_exact'),
+            (lambda: native.transform_entities([1],[0.0]*16), 'UF_MODL_transform_entities'),
+            (native.update_model, 'UF_MODL_update'),
+        ):
+            with self.subTest(context=context), self.assertRaises(M.NativeApiError) as caught:
+                call()
+            self.assertEqual(caught.exception.code, 999)
+            self.assertEqual(caught.exception.context, context)
+
+
+class PlaneSelectionTests(unittest.TestCase):
 
     def test_datum_plane_and_other_part_rejection(self):
         class Datum:
