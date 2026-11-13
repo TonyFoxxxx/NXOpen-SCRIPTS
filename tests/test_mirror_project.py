@@ -20,6 +20,22 @@ def axis_plane(axis=0, offset=0.0):
 
 
 class GeometryTests(unittest.TestCase):
+    def test_boundary_coordinates_and_open_material_side_follow_reflection(self):
+        angle = 0.7
+        axes = [math.cos(angle),math.sin(angle),0,-math.sin(angle),math.cos(angle),0,0,0,1]
+        plane = M.MirrorPlane([4,2,7],[1,2,3])
+        mirrored = M.reflected_boundary_frame(axes,plane)
+        x, y, z = mirrored[:3], mirrored[3:6], mirrored[6:]
+        self.assertAlmostEqual(M.dot(M.cross(x,y),z),1)
+        origin = [7,-4,2]
+        delta = [5*axes[i]+3*axes[i+3] for i in range(3)]
+        point = [a+b for a,b in zip(origin,delta)]
+        new_delta = [a-b for a,b in zip(plane.point(point),plane.point(origin))]
+        self.assertTrue(M.close_values([M.dot(new_delta,x),M.dot(new_delta,y),M.dot(new_delta,z)],[5,3,0]))
+        old_left = M.cross(axes[6:],axes[:3])
+        self.assertTrue(M.close_values(M.cross(z,x),plane.vector(old_left)))
+        self.assertTrue(M.close_values(M.reflected_boundary_frame(mirrored,plane),axes))
+
     def test_oblique_plane_reflection_and_opposite_normal(self):
         plane = M.MirrorPlane([1, 1, 0], [1, 1, 0])
         opposite = M.MirrorPlane([1, 1, 0], [-7, -7, 0])
@@ -385,11 +401,64 @@ class PlaneSelectionTests(unittest.TestCase):
             SelectionScope=types.SimpleNamespace(WorkPart=1),
             SelectionAction=types.SimpleNamespace(ClearAndEnableSpecific=1),
             Response=types.SimpleNamespace(Cancel=2, Back=3))
-        ui = types.SimpleNamespace(SelectionManager=types.SimpleNamespace(SelectTaggedObject=lambda *a: (2,None,None)))
+        ui = types.SimpleNamespace(SelectionManager=types.SimpleNamespace(SelectTaggedObjects=lambda *a: (2,None)))
         nx = types.SimpleNamespace(Selection=selection, UI=types.SimpleNamespace(GetUI=lambda: ui),
             UF=types.SimpleNamespace(UFConstants=types.SimpleNamespace(UF_solid_type=70,UF_UI_SEL_FEATURE_PLANAR_FACE=20,UF_datum_plane_type=197)))
         with patch.object(M, 'plane_from_object', side_effect=AssertionError('must not read')):
             self.assertIsNone(M.select_mirror_plane(nx, None, None))
+
+    def test_geometry_picker_requires_exactly_one_object_and_ok(self):
+        selected = object()
+        responses = iter([(1,[]),(1,[object(),object()]),(1,[selected])])
+        prompts, messages = [], []
+        def pick(*args):
+            prompts.append(args)
+            return next(responses)
+        selection = types.SimpleNamespace(MaskTriple=lambda: types.SimpleNamespace(),
+            SelectionScope=types.SimpleNamespace(WorkPart=1),
+            SelectionAction=types.SimpleNamespace(ClearAndEnableSpecific=1),
+            Response=types.SimpleNamespace(Cancel=2,Back=3))
+        ui = types.SimpleNamespace(SelectionManager=types.SimpleNamespace(SelectTaggedObjects=pick),
+            NXMessageBox=types.SimpleNamespace(Show=lambda *a: messages.append(a)))
+        nx = types.SimpleNamespace(Selection=selection, UI=types.SimpleNamespace(GetUI=lambda:ui),
+            NXMessageBox=types.SimpleNamespace(DialogType=types.SimpleNamespace(Information=1)),
+            UF=types.SimpleNamespace(UFConstants=types.SimpleNamespace(UF_solid_type=70,UF_UI_SEL_FEATURE_PLANAR_FACE=20,UF_datum_plane_type=197)))
+        with patch.object(M,'plane_from_object',return_value='plane') as reader:
+            self.assertEqual(M.select_mirror_plane(nx,'native','part'),'plane')
+        reader.assert_called_once_with(selected,'part',nx,'native')
+        self.assertEqual(len(messages),2)
+        self.assertTrue(all('OK' in args[0] and 'одну' in args[0] for args in prompts))
+
+
+class WcsTests(unittest.TestCase):
+    def trial(self, fails):
+        nx = types.SimpleNamespace(Matrix3x3=lambda:types.SimpleNamespace(),
+            Point3d=lambda x,y,z:types.SimpleNamespace(X=x,Y=y,Z=z))
+        class Wcs:
+            def SetOriginAndMatrix(self,origin,matrix):
+                self.CoordinateSystem = types.SimpleNamespace(Origin=origin,Orientation=types.SimpleNamespace(Element=matrix))
+        wcs = Wcs()
+        origin, axes = [11,22,33], [0,1,0,-1,0,0,0,0,1]
+        M.set_wcs_values(wcs,nx,origin,axes)
+        trial = object.__new__(M.Trial)
+        trial.part, trial.nx = types.SimpleNamespace(WCS=wcs), nx
+        def run():
+            self.assertEqual(M.wcs_values(wcs),([0,0,0],[1,0,0,0,1,0,0,0,1]))
+            if fails:
+                raise RuntimeError('failed in copy')
+        trial.run_in_absolute_wcs = run
+        return trial, origin, axes
+
+    def test_shifted_rotated_wcs_is_restored_after_success(self):
+        trial, origin, axes = self.trial(False)
+        trial.run()
+        self.assertEqual(M.wcs_values(trial.part.WCS),(origin,axes))
+
+    def test_shifted_rotated_wcs_is_restored_after_failure(self):
+        trial, origin, axes = self.trial(True)
+        with self.assertRaisesRegex(RuntimeError,'failed in copy'):
+            trial.run()
+        self.assertEqual(M.wcs_values(trial.part.WCS),(origin,axes))
 
 
 class TransactionTests(unittest.TestCase):

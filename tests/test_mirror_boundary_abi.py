@@ -40,6 +40,8 @@ class BoundaryAbiTests(unittest.TestCase):
         self.native.free = self.native.bind('UF_free', (p,), None)
         self.native.boundaries = self.native.bind('UF_CAMBND_ask_boundaries', (u,i,ip,pp))
         self.native.boundary_data = self.native.bind('UF_CAMBND_ask_boundary_data', (p,ctypes.POINTER(M._BoundaryData)))
+        self.native.set_boundary = self.native.bind('UF_CAMBND_set_boundary_plane', (p,ctypes.POINTER(ctypes.c_double),ctypes.POINTER(ctypes.c_double)))
+        self.native.model_update = self.native.bind('UF_MODL_update', ())
         self.native.members = self.native.bind('UF_CAMBND_ask_boundary_items', (p,ip,pp))
         self.native.member_entity = self.native.bind('UF_CAMBND_ask_item_entity', (p,ctypes.POINTER(u)))
         self.native.fail_message = lambda code, buffer: setattr(buffer, 'value', b'C ABI probe error')
@@ -68,6 +70,9 @@ class BoundaryAbiTests(unittest.TestCase):
         self.native.custom_count = lambda *a: 0
         trial = object.__new__(M.Trial)
         trial.native, trial.nodes = self.native, [PlanarMilling()]
+        trial.plane = M.MirrorPlane((2,4,6),(1,2,3))
+        trial.boundary_planes, trial.current_boundaries = {}, {}
+        trial.moved_boundary_count = 0
         trial.refs, trial.unavailable = {}, set()
         trial.reference = lambda tag: trial.refs.setdefault(tag, 'edge')
         trial.nx = types.SimpleNamespace(CAM=types.SimpleNamespace(Operation=Operation))
@@ -106,13 +111,60 @@ class BoundaryAbiTests(unittest.TestCase):
         trial.uf.Cambnd.AskBoundaryData.assert_not_called()
         self.assertEqual(self.stat(3), 2)
 
-    def test_manual_plane_is_still_rejected_before_member_processing(self):
+    def test_manual_plane_transfers_and_preserves_boundary_settings(self):
         self.reset(0,0)
         trial = self.trial()
-        with self.assertRaisesRegex(RuntimeError, 'заданной плоскостью'):
-            trial.geometry_snapshot(collect=True)
-        self.assertIn('PLSK_CHIST_Z0 [PlanarMilling]/Blank / граница 1 из 1 / параметры', trial.stage)
-        self.assertEqual(self.stat(0), 1)
+        before = trial.geometry_snapshot(collect=True)
+        trial.transfer_boundary_planes(before)
+        self.assertEqual(trial.geometry_snapshot(), before)
+        trial.verify_boundary_planes()
+        self.assertEqual(self.stat(4), 1)
+        self.assertEqual(trial.moved_boundary_count, 1)
+        self.assertEqual(before[(100,1,'boundary',1)], (0,1,2,1,0,1))
+
+    def test_inherited_boundary_is_written_once(self):
+        self.reset(0,0)
+        trial = self.trial()
+        second = type(trial.nodes[0])()
+        second.Tag, second.Name = 101, 'SECOND_OPERATION'
+        trial.nodes.append(second)
+        before = trial.geometry_snapshot(collect=True)
+        self.assertEqual(len(trial.boundary_planes), 2)
+        trial.transfer_boundary_planes(before)
+        self.assertEqual(self.stat(4), 1)
+        trial.geometry_snapshot()
+        trial.verify_boundary_planes()
+
+    def test_already_moved_plane_is_not_reflected_twice(self):
+        self.reset(0,0)
+        trial = self.trial()
+        before = trial.geometry_snapshot(collect=True)
+        origin, axes = trial.boundary_planes[(100,1,1)]
+        self.native.set_boundary_plane(self.handle(), trial.plane.point(origin), M.reflected_boundary_frame(axes,trial.plane))
+        trial.transfer_boundary_planes(before)
+        trial.geometry_snapshot()
+        trial.verify_boundary_planes()
+        self.assertEqual(self.stat(4), 2)
+
+    def test_setter_failure_stops_trial(self):
+        self.reset(0,0)
+        trial = self.trial()
+        before = trial.geometry_snapshot(collect=True)
+        self.native.bind('fixture_write_error',(ctypes.c_int,),None)(12345)
+        with self.assertRaises(M.NativeApiError) as caught:
+            trial.transfer_boundary_planes(before)
+        self.assertEqual(caught.exception.context, 'UF_CAMBND_set_boundary_plane')
+        self.assertEqual(caught.exception.code, 12345)
+
+    def test_failed_plane_update_is_detected_by_readback(self):
+        self.reset(0,0)
+        trial = self.trial()
+        before = trial.geometry_snapshot(collect=True)
+        self.native.set_boundary_plane = lambda *args: None
+        trial.transfer_boundary_planes(before)
+        trial.geometry_snapshot()
+        with self.assertRaisesRegex(RuntimeError,'Не подтверждено'):
+            trial.verify_boundary_planes()
 
     def test_boundary_data_error_is_fatal_even_for_wrong_type(self):
         self.reset(1,1345005)

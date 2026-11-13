@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.04
+
+Transfer user-defined boundary planes: reflect origin and X/Y, reconstruct Z to preserve a right-handed frame and material-side meaning. Check parameters and references; update a shared boundary once from its original coordinates. Temporarily align the copy's WCS with ABS and restore it on completion or failure.
+
+Replace single-object selection with its name entry field by geometry selection: one planar face or datum plane, then OK. Explain empty or multiple selection. Forty-seven checks passed outside NX, including ten with a C library. A complete run and the V1.04 interface remain unconfirmed in NX.
+
 ## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.11
 
 Fix unintended rounding where a straight stroke meets a curved stroke. When the outline confirms a sharp joint, reconstruct it from the supporting walls while retaining the curved portion. Genuine tangential fillets stay smooth; terminal setbacks and circles for dots are retained.

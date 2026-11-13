@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.03
-SCRIPT_VERSION = "V1.03"
+# SCRIPT_VERSION: V1.04
+SCRIPT_VERSION = "V1.04"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -73,15 +73,50 @@ class MirrorPlane:
         return [dot(delta, self.basis[i:i+3]) for i in (0, 3, 6)]
 
 
+def frame_axes(matrix, label):
+    if len(matrix) != 9 or not all(math.isfinite(x) for x in matrix):
+        raise ValueError("Некорректная матрица " + label)
+    x, y, z = list(matrix[:3]), list(matrix[3:6]), list(matrix[6:9])
+    if max(abs(dot(v, v)-1.0) for v in (x, y, z)) > 1e-6 or dot(cross(x, y), z) < 0.999999:
+        raise ValueError(label + ": требуется ортонормированная правая система")
+    return x, y, z
+
+
 def reflected_frame(matrix, plane):
     """Preserve reflected X and Z; reconstruct Y for a right-handed MCS."""
-    if len(matrix) != 9 or not all(math.isfinite(x) for x in matrix):
-        raise ValueError("Некорректная матрица MCS")
-    x, y, z = matrix[:3], matrix[3:6], matrix[6:9]
-    if max(abs(dot(v, v)-1.0) for v in (x, y, z)) > 1e-6 or dot(cross(x, y), z) < 0.999999:
-        raise ValueError("MCS не является ортонормированной правой системой")
+    x, y, z = frame_axes(matrix, "MCS")
     x, z = plane.vector(x), plane.vector(z)
     return x + cross(z, x) + z
+
+
+def reflected_boundary_frame(matrix, plane):
+    """Preserve the boundary's 2D coordinates and left/right material side.
+
+    X/Y follow the reflection; Z is reconstructed for a right-handed frame.
+    Its Z is -reflect(old Z); MCS separately preserves reflect(its old Z).
+    """
+    x, y, z = frame_axes(matrix, "плоскости границы")
+    x, y = plane.vector(x), plane.vector(y)
+    return x + y + cross(x, y)
+
+
+MATRIX_FIELDS = ("Xx", "Xy", "Xz", "Yx", "Yy", "Yz", "Zx", "Zy", "Zz")
+
+
+def wcs_values(wcs):
+    csys = wcs.CoordinateSystem
+    origin, axes = csys.Origin, csys.Orientation.Element
+    return [origin.X, origin.Y, origin.Z], [getattr(axes, name) for name in MATRIX_FIELDS]
+
+
+def set_wcs_values(wcs, nx, origin, axes):
+    matrix = nx.Matrix3x3()
+    for name, value in zip(MATRIX_FIELDS, axes):
+        setattr(matrix, name, value)
+    wcs.SetOriginAndMatrix(nx.Point3d(*origin), matrix)
+    actual_origin, actual_axes = wcs_values(wcs)
+    if not close_values(actual_origin, origin) or not close_values(actual_axes, axes):
+        raise RuntimeError("NX не подтвердил положение WCS")
 
 
 def reflected_box(box, axis, offset):
@@ -218,6 +253,7 @@ class NativeCam:
         self.member_entity = self.bind("UF_CAMBND_ask_item_entity", (p, ctypes.POINTER(u)))
         self.custom = self.bind("UF_CAMGEOM_ask_custom_points", (u, i, ip, pp))
         dp = ctypes.POINTER(ctypes.c_double)
+        self.set_boundary = self.bind("UF_CAMBND_set_boundary_plane", (p, dp, dp))
         self.mirror_matrix = self.bind("UF_MTX4_mirror", (dp, dp, dp))
         self.map_point = self.bind("UF_MTX4_vec3_multiply", (dp, dp, dp), None)
         self.face_data = self.bind("UF_MODL_ask_face_data", (u, ip, dp, dp, dp, dp, dp, ip))
@@ -275,7 +311,7 @@ class NativeCam:
     def update_model(self):
         self.check(self.model_update(), "UF_MODL_update")
 
-    def boundary_plane_type(self, handle):
+    def read_boundary(self, handle):
         # Keep the opaque handle pointer-sized from ask_boundaries to this call;
         # do not pass a C pointer through the Python Cambnd wrapper.
         if not handle:
@@ -284,7 +320,17 @@ class NativeCam:
         self.check(self.boundary_data(handle, ctypes.byref(data)), "UF_CAMBND_ask_boundary_data")
         if data.plane_type not in (0, 1):
             raise RuntimeError("UF_CAMBND_ask_boundary_data: неизвестный тип плоскости " + str(data.plane_type))
-        return int(data.plane_type)
+        return data
+
+    def boundary_plane_type(self, handle):
+        return int(self.read_boundary(handle).plane_type)
+
+    def set_boundary_plane(self, handle, origin, matrix):
+        if not handle or len(origin) != 3 or not all(math.isfinite(v) for v in origin):
+            raise ValueError("Некорректная плоскость границы")
+        frame_axes(matrix, "плоскости границы")
+        self.check(self.set_boundary(handle, (ctypes.c_double * 3)(*origin),
+                                     (ctypes.c_double * 9)(*matrix)), "UF_CAMBND_set_boundary_plane")
 
     def geometry_provider(self, tag, kind):
         provider = ctypes.c_uint32()
@@ -438,6 +484,8 @@ class Trial:
         self.unavailable = set()
         self.box_csys = None
         self.mcs_expected = {}
+        self.boundary_planes, self.current_boundaries = {}, {}
+        self.moved_boundary_count = 0
         if not self.bodies or not self.operations:
             raise RuntimeError("В копии должны быть тела и CAM-операции")
         if any(op.IsMirror() for op in self.operations):
@@ -474,6 +522,9 @@ class Trial:
 
     def geometry_snapshot(self, collect=False):
         result = {}
+        self.current_boundaries = {}
+        if collect:
+            self.boundary_planes = {}
         for node in self.nodes:
             for kind, label in enumerate(GEOMETRY_KINDS):
                 context = str(node.Name) + " [" + type(node).__name__ + "]/" + label
@@ -497,11 +548,17 @@ class Trial:
                 for number, handle in enumerate(handles, 1):
                     boundary_context = context + " / граница " + str(number) + " из " + str(len(handles))
                     self.stage = "Чтение геометрии: " + boundary_context + " / параметры"
-                    plane_type = self.native.boundary_plane_type(handle)
-                    # Face-derived boundaries use an automatically evaluated plane.
-                    # Preserving a manual plane also requires orientation/material-side handling.
-                    if plane_type != 1:
-                        raise RuntimeError(context + ": граница с заданной плоскостью пока не поддерживается в этой версии")
+                    data = self.native.read_boundary(handle)
+                    key = (int(node.Tag), kind, number)
+                    self.current_boundaries[key] = (handle, data)
+                    result[(int(node.Tag), kind, "boundary", number)] = tuple(int(getattr(data, name)) for name in
+                        ("plane_type", "boundary_type", "material_side", "ignore_holes", "ignore_islands", "ignore_chamfers"))
+                    if collect and data.plane_type == 0:
+                        origin, axes = list(data.origin), list(data.matrix)
+                        if not all(math.isfinite(v) for v in origin):
+                            raise RuntimeError(boundary_context + ": некорректная точка плоскости")
+                        reflected_boundary_frame(axes, self.plane)
+                        self.boundary_planes[key] = (origin, axes)
                     self.stage = "Чтение геометрии: " + boundary_context + " / элементы"
                     members = self.native.pointers(self.native.members, handle)
                     member_tags = [self.native.entity(self.native.member_entity, item) for item in members]
@@ -531,6 +588,37 @@ class Trial:
         if collect and not self.refs:
             raise RuntimeError("Не удалось получить ни одной CAM-ссылки на геометрию. Недоступные каналы: " + "; ".join(sorted(self.unavailable)[:12]))
         return result
+
+    def transfer_boundary_planes(self, geometry):
+        if not self.boundary_planes:
+            return
+        # Reacquire handles after modelling/MCS update; never reuse old pointers.
+        self.stage = "Повторное чтение границ перед переносом плоскостей"
+        if self.geometry_snapshot() != geometry:
+            raise RuntimeError("Изменились CAM-ссылки или настройки границ до переноса плоскостей")
+        updates = {}
+        for key, (origin, axes) in self.boundary_planes.items():
+            handle, data = self.current_boundaries[key]
+            expected = (self.plane.point(origin), reflected_boundary_frame(axes, self.plane))
+            if handle in updates:
+                if not all(close_values(a, b) for a, b in zip(updates[handle], expected)):
+                    raise RuntimeError("Противоречивое наследование плоскости границы")
+            else:
+                updates[handle] = expected
+        for number, (handle, (origin, axes)) in enumerate(updates.items(), 1):
+            self.stage = "Перенос заданной плоскости границы " + str(number) + " из " + str(len(updates))
+            self.native.set_boundary_plane(handle, origin, axes)
+        self.moved_boundary_count = len(updates)
+        self.native.update_model()
+
+    def verify_boundary_planes(self):
+        for key, (origin, axes) in self.boundary_planes.items():
+            if key not in self.current_boundaries:
+                raise RuntimeError("Не найдена перенесённая граница " + str(key))
+            handle, data = self.current_boundaries[key]
+            if (data.plane_type != 0 or not close_values(list(data.origin), self.plane.point(origin)) or
+                    not close_values(list(data.matrix), reflected_boundary_frame(axes, self.plane))):
+                raise RuntimeError("Не подтверждено отражение плоскости границы " + str(key))
 
     def capture_parameters(self):
         for node in self.nodes:
@@ -591,6 +679,18 @@ class Trial:
                 for op in self.setup.CAMOperationCollection]
 
     def run(self):
+        # set_boundary_plane uses WCS coordinates. Normalize only the copy so
+        # getters/setters use ABS consistently, then restore the user's WCS.
+        self.stage = "Подготовка WCS в копии"
+        wcs = self.part.WCS
+        origin, axes = wcs_values(wcs)
+        try:
+            set_wcs_values(wcs, self.nx, [0.0, 0.0, 0.0], [1,0,0,0,1,0,0,0,1])
+            self.run_in_absolute_wcs()
+        finally:
+            set_wcs_values(wcs, self.nx, origin, axes)
+
+    def run_in_absolute_wcs(self):
         self.stage = "Чтение геометрических ссылок в копии"
         geometry = self.geometry_snapshot(collect=True)
         self.stage = "Чтение MCS и ссылочных параметров в копии"
@@ -626,6 +726,8 @@ class Trial:
         self.setup.DeleteToolPath(self.operations)
         self.stage = "Обновление и проверка результата"
         self.native.update_model()
+        self.transfer_boundary_planes(geometry)
+        self.stage = "Проверка отражённой геометрии, границ и MCS"
         if self.operation_snapshot() != operations:
             raise RuntimeError("Изменился состав операций или их геометрические родители")
         if any(op.IsMirror() or op.AskPathExists() for op in self.operations):
@@ -646,6 +748,7 @@ class Trial:
                                    "\nПолучено: " + str(actual))
         if self.geometry_snapshot() != geometry:
             raise RuntimeError("Изменились ссылки на выбранную CAM-геометрию/границы")
+        self.verify_boundary_planes()
         for (tag, index), old_tag in self.mcs_expected.items():
             actual = self.uf.Param.AskTagValue(tag, index)
             if int(actual) != int(replacement[old_tag]):
@@ -660,13 +763,14 @@ class Trial:
         self.lines.append("ПРОЙДЕНО: отражение проверенных объектов, сохранение их идентификаторов,")
         self.lines.append("доступных ссылок CAM-геометрии, состава операций и переноса MCS/RCS.")
         self.lines.append("Рассчитанные траектории удалены; зеркальные операции не создавались.")
+        self.lines.append("Перенесены и проверены заданные плоскости границ: " + str(self.moved_boundary_count))
         if self.unavailable:
             self.lines.append("\nНЕ ПРОВЕРЕНЫ через UF (код 1345005): " + str(len(self.unavailable)) + " разделов.")
             self.lines.extend(sorted(self.unavailable))
             self.lines.append("Недоступный раздел не считался пустой геометрией. Его содержимое не подтверждено.")
         self.lines.append("\nГРАНИЦЫ ТЕСТА: это не подтверждение корректности будущей обработки.")
         self.lines.append("Подачи, припуски, стратегии и остальные настройки скрипт не редактирует.")
-        self.lines.append("Числовые направления/координаты внутри настроек скрипт оставляет как есть:")
+        self.lines.append("Прочие числовые направления/координаты внутри настроек скрипт оставляет как есть:")
         self.lines.extend(self.raw_spatial or ["Локальные ненулевые 3D-параметры не найдены."])
         self.lines.append("Их смысл и соответствие зеркальной детали нужно проверить в операциях.")
 
@@ -759,18 +863,23 @@ def select_mirror_plane(nx, native, part):
         mask.Type, mask.Subtype, mask.SolidBodySubtype = object_type, 0, solid_type
         masks.append(mask)
     while True:
-        response, obj, cursor = ui.SelectionManager.SelectTaggedObject(
-            "Выберите плоскую грань или базовую плоскость отражения",
-            TITLE + " — Выбор плоскости",
+        response, objects = ui.SelectionManager.SelectTaggedObjects(
+            "Щёлкните одну плоскую грань или базовую плоскость, затем нажмите OK",
+            TITLE + " — Выберите одну плоскость",
             nx.Selection.SelectionScope.WorkPart,
             nx.Selection.SelectionAction.ClearAndEnableSpecific,
             False, False, masks)
-        if response in (nx.Selection.Response.Cancel, nx.Selection.Response.Back) or obj is None:
+        if response in (nx.Selection.Response.Cancel, nx.Selection.Response.Back):
             return None
+        objects = list(objects or [])
+        if len(objects) != 1:
+            ui.NXMessageBox.Show(TITLE + " — Выбор плоскости", nx.NXMessageBox.DialogType.Information,
+                "Выбрано объектов: " + str(len(objects)) + ". Выберите одну плоскую грань или базовую плоскость и нажмите OK.")
+            continue
         try:
             # Only numerical plane data cross into the copied part. Cursor
             # position is not used as the plane origin and no source tag is reused.
-            return plane_from_object(obj, part, nx, native)
+            return plane_from_object(objects[0], part, nx, native)
         except ValueError as exc:
             ui.NXMessageBox.Show(TITLE + " — Выбор плоскости", nx.NXMessageBox.DialogType.Information, str(exc))
 

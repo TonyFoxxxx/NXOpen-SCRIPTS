@@ -23,12 +23,19 @@ typedef struct {
 static int boundary_token, member_token;
 static void *allocations[8];
 static int plane_mode = 1, error_code, free_count, invalid_frees, data_calls;
+static int write_error, write_calls;
+static double plane_origin[3], plane_matrix[9];
 
 void fixture_reset(int mode, int error) {
     plane_mode = mode;
     error_code = error;
     free_count = invalid_frees = data_calls = 0;
+    write_error = write_calls = 0;
+    for (int i = 0; i < 3; ++i) plane_origin[i] = 100.0 + i;
+    for (int i = 0; i < 9; ++i) plane_matrix[i] = mode == 0 ? (i % 4 == 0 ? 1.0 : 0.0) : 200.0 + i;
 }
+
+void fixture_write_error(int error) { write_error = error; }
 
 size_t fixture_layout(int index) {
     const size_t values[] = {
@@ -49,7 +56,7 @@ size_t fixture_layout(int index) {
 int fixture_stat(int index) {
     int outstanding = 0;
     for (int i = 0; i < 8; ++i) outstanding += allocations[i] != NULL;
-    return index == 0 ? free_count : index == 1 ? invalid_frees : index == 2 ? outstanding : data_calls;
+    return index == 0 ? free_count : index == 1 ? invalid_frees : index == 2 ? outstanding : index == 3 ? data_calls : write_calls;
 }
 
 static int one_handle(void *handle, int *count, void ***out) {
@@ -95,13 +102,24 @@ int UF_CAMBND_ask_boundary_data(UF_CAMBND_boundary_t boundary, UF_CAMBND_boundar
     memset(data, 0, sizeof(*data));
     data->boundary_type = boundary_open;
     data->plane_type = plane_mode;
-    for (int i = 0; i < 3; ++i) data->origin[i] = 100.0 + i;
-    for (int i = 0; i < 9; ++i) data->matrix[i] = 200.0 + i;
+    memcpy(data->origin, plane_origin, sizeof(plane_origin));
+    memcpy(data->matrix, plane_matrix, sizeof(plane_matrix));
     data->material_side = material_out_right;
     data->ignore_holes = data->ignore_chamfers = 1;
     data->app_data = NULL; /* The documented read excludes application data. */
     return 0;
 }
+
+int UF_CAMBND_set_boundary_plane(UF_CAMBND_boundary_t boundary, double origin[3], double matrix[9]) {
+    if (boundary != &boundary_token || plane_mode != 0) return 90003;
+    if (write_error) return write_error;
+    ++write_calls;
+    memcpy(plane_origin, origin, sizeof(plane_origin));
+    memcpy(plane_matrix, matrix, sizeof(plane_matrix));
+    return 0;
+}
+
+int UF_MODL_update(void) { return 0; }
 
 int UF_CAMBND_ask_boundary_items(UF_CAMBND_boundary_t boundary, int *count, UF_CAMBND_item_t **out) {
     if (boundary != &boundary_token) return 90003;
