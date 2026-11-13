@@ -197,6 +197,15 @@
       "description": "Штатное сохранение рабочего PRT и обновление одного ZIP рядом с проектом без временных файлов."
     },
     {
+      "id": "NX_Mirror_Project",
+      "name": "Зеркальная копия CAM-проекта — тест",
+      "file": "NX_Mirror_Project.py",
+      "version": "V1",
+      "path": "scripts/NX_Mirror_Project.py",
+      "sha256": "29f4768782993ccb4b212134c72d1489cfdc15a2c4918a3a1032d37a1f847feb",
+      "description": "Эксперимент без компонентов: копия PRT, отражение геометрии и перенос MCS; без расчёта траекторий и автосохранения. Числовые пространственные настройки пока не отражаются."
+    },
+    {
       "id": "NX_Update_Scripts",
       "name": "Апдейтер скриптов",
       "file": "NX_Update_Scripts.py",

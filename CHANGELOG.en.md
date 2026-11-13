@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1
+
+First experiment for a saved part without components: a separate PRT copy, geometry reflection with identifier and CAM-reference checks, MCS/RCS transfer, calculated-toolpath removal and attempted rollback on failure. No automatic save or path generation. Numerical spatial parameters are not transformed; supported types and limits are listed in the guide.
+
+Fifteen portable checks passed. NX kernel execution and Windows dialogs remain unverified.
+
 ## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.09
 
 Free centerline ends now stop half the local stroke width before the terminal boundary. Both reconstruction engines measure the setback from the source outline, without shortening already inset ends twice. Square and near-square dots, including sheared italic shapes, become circles with a diameter equal to half their smaller width.
