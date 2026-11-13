@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.07 · 2026-11-13** — Straight strokes are now reconstructed directly from pairs of opposite outline walls. Validate wall coverage, connectivity, hole count and area consistency. Sharp vertices are intersections of the recovered axes, without a branch towards the outer tip. Curved portions retain medial reconstruction. Slightly oval imported punctuation becomes D/2 circles. CAM tolerance remains inherited from the operation.
+**V1.08 · 2026-11-13** — Fix punctuation failures reporting insufficient room for a sharp connection. With uneven spline sampling, V1.07 could mistake a slightly oval dot for a branching stroke. Shape validation now uses the equal-area-circle radius, which is independent of the number of samples on individual boundary segments. D/2 circles are retained.
 
 Source and working filename remain [NX_PlanarMill_Select_Curves.cs](../../scripts/NX_PlanarMill_Select_Curves.cs). Existing buttons need no change. The updater entry is now **«Оси гравировки для PLANAR_MILL»**. No Windows font or original text is required.
 
@@ -27,14 +27,14 @@ For assembly components, the CAM part must be both the work part and the display
 - Adjacent selected faces are merged across shared edges; separate letters are not connected. Circular text placement in a common plane is retained.
 - CAM junction separation follows axis reconstruction. K has a straight stem and a separate sharp checkmark. In 4, preserve the straight triangular sides and longer through-crossbar, ending the crossing stroke short on both sides. A plus has two separate elbows; P loop returns and Phi arcs stop short of the through-stroke. Connections depend on geometry, with no character lookup table.
 - Target chain clearance is **0.02 mm**, retried at **0.01 / 0.005 / 0.004 mm** if needed. Validate containment, self-intersections and contacts between different chains. Independent rings remain closed. Set CAM tolerance in the operation.
-- A filled round dot becomes a concentric **D/2** circle: Ø0.6 mm face → Ø0.3 mm curve. A compact, slightly oval dot uses the area centroid and half the equal-area-circle diameter. Elongated marks and polygons are not replaced by this rule. This is a geometric convention, not cutter compensation.
+- A filled round dot becomes a concentric **D/2** circle: Ø0.6 mm face → Ø0.3 mm curve. A compact, slightly oval dot uses the area centroid and half the equal-area-circle diameter. Its radial shape check also uses the area radius, rather than the sampling-dependent mean of vertex radii. Elongated marks and polygons are not replaced by this rule. This is a geometric convention, not cutter compensation.
 - Curves are named `PM_ENGRAVING_CENTER`. Source bodies and faces are retained. Output is not associative; recreate it after changing the model.
 
 ## Boundaries and reruns
 
 Each chain is added as a separate **NXOpen BoundarySetPlanarMill**. After appending curves, **Open**, **Tool Position = On**, **Stock = 0** are explicitly set. New boundaries and members have **Custom Tolerance** disabled and inherit the operation tolerance. The script neither reads nor writes nor compares numeric Intol / Outtol values; the V1.04 tolerance rollback check has been removed. Member settings are read back through a fresh builder after Commit. An open chain must remain Open. For an actually closed ring or D/2 circle, the returned Closed type is accepted only if curve membership and tool position are preserved; an added closing member is rejected. Existing local boundaries are retained and their count is reported. Cutter compensation, depths, feeds, tool and other operation parameters are not reset. Use **Cut Pattern = Profile**. Operation-level path smoothing and compensation remain active and require inspection; their values are not changed by the script. Different curve and cutting-level heights can also look offset in a perspective view.
 
-**When upgrading from V1.01–V1.06, recreate any retained previous axes:** undo that run or remove its curves from the operation boundaries and model. Previous results are not automatically replaced; the journal reports that they use the earlier algorithm.
+**When upgrading from V1.01–V1.07, recreate any retained previous axes:** undo that run or remove its curves from the operation boundaries and model. Previous results are not automatically replaced; the journal reports that they use the earlier algorithm.
 
 An unchanged face group processed by the current algorithm is skipped. Changed source geometry, changed generated boundary membership or a partially selected previous group causes an explanatory stop. For a recalculation, remove the previous axes from the operation and model, or undo the previous run. Repeat detection uses attributes on generated curves; no attributes are added to source faces.
 
@@ -52,8 +52,10 @@ Operations inheriting existing boundaries first require local boundary geometry.
 
 ## Validation
 
-The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. Validation includes 478 routing scenarios, 122 centerline scenarios, 118 CAM adapter contract checks and 21 chain/plane checks. The 97 new scenarios cover five independent straight-stroke layouts with rotation, slant, reflection and mm/inch units, slightly oval dots, and retention of an elongated mark. The 228 existing acute-triangle and branching-stroke cases additionally require wall-based reconstruction.
+The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. Validation covers 586 routing scenarios, 122 centerline scenarios, 118 CAM adapter contract checks and 21 chain/plane checks.
 
-Outlines were also read directly from a supplied STEP model outside NX. V1.06 reproduced the unwanted terminal branch on both triangular symbols. All 23 inscription faces passed V1.07 construction and route validation: each 4 has three-line and one-line chains, K has one-line and two-line chains, and each of three dots has a circle. The source model is not included in the repository.
+The 108 new checks use slightly oval punctuation with different sample densities on an unchanged boundary, rotation, reversed traversal, reflection and mm/inch units. V1.07 fails the new regression: increasing sample density fivefold in one region can turn a dot into a branching axis. V1.08 retains the circle, its center and diameter.
 
-**Interactive V1.07 execution and the resulting NX toolpath remain untested.** The installed NX batch launcher failed before journal execution, and window automation could not attach to the working window. Geometry tests and compilation do not validate native CAM behavior. Inspect the result and the normally generated NX toolpath before machining.
+The journal's spline subdivision was reproduced offline on the supplied STEP model: 16 initial intervals followed by adaptive subdivision based on deviation. V1.07 fails all 144 variants of three punctuation dots, including the reported sharp-connection error. The fix passes all 1104 variants of the 23 inscription faces, with different starting vertices, traversal directions and rotations. Straight-stroke geometry and junction routing are unchanged. The source model is not included in the repository.
+
+**Interactive V1.08 execution and the resulting NX toolpath remain untested.** Geometry checks run outside NX; compilation and contract tests do not validate native CAM behavior. Inspect the result and the normally generated NX toolpath before machining.

@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.08
+
+Fix punctuation failures reporting insufficient room for a sharp connection. With uneven spline sampling, V1.07 could mistake a slightly oval dot for a branching stroke. Shape validation now uses the equal-area-circle radius, which is independent of the number of samples on individual boundary segments. D/2 circles are retained.
+
+Add 108 sampling-density regressions. Offline STEP tests reproduce 144 V1.07 failures on three dots; V1.08 passes all 1104 variants of 23 faces. K/4 geometry, clearance rules and CAM tolerances are unchanged. Total: 586 routing scenarios. Compile against DC 2606 SDK for .NET Framework and .NET 10. Native NX execution and toolpaths remain untested.
+
 ## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.07
 
 Straight strokes are now reconstructed directly from pairs of opposite outline walls. Validate wall coverage, connectivity, hole count and area consistency. Sharp vertices are intersections of the recovered axes, without a branch towards the outer tip. Curved portions retain medial reconstruction. Slightly oval imported punctuation becomes D/2 circles. CAM tolerance remains inherited from the operation.

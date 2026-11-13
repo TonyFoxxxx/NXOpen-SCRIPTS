@@ -243,6 +243,33 @@ public class RoutingChecks
         var elongated=new List<P>();for(int i=0;i<240;i++){double a=2*Math.PI*i/240;elongated.Add(new P(.4*Math.Cos(a),.15*Math.Sin(a)));}
         Require(EngravingCenterlines.Build(new R(new List<List<P>>{elongated}),.002).Circles.Count==0,"elongated mark mistaken for a dot");scenarios++;
     }
+    static void ResampledDots()
+    {
+        // Adding collinear boundary samples changes neither the polygon nor its area.
+        // Punctuation detection and its D/2 circle must not depend on sample density.
+        foreach(double ratio in new double[]{1.10,1.14,1.16})foreach(int density in new int[]{1,5,25})
+        foreach(double angle in new double[]{0,.71,2.1})foreach(bool reverse in new bool[]{false,true})
+        foreach(double unit in new double[]{1,1/25.4})
+        {
+            var polygon=new List<P>();for(int i=0;i<96;i++){double a=2*Math.PI*i/96;polygon.Add(new P(.15*ratio*Math.Cos(a),.15*Math.Sin(a)));}
+            var sampled=new List<P>();for(int i=0;i<polygon.Count;i++)
+            {
+                P a=polygon[i],b=polygon[(i+1)%polygon.Count];int count=Math.Abs(a.X)>.12?density:1;
+                for(int j=0;j<count;j++)sampled.Add(a+(b-a)*(j/(double)count));
+            }
+            if(reverse)sampled.Reverse();
+            var region=new R(Transform(new List<List<P>>{sampled},angle,unit,reverse));
+            var original=new R(Transform(new List<List<P>>{polygon},angle,unit,reverse));
+            Require(Math.Abs(region.Area-original.Area)<1e-12*unit*unit,"resampling changed the face");
+            var result=EngravingCenterlines.Build(region,.002*unit);
+            string name="resampled dot ratio="+ratio+" density="+density+" angle="+angle+" reverse="+reverse+" unit="+unit;
+            Require(result.Circles.Count==1&&result.Curves.Count==0,name+" became a branched skeleton");
+            Require((result.Circles[0].Center-new P(17,-9)).Length<1e-10*unit,name+" displaced center");
+            Require(Math.Abs(result.Circles[0].Radius-Math.Sqrt(original.Area/Math.PI)/2)<1e-10*unit,name+" diameter depends on sample density");
+            var routed=EngravingRoutes.Build(result,region,.02*unit,.002*unit);
+            Require(routed.Circles.Count==1&&routed.Curves.Count==0,name+" routing modified punctuation");scenarios++;
+        }
+    }
     public static void Main()
     {
         Console.OutputEncoding=new System.Text.UTF8Encoding(false);
@@ -279,6 +306,7 @@ public class RoutingChecks
         AcuteTriangles();
         ImportedStraightStrokes();
         WallOutlines();
+        ResampledDots();
         Check("ring",new List<List<P>>{Circle(2.2),Circle(1.8)},1,1);
         var dot=Check("dot",new List<List<P>>{Circle(.3)},0);Require(dot.Circles.Count==1&&Math.Abs(dot.Circles[0].Radius-.15)<1e-10,"D/2 changed");
         var region=new R(new List<List<P>>{Poly(-3,-3,3,-3,3,3,-3,3)});

@@ -1,5 +1,5 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.07
+// SCRIPT_VERSION: V1.08
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
 // Reconstructs straight wall-pair networks and curved centerlines; near-round dots use D/2 circles.
 // Preserves through-strokes; separates junctions by 0.004-0.02 mm and inherits operation tolerances.
@@ -22,10 +22,10 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.07";
+    private const string SCRIPT_VERSION = "V1.08";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "7";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "8";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -1389,18 +1389,22 @@ public static class EngravingCenterlines
         // Accept compact near-circles by dimensionless shape tests, independently of CAM
         // tolerance. Elongated marks, polygons and counters remain ordinary geometry.
         bool nearCircle = loop.Count >= 16 && 4 * Math.PI * region.Area / (region.Perimeter * region.Perimeter) >= 0.985;
-        double radialLimit = nearCircle ? Math.Max(tolerance * 0.5, r * 0.08) : tolerance * 0.5;
+        // The arithmetic mean of vertex radii is biased by adaptive spline sampling.
+        // Test a near-circle against its area radius: subdividing a boundary segment
+        // cannot change this radius, the area centroid or the accepted shape envelope.
+        double areaRadius = Math.Sqrt(region.Area / Math.PI), referenceRadius = nearCircle ? areaRadius : r;
+        double radialLimit = nearCircle ? Math.Max(tolerance * 0.5, areaRadius * 0.08) : tolerance * 0.5;
         bool exactCircle = true;
         foreach (P p in loop)
         {
-            double error = Math.Abs((p - center).Length - r);
-            if (error > radialLimit) return false;
-            if (error > tolerance * 0.5) exactCircle = false;
+            double radius = (p - center).Length;
+            if (Math.Abs(radius - referenceRadius) > radialLimit) return false;
+            if (Math.Abs(radius - r) > tolerance * 0.5) exactCircle = false;
         }
         // Check segment midpoints as well: vertices of a polygon alone may lie on a circle.
-        foreach (Segment e in region.Edges) if (Math.Abs(((e.A + e.B) * 0.5 - center).Length - r) > Math.Max(tolerance, radialLimit)) return false;
+        foreach (Segment e in region.Edges) if (Math.Abs(((e.A + e.B) * 0.5 - center).Length - referenceRadius) > Math.Max(tolerance, radialLimit)) return false;
         // The requested convention for a round punctuation mark: path diameter = face diameter / 2.
-        circle = new Circle { Center = center, Radius = (exactCircle ? r : Math.Sqrt(region.Area / Math.PI)) / 2 }; return true;
+        circle = new Circle { Center = center, Radius = (exactCircle ? r : areaRadius) / 2 }; return true;
     }
     private static void CheckTopology(List<Node> nodes, int holes)
     {
