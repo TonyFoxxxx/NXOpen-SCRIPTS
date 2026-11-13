@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-13 — Mirrored CAM project diagnostic V1
+
+First release of an assembly, operation, geometry-reference, boundary and spatial-parameter inventory. Results can be copied from a dialog; the project is not modified, no additional parts are loaded and no files are written. Repeated occurrences remain separate; unavailable data and truncation are explicit.
+
+This is a preparatory diagnostic tool; mirroring, cloning and MCS/reference transfer are not implemented yet. Nine portable data-reading checks passed; execution in NX 2606 and the Windows dialog have not been tested.
+
 ## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.08
 
 Fix punctuation failures reporting insufficient room for a sharp connection. With uneven spline sampling, V1.07 could mistake a slightly oval dot for a branching stroke. Shape validation now uses the equal-area-circle radius, which is independent of the number of samples on individual boundary segments. D/2 circles are retained.

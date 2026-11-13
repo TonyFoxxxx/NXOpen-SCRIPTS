@@ -29,6 +29,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Export_Drawing_To_PDF.cs](scripts/NX_Export_Drawing_To_PDF.cs) | V1.13 | Export the current sheet to PDF with adjustable line weights. | [All features](docs/en/export-pdf.md) |
 | [NX_Export_Current_View_To_DXF.cs](scripts/NX_Export_Current_View_To_DXF.cs) | V1.08 | Export edges, the outer outline or selected curves to DXF. | [All features](docs/en/export-dxf.md) |
 | [NX_Rename_Assemblies.cs](scripts/NX_Rename_Assemblies.cs) | V1.05 | Rename part and assembly files and update component references. | [All features](docs/en/rename-assemblies.md) |
+| [NX_Mirror_Project_Diagnostic.py](scripts/NX_Mirror_Project_Diagnostic.py) | V1 | Read assembly structure and CAM references to support mirrored-project development. | [All features](docs/en/mirror-project-diagnostic.md) |
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
@@ -36,11 +37,11 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Engraving centerlines for PLANAR_MILL V1.08 · 2026-11-13
+### Latest update — Mirrored CAM project diagnostic V1 · 2026-11-13
 
-Fix punctuation failures reporting insufficient room for a sharp connection. With uneven spline sampling, V1.07 could mistake a slightly oval dot for a branching stroke. Shape validation now uses the equal-area-circle radius, which is independent of the number of samples on individual boundary segments. D/2 circles are retained.
+Added a read-only project inventory: component occurrences, operation types, geometry references, boundaries and spatial parameters. Results appear in a window with a Copy all button; no files are written. **Mirroring itself is not implemented yet.**
 
-Update **«Оси гравировки для PLANAR_MILL»** to **V1.08** in the updater. [Workflow, limits and validation](docs/en/planar-mill-curves.md).
+The updater now offers **«Диагностика зеркального CAM-проекта» V1**. [Workflow, collected data and limitations](docs/en/mirror-project-diagnostic.md).
 
 ## Installation
 
