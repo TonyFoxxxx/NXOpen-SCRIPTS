@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.03
+
+Replace the Python `Cambnd.AskBoundaryData` call that reported a memory access violation. Use `UF_CAMBND_ask_boundary_data` with a full-width pointer and a C structure; do not dereference application data. Boundary-plane validation and stopping on read errors are retained; the report identifies the boundary number and stage.
+
+Thirty-nine checks passed outside NX, including six with a separate C library for layout, handles, array lifetime and Blank reads. Rollback on an access-violation exception is covered. A complete V1.03 run in NX remains unconfirmed.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.02
 
 Fix the missing Python `Modl.AskFaceData` method after picking a face. Face and exact-bound reads, geometry transformation and model update call documented UF functions in the NX library. Entry points are checked before creating a copy; error codes and rollback are retained.

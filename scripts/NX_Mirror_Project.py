@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.02
-SCRIPT_VERSION = "V1.02"
+# SCRIPT_VERSION: V1.03
+SCRIPT_VERSION = "V1.03"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -158,6 +158,25 @@ class NativeApiError(RuntimeError):
         super().__init__(context + ": " + str(code) + " — " + message)
 
 
+class _BoundaryData(ctypes.Structure):
+    """UF_CAMBND_boundary_data_t from uf_cambnd.h, native C alignment.
+
+    ask_boundary_data writes into caller-owned storage and excludes app_data.
+    That pointer is not dereferenced or freed by this reader.
+    """
+    _fields_ = [
+        ("boundary_type", ctypes.c_int),
+        ("plane_type", ctypes.c_int),
+        ("origin", ctypes.c_double * 3),
+        ("matrix", ctypes.c_double * 9),
+        ("material_side", ctypes.c_int),
+        ("ignore_holes", ctypes.c_int),
+        ("ignore_islands", ctypes.c_int),
+        ("ignore_chamfers", ctypes.c_int),
+        ("app_data", ctypes.c_void_p),
+    ]
+
+
 class NativeCam:
     """Documented UF C calls, including methods absent from Python UF.Modl.
 
@@ -194,6 +213,7 @@ class NativeCam:
         self.item_entity = self.bind("UF_CAMGEOM_ask_item_entity", (p, ctypes.POINTER(u)))
         self.collector = self.bind("UF_CAMGEOM_ask_collector_items", (p, ip, pp))
         self.boundaries = self.bind("UF_CAMBND_ask_boundaries", (u, i, ip, pp))
+        self.boundary_data = self.bind("UF_CAMBND_ask_boundary_data", (p, ctypes.POINTER(_BoundaryData)))
         self.members = self.bind("UF_CAMBND_ask_boundary_items", (p, ip, pp))
         self.member_entity = self.bind("UF_CAMBND_ask_item_entity", (p, ctypes.POINTER(u)))
         self.custom = self.bind("UF_CAMGEOM_ask_custom_points", (u, i, ip, pp))
@@ -254,6 +274,17 @@ class NativeCam:
 
     def update_model(self):
         self.check(self.model_update(), "UF_MODL_update")
+
+    def boundary_plane_type(self, handle):
+        # Keep the opaque handle pointer-sized from ask_boundaries to this call;
+        # do not pass a C pointer through the Python Cambnd wrapper.
+        if not handle:
+            raise RuntimeError("NX вернул пустой дескриптор границы")
+        data = _BoundaryData()
+        self.check(self.boundary_data(handle, ctypes.byref(data)), "UF_CAMBND_ask_boundary_data")
+        if data.plane_type not in (0, 1):
+            raise RuntimeError("UF_CAMBND_ask_boundary_data: неизвестный тип плоскости " + str(data.plane_type))
+        return int(data.plane_type)
 
     def geometry_provider(self, tag, kind):
         provider = ctypes.c_uint32()
@@ -463,12 +494,15 @@ class Trial:
                 bnd_state, bnd_owner, handles = self.native.channel(self.native.boundaries, int(node.Tag), kind)
                 if collect and bnd_state == "unavailable":
                     self.unavailable.add(context + " / границы")
-                for handle in handles:
-                    data = self.uf.Cambnd.AskBoundaryData(handle)
+                for number, handle in enumerate(handles, 1):
+                    boundary_context = context + " / граница " + str(number) + " из " + str(len(handles))
+                    self.stage = "Чтение геометрии: " + boundary_context + " / параметры"
+                    plane_type = self.native.boundary_plane_type(handle)
                     # Face-derived boundaries use an automatically evaluated plane.
                     # Preserving a manual plane also requires orientation/material-side handling.
-                    if int(field(data, "plane_type")) != 1:
+                    if plane_type != 1:
                         raise RuntimeError(context + ": граница с заданной плоскостью пока не поддерживается в этой версии")
+                    self.stage = "Чтение геометрии: " + boundary_context + " / элементы"
                     members = self.native.pointers(self.native.members, handle)
                     member_tags = [self.native.entity(self.native.member_entity, item) for item in members]
                     boundaries.append(tuple(member_tags))

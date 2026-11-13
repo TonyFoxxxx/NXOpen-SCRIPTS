@@ -432,6 +432,8 @@ class TransactionTests(unittest.TestCase):
                     self.part = args[3]
                 def run(self):
                     self.assert_copy()
+                    if isinstance(fails, Exception):
+                        raise fails
                     if fails:
                         raise RuntimeError("kernel rejected reflection")
                 def assert_copy(self):
@@ -449,6 +451,12 @@ class TransactionTests(unittest.TestCase):
         self.assertIn(("undo", 55), events)
         self.assertIn("ТЕСТ НЕ ПРОЙДЕН", report)
         self.assertIn("kernel rejected reflection", report)
+
+    def test_boundary_access_violation_is_reported_and_rolls_back(self):
+        events, report = self.run_with_trial(OSError('exception: access violation reading boundary'))
+        self.assertIn(('undo',55), events)
+        self.assertIn('ТЕСТ НЕ ПРОЙДЕН', report)
+        self.assertIn('access violation reading boundary', report)
 
     def test_success_keeps_visible_undo_and_requires_manual_save(self):
         events, report = self.run_with_trial(False)
