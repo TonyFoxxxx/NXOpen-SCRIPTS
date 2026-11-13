@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.09 · 2026-11-14** — Free centerline ends now stop half the local stroke width before the terminal boundary. Both reconstruction engines measure the setback from the source outline, without shortening already inset ends twice. Square and near-square dots, including sheared italic shapes, become circles with a diameter equal to half their smaller width.
+**V1.10 · 2026-11-14** — Rework junction handling from the supporting outline walls. Distinguish an outer corner bevel from a true stroke cap and extend support for tapering straight strokes. Remove short false branches on curved portions only when neighbouring boundary walls support that classification. These rules do not depend on character or font names.
 
 Source and working filename remain [NX_PlanarMill_Select_Curves.cs](../../scripts/NX_PlanarMill_Select_Curves.cs). Existing buttons need no change. The updater entry is now **«Оси гравировки для PLANAR_MILL»**. No Windows font or original text is required.
 
@@ -22,8 +22,9 @@ For assembly components, the CAM part must be both the work part and the display
 ## Geometry
 
 - First find visible pairs of straight walls. Build their center axes and intersection graph without character identities, font names or orientation rules. Rectangular, angled and branching strokes share the same method. Short unmatched outline runs can be end caps. Accept the reconstruction only after wall-coverage, connectivity, hole-count and area-consistency checks.
-- This supported outline bypasses skeletonization: a sharp corner is constructed directly as the intersection of two stroke axes. No terminal branch towards the outer outline vertex is created. Slightly nonparallel walls use their internal angle bisector.
+- This supported outline bypasses skeletonization: a sharp corner is constructed directly as the intersection of two stroke axes. No terminal branch towards the outer outline vertex is created. Moderately tapering walls use their internal angle bisector. A short edge is accepted as a cap only when it meets both walls of the same stroke; a bevel between neighbouring strokes does not create an extra endpoint.
 - If straight wall pairs do not describe the complete outline, use approximate medial reconstruction with straight-run restoration and cubic fitting for curved portions. This is a hybrid geometric method; the original path of an arbitrary font is not always uniquely recoverable.
+- Medial reconstruction checks false leaves at convex corners and bevels. Removal requires support from two adjacent walls or proof that the walls continue along neighbouring strokes; short length alone is insufficient. Collinear boundary pieces are merged first so subdividing STEP edges does not change this classification. Genuine short arms are retained.
 - Adjacent selected faces are merged across shared edges; separate letters are not connected. Circular text placement in a common plane is retained.
 - CAM junction separation follows axis reconstruction. K has a straight stem and a separate sharp checkmark. In 4, preserve the straight triangular sides and longer through-crossbar, ending the crossing stroke short on both sides. A plus has two separate elbows; P loop returns and Phi arcs stop short of the through-stroke. Connections depend on geometry, with no character lookup table.
 - Before junction routing, each free physical end is positioned half the local stroke width before the cap, measured along the terminal axis/tangent. A 0.4 mm stroke leaves 0.2 mm. Width comes from the supporting side walls or local cross-section, not cutter diameter. Existing medial setbacks are accounted for. Shared nodes, sharp corners and closed paths are preserved; new gap endpoints are not treated as physical terminals. If insufficient length remains, calculation stops without silently deleting the stroke.
@@ -35,7 +36,7 @@ For assembly components, the CAM part must be both the work part and the display
 
 Each chain is added as a separate **NXOpen BoundarySetPlanarMill**. After appending curves, **Open**, **Tool Position = On**, **Stock = 0** are explicitly set. New boundaries and members have **Custom Tolerance** disabled and inherit the operation tolerance. The script neither reads nor writes nor compares numeric Intol / Outtol values; the V1.04 tolerance rollback check has been removed. Member settings are read back through a fresh builder after Commit. An open chain must remain Open. For an actually closed ring or D/2 circle, the returned Closed type is accepted only if curve membership and tool position are preserved; an added closing member is rejected. Existing local boundaries are retained and their count is reported. Cutter compensation, depths, feeds, tool and other operation parameters are not reset. Use **Cut Pattern = Profile**. Operation-level path smoothing and compensation remain active and require inspection; their values are not changed by the script. Different curve and cutting-level heights can also look offset in a perspective view.
 
-**When upgrading from V1.01–V1.08, recreate any retained previous axes:** undo that run or remove its curves from the operation boundaries and model. Previous results are not automatically replaced; the journal reports that they use the earlier algorithm.
+**When upgrading from V1.01–V1.09, recreate any retained previous axes:** undo that run or remove its curves from the operation boundaries and model. Previous results are not automatically replaced; the journal reports that they use the earlier algorithm.
 
 An unchanged face group processed by the current algorithm is skipped. Changed source geometry, changed generated boundary membership or a partially selected previous group causes an explanatory stop. For a recalculation, remove the previous axes from the operation and model, or undo the previous run. Repeat detection uses attributes on generated curves; no attributes are added to source faces.
 
@@ -53,10 +54,12 @@ Operations inheriting existing boundaries first require local boundary geometry.
 
 ## Validation
 
-Validation covers 277 new terminal/punctuation scenarios, 586 routing scenarios, 122 centerline scenarios, 118 CAM adapter contract checks and 21 chain/plane checks. New tests compare endpoints with analytical coordinates for flat, oblique and rounded caps, arcs, short strokes, sharp bends and varying widths; rotations, reflections, mm/inch units and subdivided square edges are included.
+Add 360 junction checks: bevelled bends with different angles and wall taper, curved bands with varying subdivision density, straight-to-arc transitions, an unevenly sampled outline, and genuine short arms with flat and round caps. Assert branch counts, sharp two-line intersections, absence of reversing hooks, and containment. Include rotation, reflection, mm/inch units, a shifted starting vertex and subdivided straight edges. V1.09 fails the new bevelled-corner regression.
+
+Retain 277 terminal/punctuation scenarios, 586 routing scenarios, 122 centerline scenarios, 118 CAM adapter contract checks and 21 chain/plane checks.
 
 For a 0.4 mm wide bar, V1.08 leaves 0.02 mm before the cap; V1.09 leaves 0.2 mm. A 0.6×0.6 mm square now yields one Ø0.3 mm circle instead of a branched axis. Closed counters and previously tested round dots are retained.
 
-All 1104 variants of 23 faces from the previously supplied STEP model passed again outside NX. Spline sampling follows the journal: 16 initial intervals and adaptive subdivision. The source model is not included in the repository. This does not validate results on other, unavailable models.
+All 1104 variants of 23 faces from the previously supplied STEP model passed again outside NX. Spline sampling follows the journal: 16 initial intervals and adaptive subdivision. The source model is not included in the repository. For the new engraving shown in screenshots, synthetic contours exercise similar joint types; its STEP/PRT model was not supplied. These tests do not validate that actual new model or arbitrary fonts.
 
-The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. **Interactive V1.09 execution and the resulting NX toolpath remain untested.** Geometry and contract tests do not validate native CAM behavior. Inspect the result and the normally generated NX toolpath before machining.
+The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. **Interactive V1.10 execution and the resulting NX toolpath remain untested.** Geometry and contract tests do not validate native CAM behavior. Inspect the result and the normally generated NX toolpath before machining.

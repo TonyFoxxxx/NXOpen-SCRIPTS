@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.10
+
+Rework junction handling from the supporting outline walls. Distinguish an outer corner bevel from a true stroke cap and extend support for tapering straight strokes. Remove short false branches on curved portions only when neighbouring boundary walls support that classification. These rules do not depend on character or font names.
+
+Add 360 checks for bevelled corners, straight-to-arc transitions and retention of genuine short arms. V1.09 fails the new bevelled-corner regression. Existing terminal, punctuation and routing tests remain green; all 1104 variants of the previously supplied STEP model pass outside NX. Synthetic outlines represent the new engraving: its STEP/PRT model was not supplied. Compile against DC 2606 SDK for .NET Framework and .NET 10; native NX execution and toolpaths remain untested. Recreate previous V1.01–V1.09 axes.
+
 ## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.09
 
 Free centerline ends now stop half the local stroke width before the terminal boundary. Both reconstruction engines measure the setback from the source outline, without shortening already inset ends twice. Square and near-square dots, including sheared italic shapes, become circles with a diameter equal to half their smaller width.

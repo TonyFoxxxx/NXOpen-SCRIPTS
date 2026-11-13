@@ -20,7 +20,7 @@
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Очистка служебных хвостов и нумерации в именах всех операций с сохранением Z. | [Все функции](docs/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
-| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.09 | Средние линии по граням гравировки и окружности D/2 для точек; назначение в PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
+| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.10 | Средние линии по граням гравировки и окружности D/2 для точек; назначение в PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Создание однолинейного текста ГОСТ А из линий и гладких сплайнов по внешнему FON. | [Все функции](docs/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Заполнение описаний инструментов диаметром и номерами T, H, D. | [Все функции](docs/tool-description.md) |
@@ -36,11 +36,11 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Оси гравировки для PLANAR_MILL V1.09 · 14.11.2026
+### Последнее обновление — Оси гравировки для PLANAR_MILL V1.10 · 14.11.2026
 
-Свободные концы осей теперь отступают от торца на половину местной ширины штриха. Отступ вычисляется от исходного контура для обоих способов построения, поэтому уже укороченный конец не обрезается повторно. Квадратные и близкие к квадрату точки, в том числе наклонные, превращаются в окружности диаметром в половину их меньшей ширины.
+Переработана обработка соединений по геометрии стенок. Скос наружного угла отделён от настоящего торца штриха; расширена поддержка сужающихся прямых штрихов. У округлых участков удаляются короткие ложные ветви, если их происхождение подтверждается соседними стенками контура. Правила общие для разных символов и шрифтов.
 
-В апдейтере обновите **«Оси гравировки для PLANAR_MILL»** до **V1.09**. [Порядок работы, ограничения и проверки](docs/planar-mill-curves.md).
+В апдейтере обновите **«Оси гравировки для PLANAR_MILL»** до **V1.10**. [Порядок работы, ограничения и проверки](docs/planar-mill-curves.md).
 
 ## Установка
 
