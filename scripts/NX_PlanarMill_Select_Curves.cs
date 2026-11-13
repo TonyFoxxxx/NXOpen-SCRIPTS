@@ -1,9 +1,10 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.10
+// SCRIPT_VERSION: V1.11
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
 // Reconstructs straight and curved centerlines; round/compact square dots use half-width circles.
 // Free physical ends stop half the local stroke width before the terminal boundary.
 // Distinguishes stroke caps from bevels and removes boundary-supported corner spurs.
+// Restores sharp line/curve joints from the walls, preserving tangential fillets.
 // Preserves through-strokes; separates junctions by 0.004-0.02 mm and inherits operation tolerances.
 // Does not save files, generate a toolpath, or change the tool, depths, feeds or source body.
 
@@ -24,10 +25,10 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.10";
+    private const string SCRIPT_VERSION = "V1.11";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "10";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "11";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -1164,6 +1165,7 @@ public static class EngravingCenterlines
         public readonly List<P> Points = new List<P>();
         public bool Closed;
         internal bool ContractedJunction;
+        internal readonly List<P> CurvedCorners = new List<P>();
         public readonly HashSet<int> Corners = new HashSet<int>();
     }
     public sealed class Bezier
@@ -1364,6 +1366,7 @@ public static class EngravingCenterlines
         }
         foreach (Stroke stroke in strokes) Refine(stroke, region, step, tolerance);
         RestoreStraightStrokes(strokes, region, tolerance);
+        RestoreCurvedCorners(strokes, region, tolerance);
         CleanSnappedJunctions(strokes, region, tolerance);
         InsetTerminals(strokes, region, tolerance);
         foreach (Stroke stroke in strokes)
@@ -1398,7 +1401,9 @@ public static class EngravingCenterlines
                 {
                     limit += (oriented[i] - oriented[i - 1]).Length;
                     int original = end == 0 ? i : p.Count - 1 - i;
-                    if (s.Corners.Contains(original) && IsWallCorner(oriented[i], axes, region, tolerance)) break;
+                    bool curvedCorner = false;
+                    foreach (P corner in s.CurvedCorners) if ((corner - oriented[i]).Length <= tolerance * 0.01) curvedCorner = true;
+                    if (s.Corners.Contains(original) && (curvedCorner || IsWallCorner(oriented[i], axes, region, tolerance))) break;
                 }
                 double inset = TerminalInset(oriented, limit, axes, region, tolerance);
                 if (end == 0) start = inset; else finish = inset;
@@ -2316,6 +2321,199 @@ public static class EngravingCenterlines
             for (int i = 1; i < output.Count; i++) if (!region.SegmentInside(output[i - 1], output[i], tolerance)) safeOutput = false;
             if (!safeOutput) continue;
             p.Clear(); p.AddRange(output); foreach (int corner in corners) if (corner > 0 && corner < p.Count - 1) stroke.Corners.Add(corner);
+        }
+    }
+    // At a sharp line/curve joint the medial ridge rounds the inner outline vertex.
+    // Continue the curved wall locally and measure across to the actual opposite wall;
+    // intersect that midline with the proven straight axis. Tangential fillets do not qualify.
+    private sealed class CurvedWall
+    {
+        internal P Origin, Direction, Center;
+        internal double Span, Radius, Angle, Turn, Inward;
+        internal readonly double[] Coefficients = new double[3];
+        internal readonly HashSet<Segment> Edges = new HashSet<Segment>();
+        internal P At(double t)
+        {
+            if (Radius > 0) { double a = Angle + Turn * t / Radius; return Center + new P(Math.Cos(a), Math.Sin(a)) * Radius; }
+            double x = t / Span, y = x * (Coefficients[0] + x * (Coefficients[1] + x * Coefficients[2]));
+            return Origin + Direction * t + new P(-Direction.Y, Direction.X) * y;
+        }
+        internal P Tangent(double t)
+        {
+            if (Radius > 0) { double a = Angle + Turn * t / Radius; return new P(-Math.Sin(a), Math.Cos(a)) * Turn; }
+            double x = t / Span, y = (Coefficients[0] + x * (2 * Coefficients[1] + x * 3 * Coefficients[2])) / Span;
+            return (Direction + new P(-Direction.Y, Direction.X) * y).Unit();
+        }
+    }
+    private static CurvedWall FitCurvedWall(List<P> p, double radius, double tolerance)
+    {
+        if (p.Count < 5 || (p[p.Count - 1] - p[0]).Length < radius * 1.5) return null;
+        P a = p[0], b = p[p.Count / 2] - a, c = p[p.Count - 1] - a; double cross = P.Cross(b, c);
+        if (Math.Abs(cross) > c.Length * c.Length * 1e-5)
+        {
+            P center = a + new P((P.Dot(b, b) * c.Y - P.Dot(c, c) * b.Y) / (2 * cross),
+                (b.X * P.Dot(c, c) - c.X * P.Dot(b, b)) / (2 * cross));
+            double r = (a - center).Length, turn = Math.Sign(cross), angle = Math.Atan2(a.Y - center.Y, a.X - center.X);
+            double delta = Math.Atan2(P.Cross(a - center, p[p.Count - 1] - center), P.Dot(a - center, p[p.Count - 1] - center));
+            bool valid = r > radius && delta * turn > 0 && Math.Abs(delta) < 1.5;
+            foreach (P point in p) if (Math.Abs((point - center).Length - r) > tolerance * 0.5) valid = false;
+            if (valid) return new CurvedWall { Origin = a, Center = center, Radius = r, Angle = angle, Turn = turn, Span = Math.Abs(delta) * r };
+        }
+        var wall = new CurvedWall { Origin = a, Direction = c.Unit(), Span = c.Length };
+        P normal = new P(-wall.Direction.Y, wall.Direction.X); double[,] matrix = new double[3, 4];
+        // Arc-length weights make the fit insensitive to uneven STEP subdivisions.
+        for (int i = 1; i < p.Count; i++)
+        {
+            double t = P.Dot(p[i] - a, wall.Direction) / wall.Span, y = P.Dot(p[i] - a, normal);
+            if (t <= 0 || t > 1.000001) return null;
+            double weight = ((p[i] - p[i - 1]).Length + (i + 1 < p.Count ? (p[i + 1] - p[i]).Length : 0)) / wall.Span;
+            for (int row = 0; row < 3; row++)
+            { for (int col = 0; col < 3; col++) matrix[row, col] += weight * Math.Pow(t, row + col + 2); matrix[row, 3] += weight * Math.Pow(t, row + 1) * y; }
+        }
+        for (int col = 0; col < 3; col++)
+        {
+            int pivot = col; for (int row = col + 1; row < 3; row++) if (Math.Abs(matrix[row, col]) > Math.Abs(matrix[pivot, col])) pivot = row;
+            if (Math.Abs(matrix[pivot, col]) < 1e-12) return null;
+            for (int k = col; k < 4; k++) { double value = matrix[col, k]; matrix[col, k] = matrix[pivot, k]; matrix[pivot, k] = value; }
+            double divisor = matrix[col, col]; for (int k = col; k < 4; k++) matrix[col, k] /= divisor;
+            for (int row = 0; row < 3; row++) if (row != col)
+            { double factor = matrix[row, col]; for (int k = col; k < 4; k++) matrix[row, k] -= factor * matrix[col, k]; }
+        }
+        for (int i = 0; i < 3; i++) wall.Coefficients[i] = matrix[i, 3];
+        foreach (P point in p) if ((wall.At(P.Dot(point - a, wall.Direction)) - point).Length > tolerance * 2) return null;
+        return wall;
+    }
+    private static bool CurvedMidpoint(CurvedWall wall, StraightAxis axis, List<Segment> edges, Region region, double t, double tolerance, out P mid)
+    {
+        mid = new P(); P p = wall.At(t), tangent = wall.Tangent(t), normal = new P(-tangent.Y, tangent.X) * wall.Inward;
+        Segment hit = null; double distance = double.MaxValue;
+        foreach (Segment edge in edges) if (!wall.Edges.Contains(edge))
+        {
+            P v = edge.B - edge.A; double cross = P.Cross(normal, v); if (Math.Abs(cross) < v.Length * 1e-10) continue;
+            double d = P.Cross(edge.A - p, v) / cross, u = P.Cross(edge.A - p, normal) / cross;
+            if (d > tolerance * 0.01 && d < distance && u >= -1e-9 && u <= 1 + 1e-9) { distance = d; hit = edge; }
+        }
+        if (hit == null || distance < axis.Radius * 0.4 || distance > axis.Radius * 5
+            || Math.Abs(P.Dot((hit.B - hit.A).Unit(), tangent)) < 0.65) return false;
+        foreach (Segment side in axis.Sides)
+            if (((hit.A - side.A).Length < tolerance * 0.1 && (hit.B - side.B).Length < tolerance * 0.1)
+                || ((hit.B - side.A).Length < tolerance * 0.1 && (hit.A - side.B).Length < tolerance * 0.1)) return false;
+        mid = p + normal * (distance * 0.5); return region.Inside(mid);
+    }
+    private static void RestoreCurvedCorners(List<Stroke> strokes, Region region, double tolerance)
+    {
+        List<StraightAxis> axes = StraightAxes(region, tolerance); if (axes.Count == 0) return;
+        var edges = new List<Segment>(); var loops = new List<List<Segment>>();
+        foreach (List<P> loop in region.Loops)
+        {
+            var chain = new List<Segment>(); List<P> p = BoundaryVertices(loop, tolerance);
+            for (int i = 0; i < p.Count; i++) chain.Add(new Segment(p[i], p[(i + 1) % p.Count]));
+            loops.Add(chain); edges.AddRange(chain);
+        }
+        for (int loopIndex = 0; loopIndex < loops.Count; loopIndex++)
+        {
+            List<Segment> loop = loops[loopIndex]; double orientation = Math.Sign(SignedArea(region.Loops[loopIndex])) * (loopIndex == 0 ? 1 : -1);
+            for (int index = 0; index < loop.Count; index++)
+            {
+                Segment previous = loop[(index + loop.Count - 1) % loop.Count], next = loop[index]; P vertex = next.A;
+                if (P.Cross((previous.B - previous.A).Unit(), (next.B - next.A).Unit()) * orientation >= -0.15) continue;
+                foreach (StraightAxis axis in axes) foreach (int sign in new int[] { -1, 1 })
+                {
+                    Segment line = sign == 1 ? previous : next; bool attached = false;
+                    foreach (Segment side in axis.Sides)
+                        if (((side.A - vertex).Length < tolerance * 0.1 || (side.B - vertex).Length < tolerance * 0.1)
+                            && Math.Abs(P.Dot((line.B - line.A).Unit(), axis.Direction)) > 0.95
+                            && (line.B - line.A).Length >= axis.Radius * 2) attached = true;
+                    if (!attached) continue;
+                    var points = new List<P> { vertex }; var owned = new List<Segment>(); double length = 0; P direction = new P();
+                    int edgeIndex = sign == 1 ? index : (index + loop.Count - 1) % loop.Count;
+                    for (int count = 0; count < loop.Count; count++)
+                    {
+                        Segment edge = loop[edgeIndex]; P end = sign == 1 ? edge.B : edge.A, u = (end - points[points.Count - 1]).Unit();
+                        if (count > 0 && P.Dot(u, direction) < 0.85) break;
+                        owned.Add(edge); double size = (end - points[points.Count - 1]).Length, left = axis.Radius * 6 - length;
+                        if (size > left) end = points[points.Count - 1] + u * left;
+                        points.Add(end); length += Math.Min(size, left); direction = u;
+                        if (length >= axis.Radius * 6) break;
+                        edgeIndex = (edgeIndex + sign + loop.Count) % loop.Count;
+                    }
+                    CurvedWall wall = FitCurvedWall(points, axis.Radius, tolerance); if (wall == null) continue;
+                    if (Math.Abs(P.Cross(wall.Tangent(0), axis.Direction)) < 0.2) continue;
+                    foreach (Segment edge in owned) wall.Edges.Add(edge);
+                    P sample = wall.At(wall.Span * 0.6), tangent = wall.Tangent(wall.Span * 0.6), normal = new P(-tangent.Y, tangent.X) * (axis.Radius * 0.1);
+                    bool leftInside = region.Inside(sample + normal), rightInside = region.Inside(sample - normal);
+                    if (leftInside == rightInside) continue; wall.Inward = leftInside ? 1 : -1;
+                    P first; if (!CurvedMidpoint(wall, axis, edges, region, 0, tolerance, out first)) continue;
+                    double lastT = 0, lastCross = P.Cross(first - axis.Origin, axis.Direction), rootT = double.NaN;
+                    double reach = Math.Min(axis.Radius * 4, wall.Span * 0.8); P root = new P();
+                    for (int k = 1; k <= 64; k++)
+                    {
+                        double t = -reach * k / 64; P mid;
+                        if (!CurvedMidpoint(wall, axis, edges, region, t, tolerance, out mid)) break;
+                        double cross = P.Cross(mid - axis.Origin, axis.Direction);
+                        if (cross * lastCross <= 0)
+                        {
+                            double low = t, high = lastT; bool valid = true;
+                            for (int j = 0; j < 40; j++)
+                            {
+                                double u = (low + high) * 0.5;
+                                if (!CurvedMidpoint(wall, axis, edges, region, u, tolerance, out mid)) { valid = false; break; }
+                                if (P.Cross(mid - axis.Origin, axis.Direction) * lastCross > 0) high = u; else low = u;
+                            }
+                            if (valid) { rootT = (low + high) * 0.5; root = axis.Project(mid); } break;
+                        }
+                        lastT = t; lastCross = cross;
+                    }
+                    if (double.IsNaN(rootT) || (root - vertex).Length > axis.Radius * 4 || !region.Inside(root)) continue;
+                    foreach (Stroke stroke in strokes) SpliceCurvedCorner(stroke, wall, axis, edges, region, rootT, root, tolerance);
+                }
+            }
+        }
+    }
+    private static void SpliceCurvedCorner(Stroke stroke, CurvedWall wall, StraightAxis axis, List<Segment> edges, Region region, double rootT, P root, double tolerance)
+    {
+        var samples = new List<P>(); var parameters = new List<double>();
+        for (int k = 0; k <= 64; k++)
+        { double t = wall.Span * 0.9 * k / 64; P p; if (!CurvedMidpoint(wall, axis, edges, region, t, tolerance, out p)) break; samples.Add(p); parameters.Add(t); }
+        for (int reversed = 0; reversed < 2; reversed++)
+        {
+            var old = new List<P>(stroke.Points); var oldCorners = new HashSet<int>();
+            if (reversed != 0) old.Reverse(); foreach (int c in stroke.Corners) oldCorners.Add(reversed == 0 ? c : old.Count - 1 - c);
+            for (int i = 0; i + 2 < old.Count; i++)
+            {
+                if ((old[i] - axis.Project(old[i])).Length > tolerance * 0.1 || (old[i + 1] - axis.Project(old[i + 1])).Length > tolerance * 0.1
+                    || (old[i + 1] - old[i]).Length < axis.Radius || (root - old[i + 1]).Length > axis.Radius * 4
+                    || (root - old[i + 1]).Length < tolerance || !region.SegmentInside(old[i], root, tolerance)) continue;
+                int join = -1; double joinT = 0, walked = 0;
+                for (int k = i + 2; k < old.Count - 1; k++)
+                {
+                    walked += (old[k] - old[k - 1]).Length; if (walked > axis.Radius * 8 || oldCorners.Contains(k)) break;
+                    if ((old[k] - axis.Project(old[k])).Length < axis.Radius * 1.2) continue;
+                    double best = double.MaxValue, t = 0;
+                    for (int n = 1; n < samples.Count; n++)
+                    {
+                        P v = samples[n] - samples[n - 1]; if (v.Length <= tolerance * 0.001) continue;
+                        double u = Math.Max(0, Math.Min(1, P.Dot(old[k] - samples[n - 1], v) / P.Dot(v, v)));
+                        double d = (samples[n - 1] + v * u - old[k]).Length;
+                        if (d < best) { best = d; t = parameters[n - 1] + (parameters[n] - parameters[n - 1]) * u; }
+                    }
+                    if (best <= tolerance * 2 && t > Math.Min(axis.Radius * 1.5, wall.Span * 0.25)) { join = k; joinT = t; break; }
+                }
+                if (join < 0) continue;
+                var output = new List<P>(); var corners = new HashSet<int>();
+                for (int k = 0; k <= i; k++) { output.Add(old[k]); if (oldCorners.Contains(k)) corners.Add(output.Count - 1); }
+                output.Add(root); corners.Add(output.Count - 1); bool valid = true;
+                int count = Math.Max(4, (int)Math.Ceiling((joinT - rootT) / Math.Sqrt(axis.Radius * tolerance) * 2));
+                for (int k = 1; k < count; k++)
+                { P p; if (!CurvedMidpoint(wall, axis, edges, region, rootT + (joinT - rootT) * k / count, tolerance, out p)) { valid = false; break; } output.Add(p); }
+                for (int k = join; k < old.Count; k++) { output.Add(old[k]); if (oldCorners.Contains(k)) corners.Add(output.Count - 1); }
+                for (int k = 1; k < output.Count; k++) if (!region.SegmentInside(output[k - 1], output[k], tolerance)) valid = false;
+                if (!valid) continue;
+                if (reversed != 0) { output.Reverse(); var mapped = new HashSet<int>(); foreach (int c in corners) mapped.Add(output.Count - 1 - c); corners = mapped; }
+                stroke.Points.Clear(); stroke.Points.AddRange(output); stroke.Corners.Clear(); foreach (int c in corners) stroke.Corners.Add(c);
+                stroke.CurvedCorners.Add(root);
+                return;
+            }
         }
     }
     private static void AddDistinct(List<P> points, P point, double tolerance)
