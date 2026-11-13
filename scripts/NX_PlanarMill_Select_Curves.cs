@@ -1,8 +1,9 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.09
+// SCRIPT_VERSION: V1.10
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
 // Reconstructs straight and curved centerlines; round/compact square dots use half-width circles.
 // Free physical ends stop half the local stroke width before the terminal boundary.
+// Distinguishes stroke caps from bevels and removes boundary-supported corner spurs.
 // Preserves through-strokes; separates junctions by 0.004-0.02 mm and inherits operation tolerances.
 // Does not save files, generate a toolpath, or change the tool, depths, feeds or source body.
 
@@ -23,10 +24,10 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.09";
+    private const string SCRIPT_VERSION = "V1.10";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "9";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "10";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -1687,13 +1688,135 @@ public static class EngravingCenterlines
                 }
                 // Acute miter corners create longer medial spurs than a right angle.
                 // Retain the radius-collapse test so full-width short stems survive.
-                if (nodes[current].Links.Count >= 3 && nodes[i].Radius < nodes[current].Radius * 0.35
-                    && (length < nodes[current].Radius * 4 + step
-                        || IsMiterSpur(nodes, branch, i, current, axes, region, step, tolerance))) remove.AddRange(branch);
+                if (nodes[current].Links.Count >= 3 &&
+                    ((nodes[i].Radius < nodes[current].Radius * 0.35 && (length < nodes[current].Radius * 4 + step
+                        || IsMiterSpur(nodes, branch, i, current, axes, region, step, tolerance)))
+                    || ConvexCornerBranch(nodes, branch, i, current, length, region, step, tolerance))) remove.AddRange(branch);
             }
             if (remove.Count == 0) break;
             foreach (Pair p in remove) { nodes[p.A].Links.Remove(p.B); nodes[p.B].Links.Remove(p.A); }
         }
+        PruneSideWallLeaves(nodes, region, step, tolerance);
+    }
+    private static void PruneSideWallLeaves(List<Node> nodes, Region region, double step, double tolerance)
+    {
+        var walls = new List<Segment>();
+        var before = new Dictionary<Segment, Segment>(); var after = new Dictionary<Segment, Segment>();
+        foreach (List<P> loop in region.Loops)
+        {
+            List<P> p = BoundaryVertices(loop, tolerance); int first = walls.Count;
+            for (int i = 0; i < p.Count; i++) walls.Add(new Segment(p[i], p[(i + 1) % p.Count]));
+            for (int i = 0; i < p.Count; i++)
+            { before[walls[first + i]] = walls[first + (i + p.Count - 1) % p.Count]; after[walls[first + i]] = walls[first + (i + 1) % p.Count]; }
+        }
+        for (int pass = 0; pass < 4; pass++)
+        {
+            var remove = new List<Pair>();
+            for (int tip = 0; tip < nodes.Count; tip++) if (nodes[tip].Links.Count == 1)
+            {
+                var branch = new List<Pair>(); int previous = -1, current = tip; double length = 0;
+                while (true)
+                {
+                    int next = -1; foreach (int n in nodes[current].Links) if (n != previous) { next = n; break; }
+                    if (next < 0) break;
+                    branch.Add(new Pair(current, next)); length += (nodes[next].Point - nodes[current].Point).Length;
+                    previous = current; current = next; if (nodes[current].Links.Count != 2) break;
+                }
+                double radius = nodes[current].Radius;
+                if (nodes[current].Links.Count != 3 || length > radius * 1.5 || nodes[tip].Radius < radius * 0.4) continue;
+                P origin = nodes[tip].Point, outward = (origin - nodes[current].Point).Unit();
+                if (outward.Length < 0.5) continue;
+                Segment hit = null; double distance = double.MaxValue;
+                foreach (Segment wall in walls)
+                {
+                    P v = wall.B - wall.A; double cross = P.Cross(outward, v); if (Math.Abs(cross) < v.Length * 1e-12) continue;
+                    double t = P.Cross(wall.A - origin, v) / cross, u = P.Cross(wall.A - origin, outward) / cross;
+                    if (t > 0 && t < distance && u >= 0 && u <= 1) { hit = wall; distance = t; }
+                }
+                if (hit == null) continue;
+                // A genuine cap terminates both side walls. A false corner leaf runs
+                // into a wall that demonstrably continues along a neighbouring stroke.
+                bool sideWall = false;
+                List<Segment> left = BoundaryArm(hit, before, radius), right = BoundaryArm(hit, after, radius);
+                var leftSupport = new List<double>(); var rightSupport = new List<double>();
+                foreach (int neighbour in nodes[current].Links) if (neighbour != previous)
+                {
+                    int a = current, b = neighbour; double walked = 0, supported = 0, ls = 0, rs = 0;
+                    while (true)
+                    {
+                        P u = nodes[b].Point - nodes[a].Point; double size = u.Length; walked += size;
+                        P mid = (nodes[a].Point + nodes[b].Point) * 0.5;
+                        if (Math.Abs(P.Dot(u.Unit(), (hit.B - hit.A).Unit())) > 0.92
+                            && Math.Abs((mid - Closest(hit, mid)).Length - region.Distance(mid)) <= Math.Max(tolerance * 2, step * 0.25)) supported += size;
+                        if (walked > radius * 0.3)
+                        {
+                            if (WallSupports(left, mid, u.Unit(), region, step, tolerance)) ls += size;
+                            if (WallSupports(right, mid, u.Unit(), region, step, tolerance)) rs += size;
+                        }
+                        if (supported >= radius * 1.5 && (hit.B - hit.A).Length >= radius * 2) sideWall = true;
+                        if (walked > radius * 5 || nodes[b].Links.Count != 2) break;
+                        int next = -1; foreach (int n in nodes[b].Links) if (n != a) { next = n; break; }
+                        if (next < 0) break; a = b; b = next;
+                    }
+                    leftSupport.Add(ls); rightSupport.Add(rs);
+                }
+                // A bevel between TWO continuing strokes is a joint, not a third cap.
+                // For a real short arm, its side walls stop at that arm's junction and
+                // cannot support the two other branches over their own stroke widths.
+                if (leftSupport.Count == 2 && ((leftSupport[0] > radius && rightSupport[1] > radius)
+                    || (leftSupport[1] > radius && rightSupport[0] > radius))) sideWall = true;
+                if (sideWall) remove.AddRange(branch);
+            }
+            if (remove.Count == 0) break;
+            foreach (Pair p in remove) { nodes[p.A].Links.Remove(p.B); nodes[p.B].Links.Remove(p.A); }
+        }
+    }
+    private static List<Segment> BoundaryArm(Segment cap, Dictionary<Segment, Segment> next, double radius)
+    {
+        var result = new List<Segment>(); Segment edge = next[cap]; double length = 0;
+        while (edge != cap && result.Count <= next.Count)
+        {
+            result.Add(edge); length += (edge.B - edge.A).Length; if (length > radius * 6) break;
+            Segment following = next[edge];
+            if (P.Dot((edge.B - edge.A).Unit(), (following.B - following.A).Unit()) < 0.5) break;
+            edge = following;
+        }
+        return result;
+    }
+    private static bool WallSupports(List<Segment> walls, P point, P tangent, Region region, double step, double tolerance)
+    {
+        double radius = region.Distance(point), error = Math.Max(tolerance * 2, step * 0.25);
+        foreach (Segment wall in walls)
+            if (Math.Abs(P.Dot(tangent, (wall.B - wall.A).Unit())) > 0.85
+                && Math.Abs((point - Closest(wall, point)).Length - radius) <= error) return true;
+        return false;
+    }
+    private static bool ConvexCornerBranch(List<Node> nodes, List<Pair> branch, int tip, int junction,
+        double length, Region region, double step, double tolerance)
+    {
+        double radius = nodes[junction].Radius, error = Math.Max(tolerance, step * 0.1);
+        if (length > radius * 1.5 + step * 2 || nodes[tip].Radius > radius * 0.95) return false;
+        for (int k = 0; k < region.Loops.Count; k++)
+        {
+            List<P> loop = BoundaryVertices(region.Loops[k], tolerance); double orientation = Math.Sign(SignedArea(loop)) * (k == 0 ? 1 : -1);
+            for (int i = 0; i < loop.Count; i++)
+            {
+                P vertex = loop[i], a = loop[(i + loop.Count - 1) % loop.Count], b = loop[(i + 1) % loop.Count];
+                P u = (vertex - a).Unit(), v = (b - vertex).Unit();
+                // Adjacent walls of an obtuse convex corner support this entire leaf.
+                // Opposite stroke walls, pointed arms, concave corners and cap centers
+                // cannot pass this support test just by having a short branch.
+                if (P.Cross(u, v) * orientation <= 1e-8 || P.Dot(u, v) < 0.1
+                    || (vertex - nodes[junction].Point).Length > radius * 2 + step
+                    || (vertex - nodes[tip].Point).Length >= (vertex - nodes[junction].Point).Length) continue;
+                var x = new Segment(a, vertex); var y = new Segment(vertex, b); bool supported = true;
+                foreach (Pair edge in branch) foreach (int n in new int[] { edge.A, edge.B })
+                    if (Math.Abs((nodes[n].Point - Closest(x, nodes[n].Point)).Length - nodes[n].Radius) > error
+                        || Math.Abs((nodes[n].Point - Closest(y, nodes[n].Point)).Length - nodes[n].Radius) > error) supported = false;
+                if (supported) return true;
+            }
+        }
+        return false;
     }
     private static bool IsMiterSpur(List<Node> nodes, List<Pair> branch, int tip, int junction,
         List<StraightAxis> axes, Region region, double step, double tolerance)
@@ -1839,23 +1962,36 @@ public static class EngravingCenterlines
         internal bool JoinNext;
         internal P Corner;
     }
+    private static List<P> BoundaryVertices(List<P> loop, double tolerance)
+    {
+        List<P> p = new List<P>(loop); bool changed = true;
+        while (changed && p.Count > 3)
+        {
+            changed = false;
+            for (int i = p.Count - 1; i >= 0 && p.Count > 3; i--)
+            {
+                P a = p[(i + p.Count - 1) % p.Count], b = p[i], c = p[(i + 1) % p.Count];
+                if ((b - Closest(new Segment(a, c), b)).Length <= tolerance * 0.01)
+                { p.RemoveAt(i); changed = true; }
+            }
+        }
+        return p;
+    }
+    private static IEnumerable<Segment> BoundarySegments(Region region, double tolerance)
+    {
+        foreach (List<P> loop in region.Loops)
+        {
+            List<P> p = BoundaryVertices(loop, tolerance);
+            for (int i = 0; i < p.Count; i++) yield return new Segment(p[i], p[(i + 1) % p.Count]);
+        }
+    }
     private static List<StraightAxis> StraightAxes(Region region, double tolerance)
     {
         List<Segment> sides = new List<Segment>(); double width = 2 * region.Area / region.Perimeter;
         // Join only collinear outline pieces. Tessellated arcs must not become straight strokes.
         foreach (List<P> loop in region.Loops)
         {
-            List<P> p = new List<P>(loop); bool changed = true;
-            while (changed && p.Count > 3)
-            {
-                changed = false;
-                for (int i = p.Count - 1; i >= 0 && p.Count > 3; i--)
-                {
-                    P a = p[(i + p.Count - 1) % p.Count], b = p[i], c = p[(i + 1) % p.Count];
-                    if ((b - Closest(new Segment(a, c), b)).Length <= tolerance * 0.01)
-                    { p.RemoveAt(i); changed = true; }
-                }
-            }
+            List<P> p = BoundaryVertices(loop, tolerance);
             for (int i = 0; i < p.Count; i++)
             {
                 Segment side = new Segment(p[i], p[(i + 1) % p.Count]);
@@ -1869,7 +2005,7 @@ public static class EngravingCenterlines
             if (P.Dot(ua, ub) < 0) ub = ub * -1;
             // Font outlines can have slightly tapered walls. Use their internal angle bisector,
             // not an exact-parallel test which discards otherwise straight letter strokes.
-            if (Math.Abs(P.Cross(ua, ub)) > 0.035) continue;
+            if (Math.Abs(P.Cross(ua, ub)) > 0.30) continue;
             P direction = (ua + ub).Unit(), normal = new P(-direction.Y, direction.X);
             P na = new P(-ua.Y, ua.X), nb = new P(-ub.Y, ub.X);
             P origin = a.A + normal * (P.Dot(nb, b.A - a.A) / P.Dot(na + nb, normal));
@@ -1879,7 +2015,7 @@ public static class EngravingCenterlines
             double r0 = Math.Abs(P.Cross(ua, origin + direction * low - a.A));
             double r1 = Math.Abs(P.Cross(ua, origin + direction * high - a.A)), radius = (r0 + r1) * 0.5;
             if (Math.Min(r0, r1) < tolerance * 4 || Math.Max(r0, r1) > width
-                || Math.Max(r0, r1) > Math.Min(r0, r1) * 1.35 || high - low < radius * 0.9) continue;
+                || Math.Max(r0, r1) > Math.Min(r0, r1) * 2.5 || high - low < radius * 0.9) continue;
             bool inside = true;
             for (int k = 1; k <= 3; k++)
             {
@@ -2041,7 +2177,7 @@ public static class EngravingCenterlines
     private static bool WallCap(StraightAxis axis, double parameter, int sign, Region region, double tolerance, out P endpoint)
     {
         endpoint = new P(); double best = double.MaxValue;
-        foreach (Segment edge in region.Edges)
+        foreach (Segment edge in BoundarySegments(region, tolerance))
         {
             P v = edge.B - edge.A; double cross = P.Cross(axis.Direction, v);
             if (v.Length > axis.Radius * 4 || Math.Abs(cross) < v.Length * 0.5) continue;
@@ -2049,6 +2185,13 @@ public static class EngravingCenterlines
             double u = P.Cross(edge.A - axis.Origin, axis.Direction) / cross;
             double distance = Math.Abs(t - parameter);
             if (u < 0 || u > 1 || distance > axis.Radius * 1.5 || distance >= best) continue;
+            bool sideA = false, sideB = false;
+            foreach (Segment side in axis.Sides)
+            {
+                if ((edge.A - Closest(side, edge.A)).Length <= tolerance * 0.1) sideA = true;
+                if ((edge.B - Closest(side, edge.B)).Length <= tolerance * 0.1) sideB = true;
+            }
+            if (!sideA || !sideB) continue;
             P cap = axis.Origin + axis.Direction * (t - sign * Math.Max(tolerance * 0.1, axis.Radius * 0.1));
             if (!region.Inside(cap)) continue;
             best = distance; endpoint = cap;
