@@ -44,8 +44,10 @@ public class RoutingChecks
     }
     static EngravingCenterlines.Result Check(string name,List<List<P>> loops,int paths,int closed=0,double unit=1,bool adaptive=false,int maxPaths=0)
     {
-        var r=new R(loops);var source=EngravingCenterlines.Build(r,.002*unit);var result=EngravingRoutes.Build(source,r,.02*unit,.002*unit);
-        return CheckResult(name,r,result,paths,closed,unit,adaptive,maxPaths);
+        try {
+            var r=new R(loops);var source=EngravingCenterlines.Build(r,.002*unit);var result=EngravingRoutes.Build(source,r,.02*unit,.002*unit);
+            return CheckResult(name,r,result,paths,closed,unit,adaptive,maxPaths);
+        } catch(Exception ex) { throw new Exception(name,ex); }
     }
     static EngravingCenterlines.Result CheckResult(string name,R r,EngravingCenterlines.Result result,int paths,int closed,double unit,bool adaptive,int maxPaths=0)
     {

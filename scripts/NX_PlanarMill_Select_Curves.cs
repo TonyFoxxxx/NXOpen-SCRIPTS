@@ -1,7 +1,8 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.08
+// SCRIPT_VERSION: V1.09
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
-// Reconstructs straight wall-pair networks and curved centerlines; near-round dots use D/2 circles.
+// Reconstructs straight and curved centerlines; round/compact square dots use half-width circles.
+// Free physical ends stop half the local stroke width before the terminal boundary.
 // Preserves through-strokes; separates junctions by 0.004-0.02 mm and inherits operation tolerances.
 // Does not save files, generate a toolpath, or change the tool, depths, feeds or source body.
 
@@ -22,10 +23,10 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.08";
+    private const string SCRIPT_VERSION = "V1.09";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "8";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "9";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -139,7 +140,7 @@ public class NXPlanarMillSelectCurves
             int closed = chains.FindAll(delegate(PlanarCurveChains.Chain c) { return c.Closed; }).Count;
             Show(NXMessageBox.DialogType.Information, "Операция: " + operation.Name + "\nСоздано кривых: " + curves.Count
                 + "\nЦепочек кривых: " + chains.Count + " (разомкнутых: " + (chains.Count - closed) + ", замкнутых: " + closed + ")"
-                + "\nКруглых точек D/2: " + dots + (skipped > 0 ? "\nРанее обработанных граней пропущено: " + skipped : "")
+                + "\nТочек (окружностей D/2): " + dots + (skipped > 0 ? "\nРанее обработанных граней пропущено: " + skipped : "")
                 + "\nСуществующих границ сохранено: " + oldBoundaries.Length
                 + "\nРазделено узлов: " + junctions + (junctions > 0 ? "; зазор: " + minimumGap.ToString("0.###")
                     + (maximumGap > minimumGap * 1.001 ? "–" + maximumGap.ToString("0.###") : "") + " мм." : "")
@@ -1324,7 +1325,7 @@ public static class EngravingCenterlines
         double step = Math.Min(width / 8, Math.Sqrt(width * tolerance) * 0.7);
         result.SamplingStep = step;
         Circle dot;
-        if (RoundDot(region, tolerance, out dot)) { result.Circles.Add(dot); return result; }
+        if (RoundDot(region, tolerance, out dot) || SquareDot(region, tolerance, out dot)) { result.Circles.Add(dot); return result; }
         if (WallGraph(region, tolerance, result)) return result;
         List<P> samples = Sample(region, step);
         result.BoundarySamples = samples.Count;
@@ -1363,6 +1364,7 @@ public static class EngravingCenterlines
         foreach (Stroke stroke in strokes) Refine(stroke, region, step, tolerance);
         RestoreStraightStrokes(strokes, region, tolerance);
         CleanSnappedJunctions(strokes, region, tolerance);
+        InsetTerminals(strokes, region, tolerance);
         foreach (Stroke stroke in strokes)
         {
             if (stroke.Points.Count < 2) continue;
@@ -1372,6 +1374,182 @@ public static class EngravingCenterlines
         }
         if (result.Curves.Count == 0) throw new InvalidOperationException("На грани не осталось кривых.");
         return result;
+    }
+    // Apply the same end convention to both reconstruction engines, BEFORE splitting
+    // junctions for CAM. Only degree-one ends are physical terminals of the engraving.
+    private static void InsetTerminals(List<Stroke> strokes, Region region, double tolerance)
+    {
+        var ends = new List<P>();
+        foreach (Stroke s in strokes) { ends.Add(s.Points[0]); ends.Add(s.Points[s.Points.Count - 1]); }
+        List<StraightAxis> axes = StraightAxes(region, tolerance);
+        for (int n = 0; n < strokes.Count; n++)
+        {
+            Stroke s = strokes[n]; if (s.Closed) continue;
+            var p = new List<P>(s.Points); double start = 0, finish = 0;
+            for (int end = 0; end < 2; end++)
+            {
+                int degree = 0; P tip = ends[2 * n + end];
+                foreach (P q in ends) if ((q - tip).Length <= tolerance * 0.01) degree++;
+                if (degree != 1) continue;
+                var oriented = new List<P>(p); if (end == 1) oriented.Reverse();
+                double limit = 0;
+                for (int i = 1; i < oriented.Count; i++)
+                {
+                    limit += (oriented[i] - oriented[i - 1]).Length;
+                    int original = end == 0 ? i : p.Count - 1 - i;
+                    if (s.Corners.Contains(original) && IsWallCorner(oriented[i], axes, region, tolerance)) break;
+                }
+                double inset = TerminalInset(oriented, limit, axes, region, tolerance);
+                if (end == 0) start = inset; else finish = inset;
+            }
+            double total = 0; foreach (double length in PathLengths(p)) total += length;
+            if (total - start - finish <= tolerance * 0.02)
+                throw new InvalidOperationException("Штрих слишком короткий для отступов на половину его ширины. Кривые не созданы.");
+            P unused; P first = PathPoint(p, start, out unused), last;
+            var reverse = new List<P>(p); reverse.Reverse(); last = PathPoint(reverse, finish, out unused);
+            var output = new List<P> { first }; var corners = new HashSet<int>(); double distance = 0;
+            for (int i = 0; i < p.Count; i++)
+            {
+                if (i > 0) distance += (p[i] - p[i - 1]).Length;
+                if (distance > start + tolerance * 0.001 && distance < total - finish - tolerance * 0.001)
+                { output.Add(p[i]); if (s.Corners.Contains(i)) corners.Add(output.Count - 1); }
+            }
+            output.Add(last);
+            for (int i = 1; i < output.Count; i++)
+                if (!region.SegmentInside(output[i - 1], output[i], tolerance))
+                    throw new InvalidOperationException("Отступ конца штриха выходит за выбранную грань.");
+            s.Points.Clear(); s.Points.AddRange(output); s.Corners.Clear();
+            foreach (int corner in corners) s.Corners.Add(corner);
+        }
+    }
+    private static IEnumerable<double> PathLengths(List<P> path)
+    { for (int i = 1; i < path.Count; i++) yield return (path[i] - path[i - 1]).Length; }
+    private static bool IsWallCorner(P point, List<StraightAxis> axes, Region region, double tolerance)
+    {
+        for (int i = 0; i < axes.Count; i++) for (int j = i + 1; j < axes.Count; j++)
+        { P corner; if (SharpIntersection(axes[i], axes[j], region, tolerance, out corner) && (corner - point).Length <= tolerance) return true; }
+        return false;
+    }
+    // Positive distance trims the existing centerline; negative distance extends its
+    // terminal tangent. An already inset medial endpoint is never shortened twice.
+    private static P PathPoint(List<P> path, double distance, out P inward)
+    {
+        for (int i = 1; i < path.Count; i++)
+        {
+            P v = path[i] - path[i - 1]; double length = v.Length;
+            if (length <= 1e-20) continue;
+            if (distance <= length || i == path.Count - 1)
+            { inward = v * (1 / length); return path[i - 1] + inward * distance; }
+            distance -= length;
+        }
+        throw new InvalidOperationException("Вырожденный конец штриха.");
+    }
+    private static double RayBoundary(P p, P direction, Region region, double epsilon)
+    {
+        double best = double.MaxValue;
+        foreach (Segment e in region.Edges)
+        {
+            P v = e.B - e.A; double cross = P.Cross(direction, v);
+            if (Math.Abs(cross) < v.Length * 1e-12) continue;
+            double t = P.Cross(e.A - p, v) / cross, u = P.Cross(e.A - p, direction) / cross;
+            if (t > epsilon && u >= -1e-9 && u <= 1 + 1e-9) best = Math.Min(best, t);
+        }
+        return best;
+    }
+    private static double TerminalInset(List<P> path, double limit, List<StraightAxis> axes, Region region, double tolerance)
+    {
+        P inward; PathPoint(path, 0, out inward); StraightAxis wall = null; double best = double.MaxValue;
+        foreach (StraightAxis a in axes)
+        {
+            double score = (a.Project(path[0]) - path[0]).Length;
+            P unused; P probe = PathPoint(path, Math.Min(limit * 0.5, a.Radius * 2), out unused);
+            if (score < Math.Max(tolerance * 2, a.Radius * 0.8) && (a.Project(probe) - probe).Length < tolerance * 2
+                && a.Outside(path[0]) < a.Radius * 2 && score < best) { best = score; wall = a; }
+        }
+        double epsilon = tolerance * 0.001;
+        Func<double, double> clearance = delegate(double distance)
+        {
+            P direction; P p = PathPoint(path, distance, out direction);
+            if (!region.Inside(p)) return -1;
+            if (wall != null) direction = wall.Direction * (P.Dot(inward, wall.Direction) < 0 ? -1 : 1);
+            P normal = new P(-direction.Y, direction.X);
+            double radius;
+            if (wall != null)
+            {
+                // Intersect the supporting side walls, not the oblique terminal cap.
+                // This also measures local width for slightly tapered straight strokes.
+                double positive = double.MaxValue, negative = double.MaxValue;
+                foreach (Segment side in wall.Sides)
+                {
+                    P v = side.B - side.A; double d = P.Cross(normal, v);
+                    if (Math.Abs(d) < v.Length * 0.5) continue;
+                    double t = P.Cross(side.A - p, v) / d;
+                    if (t > 0) positive = Math.Min(positive, t); else negative = Math.Min(negative, -t);
+                }
+                if (positive == double.MaxValue || negative == double.MaxValue)
+                    throw new InvalidOperationException("Не найдены обе стенки у конца штриха.");
+                radius = (positive + negative) * 0.5;
+            }
+            else
+            {
+                double positive = RayBoundary(p, normal, region, epsilon), negative = RayBoundary(p, normal * -1, region, epsilon);
+                if (positive == double.MaxValue || negative == double.MaxValue)
+                    throw new InvalidOperationException("Не найдены обе стенки у конца штриха.");
+                radius = (positive + negative) * 0.5;
+            }
+            double forward = RayBoundary(p, direction * -1, region, epsilon);
+            if (!(radius > epsilon) || double.IsInfinity(radius) || radius == double.MaxValue || forward == double.MaxValue)
+                throw new InvalidOperationException("Не удалось измерить местную ширину у конца штриха.");
+            return forward - radius;
+        };
+        double f = clearance(0), low = 0, high = 0;
+        if (Math.Abs(f) <= epsilon) return 0;
+        double step = Math.Max(tolerance, Math.Min(region.Distance(path[0]) + Math.Abs(f), limit) / 8);
+        if (f > 0)
+        {
+            // Search outward only as far as the first boundary of this same terminal.
+            double reach = RayBoundary(path[0], inward * -1, region, epsilon);
+            low = -reach;
+            if (reach == double.MaxValue) throw new InvalidOperationException("Не найден торец штриха.");
+        }
+        else
+        {
+            double maximum = limit - epsilon;
+            for (high = Math.Min(step, maximum); high < maximum && clearance(high) < 0; high = Math.Min(high + step, maximum)) { }
+            if (high <= 0 || clearance(high) < 0)
+                throw new InvalidOperationException("Недостаточно длины до угла или узла для отступа на половину ширины штриха.");
+        }
+        for (int i = 0; i < 50; i++)
+        { double mid = (low + high) * 0.5; if (clearance(mid) < 0) low = mid; else high = mid; }
+        double inset = (low + high) * 0.5;
+        if (Math.Abs(clearance(inset)) > tolerance)
+            throw new InvalidOperationException("Не удалось выдержать отступ на половину ширины у конца штриха.");
+        return inset;
+    }
+    private static bool SquareDot(Region region, double tolerance, out Circle circle)
+    {
+        circle = null; if (region.Loops.Count != 1) return false;
+        var p = new List<P>(region.Loops[0]); bool changed = true;
+        while (changed && p.Count > 4)
+        {
+            changed = false;
+            for (int i = p.Count - 1; i >= 0 && p.Count > 4; i--)
+                if ((p[i] - Closest(new Segment(p[(i + p.Count - 1) % p.Count], p[(i + 1) % p.Count]), p[i])).Length <= tolerance * 0.01)
+                { p.RemoveAt(i); changed = true; }
+        }
+        if (p.Count != 4) return false;
+        P a = p[1] - p[0], b = p[2] - p[1], c = p[3] - p[2], d = p[0] - p[3];
+        // A compact square/near-square parallelogram, including the shear of italic
+        // text. A long dash, a triangular serif and a counter are not punctuation.
+        double min = Math.Min(Math.Min(a.Length, b.Length), Math.Min(c.Length, d.Length));
+        double max = Math.Max(Math.Max(a.Length, b.Length), Math.Max(c.Length, d.Length));
+        if (min <= tolerance * 8 || max > min * 1.25 || Math.Abs(P.Dot(a.Unit(), b.Unit())) > 0.45
+            || (a + c).Length > min * 0.02 || (b + d).Length > min * 0.02
+            || P.Cross(a, b) * P.Cross(b, c) <= 0 || P.Cross(c, d) * P.Cross(d, a) <= 0) return false;
+        P center = (p[0] + p[1] + p[2] + p[3]) * 0.25;
+        double halfWidth = region.Distance(center);
+        if (!region.Inside(center) || halfWidth <= tolerance * 4) return false;
+        circle = new Circle { Center = center, Radius = halfWidth * 0.5 }; return true;
     }
     private static bool RoundDot(Region region, double tolerance, out Circle circle)
     {
@@ -1845,6 +2023,8 @@ public static class EngravingCenterlines
         // Forward area consistency rejects an incomplete or excessive stroke network.
         // Wall coverage and hole count above test the shape, not only its total area.
         if (restoredArea < region.Area * 0.65 || restoredArea > region.Area * 1.4) return false;
+        foreach (Stroke stroke in strokes) for (int i = 1; i + 1 < stroke.Points.Count; i++) stroke.Corners.Add(i);
+        InsetTerminals(strokes, region, tolerance);
         foreach (Stroke stroke in strokes)
         {
             var path = new List<Bezier>();

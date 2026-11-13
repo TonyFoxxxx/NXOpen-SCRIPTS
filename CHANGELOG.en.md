@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.09
+
+Free centerline ends now stop half the local stroke width before the terminal boundary. Both reconstruction engines measure the setback from the source outline, without shortening already inset ends twice. Square and near-square dots, including sheared italic shapes, become circles with a diameter equal to half their smaller width.
+
+Add 277 geometry regressions. Existing routing checks and all 1104 face variants from the previously supplied STEP model pass outside NX. CAM tolerances and junction separation rules are unchanged. Compile against DC 2606 SDK for .NET Framework and .NET 10; native NX execution and toolpaths remain untested.
+
 ## 2026-11-13 — Engraving centerlines for PLANAR_MILL V1.08
 
 Fix punctuation failures reporting insufficient room for a sharp connection. With uneven spline sampling, V1.07 could mistake a slightly oval dot for a branching stroke. Shape validation now uses the equal-area-circle radius, which is independent of the number of samples on individual boundary segments. D/2 circles are retained.
