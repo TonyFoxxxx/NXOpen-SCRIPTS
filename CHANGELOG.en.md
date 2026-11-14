@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.12
+
+Fix reproduced short-branch failures near corners. Recheck continuing wall support after merging nearby nodes; remove artificial loops produced by corner snapping and reconnect the main stroke. Trim genuine short arms only as much as clearance requires, increasing the trim after measuring curve separation. Errors identify and highlight the failed face group.
+
+Add 582 corner and island scenarios; additional short-branch cases increase routing checks to 602. Existing tests, 1104 variants of the previously supplied STEP model, and compilation against DC 2606 for .NET Framework and .NET 10 pass. The latest model is available only as a screenshot; its STEP/PRT geometry and a V1.12 run in NX remain untested. Recreate any V1.01–V1.11 axes.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.07
 
 Follow actual MCS/RCS parameter providers through UF. NX defaults now receive reflected bindings alongside local definitions; inherited nodes are not overwritten. Replace mandatory CSYS-tag equality with origin, axes, status and inheritance-provider checks, plus the available RCS/MCS link flag. Reject unresolved or cyclic providers. Diagnostics identify the node and expected/actual values; correct the stale boundary-reading stage in MCS failures.

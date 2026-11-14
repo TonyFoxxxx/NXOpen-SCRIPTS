@@ -1,9 +1,9 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.11
+// SCRIPT_VERSION: V1.12
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
 // Reconstructs straight and curved centerlines; round/compact square dots use half-width circles.
 // Free physical ends stop half the local stroke width before the terminal boundary.
-// Distinguishes stroke caps from bevels and removes boundary-supported corner spurs.
+// Rechecks corner spurs after merging nodes; preserves genuine short branches and islands.
 // Restores sharp line/curve joints from the walls, preserving tangential fillets.
 // Preserves through-strokes; separates junctions by 0.004-0.02 mm and inherits operation tolerances.
 // Does not save files, generate a toolpath, or change the tool, depths, feeds or source body.
@@ -25,10 +25,10 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.11";
+    private const string SCRIPT_VERSION = "V1.12";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "11";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "12";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -45,6 +45,7 @@ public class NXPlanarMillSelectCurves
     private sealed class FaceData
     {
         internal string Key, Shape;
+        internal Face SelectedFace;
         internal readonly List<EdgeData> Edges = new List<EdgeData>();
     }
     private sealed class FaceGroup
@@ -58,6 +59,13 @@ public class NXPlanarMillSelectCurves
         internal string Shape, Revision;
         internal int Expected, Count;
         internal readonly HashSet<string> Faces = new HashSet<string>();
+    }
+    private sealed class FaceGeometryException : InvalidOperationException
+    {
+        internal readonly List<Face> Faces = new List<Face>();
+        internal FaceGeometryException(FaceGroup group, int index, int count, Exception error)
+            : base("Группа граней гравировки " + index + " из " + count + ":\n" + error.Message, error)
+        { foreach (FaceData face in group.Faces) Faces.Add(face.SelectedFace); }
     }
     public static void Main(string[] args)
     {
@@ -154,7 +162,14 @@ public class NXPlanarMillSelectCurves
             string state = committed ? "Изменения уже внесены; отмена доступна через Ctrl+Z." : "Операция не изменена.";
             if (hasMark) try { session.UndoToMark(mark, null); session.DeleteUndoMark(mark, null); state = "Изменения этого запуска отменены."; }
                 catch (Exception undoError) { state = "Не удалось полностью отменить изменения: " + undoError.Message; }
-            Show(NXMessageBox.DialogType.Error, ex.Message + "\n\n" + state);
+            // Highlight only the failed source group while its error is visible.
+            // This is display feedback, not a partial commit or a geometry edit.
+            var highlighted = new List<Face>(); FaceGeometryException geometry = ex as FaceGeometryException;
+            if (geometry != null) foreach (Face face in geometry.Faces)
+                try { face.Highlight(); highlighted.Add(face); } catch { }
+            try { Show(NXMessageBox.DialogType.Error, ex.Message
+                + (highlighted.Count > 0 ? "\n\nПроблемные грани подсвечены на время этого сообщения." : "") + "\n\n" + state); }
+            finally { foreach (Face face in highlighted) try { face.Unhighlight(); } catch { } }
         }
         finally { try { uf.Ui.SetStatus(""); } catch { } }
     }
@@ -198,7 +213,7 @@ public class NXPlanarMillSelectCurves
                 transform = new double[4, 4]; uf.Assem.AskTransformOfOcc(face.Tag, transform);
                 occurrence = face.OwningComponent.JournalIdentifier;
             }
-            FaceData data = new FaceData { Key = Hash(occurrence + "|" + prototype.OwningPart.Leaf + "|" + prototype.JournalIdentifier) };
+            FaceData data = new FaceData { SelectedFace = face, Key = Hash(occurrence + "|" + prototype.OwningPart.Leaf + "|" + prototype.JournalIdentifier) };
             List<string> shape = new List<string>();
             foreach (Edge edge in prototype.GetEdges())
             {
@@ -238,8 +253,12 @@ public class NXPlanarMillSelectCurves
         {
             uf.Ui.SetStatus("Построение осей гравировки: " + (i + 1) + " / " + pending.Count);
             double unit = part.PartUnits == BasePart.Units.Inches ? 1 / 25.4 : 1;
-            foreach (EngravingCenterlines.Region region in GroupRegions(pending[i], frame, joinTolerance))
-                pending[i].Results.Add(EngravingRoutes.Build(EngravingCenterlines.Build(region, tolerance), region, 0.02 * unit, tolerance));
+            try
+            {
+                foreach (EngravingCenterlines.Region region in GroupRegions(pending[i], frame, joinTolerance))
+                    pending[i].Results.Add(EngravingRoutes.Build(EngravingCenterlines.Build(region, tolerance), region, 0.02 * unit, tolerance));
+            }
+            catch (Exception ex) { throw new FaceGeometryException(pending[i], i + 1, pending.Count, ex); }
         }
         return pending;
     }
@@ -593,10 +612,14 @@ public static class EngravingRoutes
         int[] pairs = new int[edges.Count * 2], parent = new int[edges.Count]; bool[] through = new bool[pairs.Length];
         for (int i = 0; i < pairs.Length; i++) pairs[i] = -1;
         for (int i = 0; i < parent.Length; i++) parent[i] = i;
+        double flat = Math.Min(tolerance * 0.125, gap * 0.01);
         int junctions = 0;
         foreach (Junction node in nodes) if (node.Ports.Count > 2)
         {
-            junctions++; node.Radius = gap * 1.5; node.Limit = region.Distance(node.Point) * 0.85;
+            // Start with the clearance actually required by a perpendicular branch.
+            // A blanket 1.5-gap radius consumes short arms even when the gap fits.
+            // Oblique branches/elbows still grow below until their measured clearance fits.
+            junctions++; node.Radius = gap + flat * 4; node.Limit = region.Distance(node.Point) * 0.85;
             if (node.Radius > node.Limit) throw new GapFitException("Зазор не помещается по ширине штриха.");
             PairPorts(node, edges, pairs, parent, region.Loops.Count > 1);
             // Retain one through-pair at the original node. Only the other arms need a gap from it.
@@ -609,9 +632,8 @@ public static class EngravingRoutes
             }
             if (keep >= 0) { through[keep] = true; through[pairs[keep]] = true; }
         }
-        double flat = Math.Min(tolerance * 0.125, gap * 0.01);
         List<List<B>> trimmed = null; Dictionary<int, B> links = null;
-        for (int attempt = 0; attempt < 9; attempt++)
+        for (int attempt = 0; attempt < 10; attempt++)
         {
             trimmed = new List<List<B>>();
             for (int i = 0; i < edges.Count; i++)
@@ -634,11 +656,13 @@ public static class EngravingRoutes
             bool valid = true;
             foreach (Junction node in nodes) if (node.Ports.Count > 2 && !Separated(node, trimmed, pairs, links, gap, flat))
             {
-                valid = false; node.Radius *= 1.4;
+                // Keep all nine earlier search radii after trying the smaller first
+                // cut, so tight-angle junctions do not lose their previous reach.
+                valid = false; node.Radius = Math.Max(gap * 1.5, node.Radius * 1.4);
                 if (node.Radius > node.Limit) throw new GapFitException("Разделение узла выходит за ширину штриха.");
             }
             if (valid) break;
-            if (attempt == 8) throw new GapFitException("Не удалось разделить узел без касаний.");
+            if (attempt == 9) throw new GapFitException("Не удалось разделить узел без касаний.");
         }
         var result = new EngravingCenterlines.Result { WidthEstimate = source.WidthEstimate, SamplingStep = source.SamplingStep,
             BoundarySamples = source.BoundarySamples, SeparatedJunctions = junctions, JunctionGap = junctions > 0 ? gap : 0,
@@ -1358,6 +1382,9 @@ public static class EngravingCenterlines
         PruneCorners(nodes, step, region, tolerance);
         nodes = MergeNearNodes(nodes, step * 2, region, true);
         nodes = MergeNearNodes(nodes, tolerance * 2, region);
+        // Merging nearby medial nodes exposes the two continuing strokes of a
+        // rounded/bevelled corner. Recheck wall support on that consolidated graph.
+        PruneSideWallLeaves(nodes, region, step, tolerance);
         CheckTopology(nodes, region.Loops.Count - 1);
         List<Stroke> strokes = Trace(nodes);
         if (strokes.Count == 0)
@@ -1933,7 +1960,19 @@ public static class EngravingCenterlines
                 if ((other[0] - p[0]).Length <= tolerance * 0.01) incident++;
                 if ((other[other.Count - 1] - p[0]).Length <= tolerance * 0.01) incident++;
             }
-            if (insideDisk && incident >= 3) strokes.RemoveAt(i);
+            // A terminal medial spur can also collapse onto an ordinary corner (two
+            // remaining incident strokes). It is not a new island or a real short arm:
+            // its originally distinct ends were explicitly snapped to the same node.
+            // In a face with holes the smaller inscribed disk proves that no island
+            // lies in the discarded loop, even if there are other holes elsewhere.
+            if (insideDisk && (incident >= 3 || (stroke.ContractedJunction && incident == 2)))
+            {
+                strokes.RemoveAt(i);
+                // Removing a false spur at an ordinary corner leaves two pieces of the
+                // SAME stroke. Join them now; otherwise CAM sees two chains touching.
+                if (incident == 2) JoinOrdinaryCorner(strokes, p[0], tolerance);
+                i = Math.Min(i, strokes.Count);
+            }
         }
         // Projection can also duplicate a protected corner. Compact those points before fitting,
         // preserving endpoint coordinates and remapping corner indices instead of fitting zero spans.
@@ -1950,6 +1989,33 @@ public static class EngravingCenterlines
             stroke.Points.Clear(); stroke.Points.AddRange(points); stroke.Corners.Clear();
             foreach (int corner in corners) stroke.Corners.Add(corner);
         }
+    }
+    private static void JoinOrdinaryCorner(List<Stroke> strokes, P point, double tolerance)
+    {
+        var indices = new List<int>(); var ends = new List<int>();
+        for (int i = 0; i < strokes.Count; i++) for (int end = 0; end < 2; end++)
+        {
+            List<P> p = strokes[i].Points;
+            if ((p[end == 0 ? 0 : p.Count - 1] - point).Length <= tolerance * 0.01)
+            { indices.Add(i); ends.Add(end); }
+        }
+        if (indices.Count != 2 || indices[0] == indices[1]) return;
+        Stroke joined = new Stroke();
+        for (int side = 0; side < 2; side++)
+        {
+            Stroke old = strokes[indices[side]]; bool reverse = ends[side] == side;
+            for (int k = 0; k < old.Points.Count; k++)
+            {
+                int source = reverse ? old.Points.Count - 1 - k : k;
+                if (side == 1 && k == 0) continue;
+                joined.Points.Add(old.Points[source]);
+                if (old.Corners.Contains(source)) joined.Corners.Add(joined.Points.Count - 1);
+            }
+            if (side == 0) joined.Corners.Add(joined.Points.Count - 1);
+            joined.CurvedCorners.AddRange(old.CurvedCorners);
+        }
+        joined.Closed = (joined.Points[0] - joined.Points[joined.Points.Count - 1]).Length <= tolerance * 0.01;
+        strokes[indices[0]] = joined; strokes.RemoveAt(indices[1]);
     }
     private sealed class StraightAxis
     {

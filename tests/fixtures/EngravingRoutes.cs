@@ -106,12 +106,12 @@ public class RoutingChecks
             double distance=double.MaxValue;P midpoint=Rot(0,.005,angle,unit);
             foreach(var path in result.Curves)foreach(B c in path)if(c.Line)distance=Math.Min(distance,PointSegment(midpoint,c.A,c.D));
             Require(distance<1e-10,"short through-connector was removed");
-            foreach(double length in new double[]{.025,.009,.007})
+            foreach(double length in new double[]{.025,.009,.007,.005,.0045})
             {
                 var source=new EngravingCenterlines.Result();AddLine(source,Rot(0,-1,angle,unit),a);AddLine(source,a,Rot(0,1,angle,unit));AddLine(source,a,Rot(length,0,angle,unit));
                 result=EngravingRoutes.Build(source,region,.02*unit,.002*unit);
                 CheckResult("short terminal",region,result,2,0,unit,true);RetainedEnds(source,result);
-                Require(result.JunctionGap<.02*unit,"gap was not adapted to short branch");
+                if(length<.02)Require(result.JunctionGap<.02*unit,"gap was not adapted to short branch");
                 Require(source.Curves[2][0].A.Equals(a)&&(source.Curves[2][0].D-Rot(length,0,angle,unit)).Length<1e-12,"retry modified source");
             }
         }
