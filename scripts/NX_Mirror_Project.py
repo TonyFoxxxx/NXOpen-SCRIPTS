@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.12
-SCRIPT_VERSION = "V1.12"
+# SCRIPT_VERSION: V1.13
+SCRIPT_VERSION = "V1.13"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -675,6 +675,7 @@ class Trial:
         self.mcs_links = {}
         self.mcs_definitions, self.mcs_verified_definitions = {}, {}
         self.mcs_fixed_xforms = {}
+        self.mcs_rebuilt = {}
         self.stock_features, self.protected_bodies = {}, set()
         self.cam_builder_state, self.cam_builder_labels = None, {}
         self.history_baseline, self.history_previous = None, None
@@ -800,20 +801,74 @@ class Trial:
             lines.append("    " + label + (": числовой объект" if parents is None else ": родители " + str(parents)))
         return lines
 
-    def rebuild_three_planes(self, tag, planes, expected_axes):
+    def csys_frame(self, tag):
+        matrix, origin = self.uf.Csys.AskCsysInfo(tag)
+        return list(origin), list(self.uf.Csys.AskMatrixValues(matrix))
+
+    def require_csys_frame(self, tag, origin, axes, context):
+        self.stage = "Проверка Three Planes: " + str(tag) + " / " + context
+        actual_origin, actual_axes = self.csys_frame(tag)
+        if not (close_values(actual_origin, origin) and close_values(actual_axes, axes)):
+            raise RuntimeError("Не подтверждена ориентация Three Planes " + str(tag) + " / " + context +
+                "\nНачало ожидаемое: " + str(list(origin)) + "; фактическое: " + str(actual_origin) +
+                "\nОси ожидаемые: " + str(list(axes)) + "; фактические: " + str(actual_axes))
+
+    def evaluate_three_planes(self, csys, data):
+        # SmartObject.Evaluate is not recursive: explicitly evaluate parents
+        # before their Xform, and the Xform before the CSYS which consumes it.
+        for plane, source in zip(data["planes"], data["sources"]):
+            plane.Evaluate()
+            if tuple(int(o.Tag) for o in plane.GetGeometry()) != (source,):
+                raise RuntimeError("Изменилась выбранная плоскость Three Planes: " + str(source))
+            support = self.plane_data(self.refs[source])
+            normal = MirrorPlane(xyz(plane.Origin), xyz(plane.Normal)).normal
+            distance = dot(support.normal, [a-b for a,b in zip(xyz(plane.Origin), support.origin)])
+            if abs(dot(normal, support.normal)) < 1.0 - 1e-7 or abs(distance) > 1e-5:
+                raise RuntimeError("Плоскость Three Planes не совпадает с исходной опорой: " + str(source))
+        data["xform"].Evaluate()
+        csys.Evaluate()
+        for source, graph in data["source_graphs"].items():
+            if self.smart_graph(source) != graph:
+                raise RuntimeError("Изменилось определение исходной опоры Three Planes: " + str(source))
+
+    def orient_three_planes(self, csys, data, context):
+        # Plane.Normal alone is not proof of the resulting CSYS orientation.
+        # Try only the eight normal-sign combinations of the SAME three linked
+        # planes, never a numerical CSYS or a different support/order.
+        initial = tuple(bool(p.Flip) for p in data["planes"])
+        attempts = []
+        for mask in range(8):
+            self.stage = "Ориентация Three Planes: " + str(csys.Tag) + " / " + context
+            flips = tuple(value ^ bool(mask & (1 << i)) for i,value in enumerate(initial))
+            for plane, flip in zip(data["planes"], flips):
+                if bool(plane.Flip) != flip:
+                    plane.SetFlip(flip)
+            self.evaluate_three_planes(csys, data)
+            origin, axes = self.csys_frame(csys.Tag)
+            attempts.append("  Flip=" + str(flips) + "; начало=" + str(origin) + "; оси=" + str(axes))
+            if not close_values(origin, data["origin"]):
+                raise RuntimeError("Переключение нормалей не должно менять начало Three Planes.\n" +
+                    "Ожидалось: " + str(list(data["origin"])) + "\n" + attempts[-1])
+            if close_values(axes, data["axes"]):
+                self.lines.append("Three Planes: ориентация проверена / " + context +
+                    "; вариантов: " + str(mask+1) + "; Flip=" + str(flips) + "; оси=" + str(axes))
+                return
+        raise RuntimeError("Не удалось получить ожидаемые оси Three Planes без изменения опор.\n" +
+            "Ожидалось: " + str(list(data["axes"])) + "\n" + "\n".join(attempts))
+
+    def rebuild_three_planes(self, tag, planes, expected_origin, expected_axes):
         nx = self.nx
         oriented = []
         for index, source in enumerate(planes):
             obj = self.refs[source]
-            # Coincident smart planes retain the exact selected face/datum/plane,
-            # including an existing offset plane. Flip Y when needed to keep Z
-            # directed toward the same side of the reflected part.
-            plane = self.part.Planes.CreatePlane(nx.Point3d(0.0, 0.0, 0.0),
-                nx.Vector3d(0.0, 0.0, 1.0), nx.SmartObject.UpdateOption.AfterModeling)
+            direction = expected_axes[index*3:index*3+3]
+            # Seed with the intended orientation; the actual associative plane
+            # still comes from the same selected face/datum/offset plane.
+            plane = self.part.Planes.CreatePlane(nx.Point3d(*expected_origin),
+                nx.Vector3d(*direction), nx.SmartObject.UpdateOption.AfterModeling)
             plane.SetMethod(nx.PlaneTypes.MethodType.Coincident)
             plane.SetGeometry([obj])
             plane.Evaluate()
-            direction = expected_axes[index*3:index*3+3]
             if dot(xyz(plane.Normal), direction) < 0.0:
                 plane.SetFlip(not plane.Flip)
                 plane.Evaluate()
@@ -826,8 +881,16 @@ class Trial:
         xform = self.part.Xforms.CreateXform(oriented[0], oriented[1], oriented[2],
                                             nx.SmartObject.UpdateOption.AfterModeling, 1.0)
         replacement = self.part.CoordinateSystems.CreateCoordinateSystem(xform, nx.SmartObject.UpdateOption.AfterModeling)
+        data = {"planes": tuple(oriented), "sources": tuple(planes), "xform": xform,
+                "origin": tuple(expected_origin), "axes": tuple(expected_axes),
+                "source_graphs": {source: graph_branch(self.mcs_definitions[tag][0], source) for source in planes}}
+        # A candidate must have the requested frame before touching the existing
+        # CSYS. ReplaceParameters destroys the temporary candidate afterwards.
+        self.orient_three_planes(replacement, data, "кандидат для СК " + str(tag))
         self.refs[tag].ReplaceParameters(replacement)
-        self.refs[tag].Evaluate()
+        self.stage = "Проверка Three Planes: " + str(tag) + " / после ReplaceParameters"
+        self.evaluate_three_planes(self.refs[tag], data)
+        self.require_csys_frame(tag, expected_origin, expected_axes, "после ReplaceParameters")
         # Verify actual stored construction, not merely the temporary objects.
         graph = self.smart_graph(tag)
         inputs = set(graph.get(int(xform.Tag)) or ())
@@ -840,6 +903,46 @@ class Trial:
             if source not in (graph[int(p.Tag)] or ()):
                 raise RuntimeError("NX не сохранил ссылку Three Planes на исходную плоскость")
         self.mcs_verified_definitions[tag] = graph
+        self.mcs_rebuilt[tag] = data
+
+    def stabilize_three_planes_after_update(self):
+        repaired = False
+        for tag, (graph, planes) in self.mcs_definitions.items():
+            if planes is None:
+                continue
+            origin, axes = self.frames[tag]
+            origin, axes = self.plane.point(origin), reflected_frame(axes, self.plane)
+            self.stage = "Проверка Three Planes после обновления модели: " + str(tag)
+            if self.smart_graph(tag) != self.mcs_verified_definitions[tag]:
+                raise RuntimeError("Изменилось определение Three Planes после обновления модели: " + str(tag))
+            actual_origin, actual_axes = self.csys_frame(tag)
+            if close_values(actual_origin, origin) and close_values(actual_axes, axes):
+                continue
+            self.lines.append("Three Planes " + str(tag) + ": после обновления модели получены оси " +
+                              str(actual_axes) + "; ожидаются " + str(axes))
+            data = self.mcs_rebuilt.get(tag)
+            if data is None:
+                for source in planes:
+                    if self.smart_graph(source) != graph_branch(graph, source):
+                        raise RuntimeError("Повреждено определение опорной плоскости MCS " + str(source))
+                self.rebuild_three_planes(tag, planes, origin, axes)
+            else:
+                self.orient_three_planes(self.refs[tag], data, "после обновления модели")
+            repaired = True
+        if not repaired:
+            return
+        # A correction must survive a normal NX update. Do not repair again at
+        # this checkpoint or in final verification: an unstable result fails.
+        self.stage = "Проверка устойчивости Three Planes при обновлении модели"
+        self.native.update_model()
+        for tag, (_, planes) in self.mcs_definitions.items():
+            if planes is None:
+                continue
+            if self.smart_graph(tag) != self.mcs_verified_definitions[tag]:
+                raise RuntimeError("Изменилось определение Three Planes при контрольном обновлении: " + str(tag))
+            origin, axes = self.frames[tag]
+            self.require_csys_frame(tag, self.plane.point(origin), reflected_frame(axes, self.plane),
+                                    "контрольное обновление модели")
 
     def model_history(self, context="исходное состояние", check_errors=True):
         result = {}
@@ -1413,7 +1516,7 @@ class Trial:
                     for source in planes:
                         if self.smart_graph(source) != graph_branch(graph, source):
                             raise RuntimeError("Повреждено определение опорной плоскости MCS " + str(source))
-                    self.rebuild_three_planes(tag, planes, axes)
+                    self.rebuild_three_planes(tag, planes, origin, axes)
             else:
                 matrix_tag = self.uf.Csys.CreateMatrix(axes)
                 self.uf.Csys.SetOrigin(tag, origin)
@@ -1554,6 +1657,7 @@ class Trial:
         self.setup.DeleteToolPath(self.operations)
         self.stage = "Обновление и проверка результата"
         self.native.update_model()
+        self.stabilize_three_planes_after_update()
         self.checkpoint_model_history("Удаление траекторий и обновление модели")
         self.stage = "Перенос заданных плоскостей границ"
         self.transfer_boundary_planes(geometry)

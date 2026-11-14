@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.13
+
+V1.12 passed model-history conversion to BREP, geometry and CAM editor checks. Final MCS validation found the correct origin (-60, -25, 16) but reversed X and Z directions. Previously, immediate Three Planes rebuilding checked the dependency graph without checking the actual frame; the old report does not locate the stage where orientation changed.
+
+Seed linked planes with the expected origin/direction and evaluate planes before Xform, then CSYS. Check the candidate through UF before ReplaceParameters and recheck the installed CSYS. If axes differ, consider at most eight Flip combinations of the same three planes without changing support references or their order. Verify geometric coincidence and retained source definitions; do not attempt to correct a wrong origin by flipping normals. After model update, allow a bounded correction using the same linked planes. It must survive one control update or the trial stops. Final verification after CAM reads remains in place. No numerical replacement of an associative CSYS or conversion to Dynamic is used.
+
+All 162 checks outside NX passed, including 31 with a C library. New cases cover X/Z reversal, an oblique plane, stale Xform values before Evaluate, a wrong origin, damaged support definitions, post-update orientation drift and unstable correction failure. These emulate API behavior rather than running the NX kernel; a complete V1.13 result, actual dialogs and toolpath generation on the user's PRT remain unconfirmed. Geometry and CAM mode from V1.12 is retained.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.12
 
 V1.11 identified the cause: transformation replaced EXTRUDE and two BLEND features with one BREP and remapped Part Box parents. The user chose to preserve geometry and CAM without requiring editable model construction history in the copy. V1.12 retains the existing reflection mechanism and permits only a verified complete replacement of one model body's history with one new BREP. It does not restore Extrude/Blend: they are absent from the converted body in the copy; the original project remains unchanged.

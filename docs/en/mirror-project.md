@@ -2,27 +2,29 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.12**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.13**.
 
 ## Latest release
 
-**V1.12 · 2026-11-14** — geometry and CAM mode. In the mirrored copy, a model body's history (Extrude, Blend and supported simple features) may be replaced by one non-parametric BREP. This is an agreed limitation: that body's original construction features are not retained in the copy. The reflection mechanism is unchanged; this release refines permitted history changes rather than restoring the history.
+**V1.13 · 2026-11-14** — refine Three Planes MCS orientation transfer. Evaluate planes, Xform and CSYS in dependency order. Read the candidate's actual origin and axes through UF before replacing the existing CSYS definition, then check again after ReplaceParameters. Matching plane normals or a dependency graph alone is insufficient.
 
-Permission applies only after verifying exclusive ownership of the source features by one body, complete replacement by one new BREP with no parents/expressions, and unchanged body, face and edge identifiers. Parameter users are read before reflection; a removed parameter used outside the replaced history stops the trial. A protected Tooling Box may only remap its parents exactly to the same body's BREP. Its type and expression membership must remain unchanged. Other history changes still fail the trial.
+If axes differ, check at most eight normal-sign combinations of the same three linked planes. Support references and their order remain unchanged. Each plane must coincide geometrically with its support, and the support's original definition must remain intact. A wrong origin or no matching orientation stops the trial. Recheck CSYS after model update; any correction must survive one control update. Repeated instability triggers rollback. An independent final check after CAM reads remains in place and does not automatically repair anything.
 
-The user's V1.11 run removed EXTRUDE and two BLEND features during reflection, created one BREP, and replaced those Part Box parents with the BREP. This is real model-history loss, not loss of the selected CAM faces. Following the user's choice, this conversion is now permitted in the copy subject to the checks above. Stage diagnostics remain in place: the report shows actual differences and explicitly marks accepted conversions. The original snapshot is never replaced by a new baseline.
+V1.12 transferred the MCS origin correctly, but final X and Z directions were opposite to their expected values. The old report does not establish whether this happened during construction or a later update. New checks distinguish those stages and report actual axes and chosen plane directions.
+
+Geometry and CAM mode is retained: a model body's history in the copy may become one non-parametric BREP. This requires verified ownership by one body and unchanged body, face and edge identifiers. Parameters with users outside the replaced history may not be removed. A protected Tooling Box may only remap parents to the same body's BREP while retaining its type and expression membership. Other history changes remain failures.
 
 Tooling Box solids are excluded from the general transformation. When needed, edit the existing parametric stock feature and verify its type, offsets and references. Before and after reflection, create API editors for Workpiece, MCS and supported operations, reload available geometry and run Validate. Compare CAM modes and flags exactly; lengths use an absolute tolerance of 1e-8 part units. An error fails the trial and triggers rollback.
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the same three support faces/planes and their original associative definitions. If directions need correction, linked coincident planes rebuild the Three Planes construction inside the existing CSYS; X/Z are reflected and Y completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance and the stored dependency graph separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.12 has not been tested on a real PRT in NX / Designcenter 2606. A complete run, actual Workpiece/operation dialogs and toolpath generation still need validation. Retest from a healthy original project whose Workpiece opens. The copy's body history may become BREP; the original part is neither saved nor modified. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.13 has not been tested on a real PRT in NX / Designcenter 2606. A complete run, actual Workpiece/operation dialogs and toolpath generation still need validation. Retest from a healthy original project whose Workpiece opens. The copy's body history may become BREP; the original part is neither saved nor modified. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.12**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.13**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. Read and share the report using **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. Then save the open test copy using the normal NX command and regenerate operations.
@@ -57,7 +59,7 @@ MCS transfer retains the existing CSYS. Recognized Three Planes definitions reta
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-All 149 checks outside NX passed, including 31 with a separately compiled C library. New cases reproduce Extrude/Blend → BREP and reject changes to body, face and edge identities, stock, MCS, CAM references and external dependencies of removed parameters. Coverage of Three Planes, numerical-Xform CSYS, inheritance, C ABI, bounding-geometry errors and parametric stock remains in place. These tests do not validate the NX kernel, actual dialogs or toolpath generation on the user's PRT.
+All 162 checks outside NX passed, including 31 with a separately compiled C library. New cases cover Three Planes orientation from actual axes, Evaluate order, oblique planes, a wrong origin, damaged supports, post-update axis changes and unstable correction failure. Coverage of history conversion to BREP, numerical-Xform CSYS, inheritance, C ABI, CAM references and stock remains in place. These tests do not validate the NX kernel, actual dialogs or toolpath generation on the user's PRT.
 
 ## Later stages — not implemented yet
 

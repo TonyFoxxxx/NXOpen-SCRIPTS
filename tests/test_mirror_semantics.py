@@ -23,6 +23,7 @@ class SmartWorld:
     """Three-plane CSYS: first two normals determine X/Y, three planes the origin."""
     def __init__(self):
         self.objects, self.parents = {}, {}
+        self.xform_signs, self.ignore_plane_flips, self.events = (1,1),False,[]
         self.next_tag = 100
         world = self
 
@@ -51,6 +52,7 @@ class SmartWorld:
             def GetGeometry(self):
                 return self.sources
             def Evaluate(self):
+                world.events.append(('plane',self.Tag))
                 self.Origin = self.sources[0].Origin
                 sign = -1 if self.Flip else 1
                 self.Normal = xyz(*(sign*v for v in M.xyz(self.sources[0].Normal)))
@@ -65,6 +67,8 @@ class SmartWorld:
                 super().__init__(parents=(a.Tag,b.Tag,c.Tag) if a else None)
                 self.inputs, self.Scale = [a,b,c] if a else [], scale
                 self.fixed = None if a else ([7,8,9],[1,0,0,0,1,0,0,0,1])
+            def Evaluate(self):
+                world.events.append(('xform',self.Tag))
             @property
             def Origin(self):
                 return xyz(*self.values()[0])
@@ -79,7 +83,13 @@ class SmartWorld:
                 cross = [M.cross(normals[1],normals[2]), M.cross(normals[2],normals[0]), M.cross(normals[0],normals[1])]
                 determinant = M.dot(normals[0],cross[0])
                 origin = [sum(d*n[i] for d,n in zip(distances,cross))/determinant for i in range(3)]
-                return origin, normals[0] + normals[1] + M.cross(normals[0],normals[1])
+                x,y = normals[0],normals[1]
+                if all(isinstance(p,Plane) for p in self.inputs):
+                    if world.ignore_plane_flips:
+                        x,y = [M.xyz(p.sources[0].Normal) for p in self.inputs[:2]]
+                    x = [world.xform_signs[0]*v for v in x]
+                    y = [world.xform_signs[1]*v for v in y]
+                return origin, x + y + M.cross(x,y)
 
         class Csys(Object):
             def __init__(self, xform, update=2):
@@ -91,7 +101,7 @@ class SmartWorld:
                 del world.objects[other.Tag]
                 del world.parents[other.Tag]
             def Evaluate(self):
-                pass
+                world.events.append(('csys',self.Tag))
 
         self.Face, self.Plane, self.Xform, self.Csys = Face, Plane, Xform, Csys
         self.faces = [Face(10,[2,0,0],[1,0,0]), Face(11,[0,3,0],[0,1,0]), Face(12,[0,0,4],[0,0,1])]
@@ -111,6 +121,7 @@ class SmartWorld:
         trial.refs, trial.lines = {}, []
         trial.mcs_definitions, trial.mcs_verified_definitions = {}, {}
         trial.mcs_fixed_xforms = {}
+        trial.mcs_rebuilt = {}
         def set_fixed_xform(tag, origin, axes):
             if self.parents[tag] is not None:
                 raise AssertionError('Only a numerical Xform may be edited')
@@ -119,7 +130,7 @@ class SmartWorld:
             face_plane=lambda tag:M.MirrorPlane(M.xyz(self.objects[tag].Origin),M.xyz(self.objects[tag].Normal)),
             parameter_status=lambda tag,index:trial.mcs_sources[(tag,index)][0],
             parameter_definer=lambda tag,index:trial.mcs_sources[(tag,index)][1],
-            set_fixed_xform=Mock(side_effect=set_fixed_xform))
+            set_fixed_xform=Mock(side_effect=set_fixed_xform),update_model=Mock())
         trial.frames, trial.mcs_expected, trial.mcs_sources = {}, {}, {}
         trial.mcs_bindings = []
         trial.mcs_links = {}
@@ -196,6 +207,186 @@ class AssociativityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'plane update failed'):
             trial.transfer_mcs()
         self.assertIs(world.csys.xform,before)
+
+
+class ThreePlanesOrientationTests(unittest.TestCase):
+    def test_reported_x_and_z_reversal_is_corrected_using_actual_csys_frame(self):
+        world = SmartWorld()
+        for face, origin in zip(world.faces,([60,0,0],[0,-25,0],[0,0,16])):
+            face.Origin = xyz(*origin)
+        trial = world.trial(M.MirrorPlane([0,-25,8],[-1,0,0]))
+        old_tag, old_sources = world.csys.Tag,tuple(f.Tag for f in world.faces)
+        world.reflect_faces(trial.plane)
+        # Emulate the reported frame with X/Z reversed even though the plane
+        # Normal getters match the intended signs. This is not an NX kernel.
+        world.xform_signs = (-1,1)
+        replacement = trial.transfer_mcs()
+        trial.verify_mcs(replacement)
+        origin, axes = trial.csys_frame(old_tag)
+        self.assertEqual(origin,[-60,-25,16])
+        self.assertEqual(axes,[-1,0,0,0,-1,0,0,0,1])
+        self.assertEqual(world.csys.Tag,old_tag)
+        self.assertEqual(tuple(p.GetGeometry()[0].Tag for p in world.csys.xform.inputs),old_sources)
+        self.assertIn('вариантов: 2','\n'.join(trial.lines))
+        trial.native.set_fixed_xform.assert_not_called()
+        trial.uf.Param.SetTagValue.assert_not_called()
+
+    def test_orientation_solver_works_for_oblique_plane_and_both_sign_changes(self):
+        world = SmartWorld()
+        trial = world.trial(M.MirrorPlane([4,-3,2],[1,2,3]))
+        world.reflect_faces(trial.plane)
+        world.xform_signs = (-1,-1)
+        trial.verify_mcs(trial.transfer_mcs())
+        self.assertIn('вариантов: 4','\n'.join(trial.lines))
+
+    def test_xform_is_evaluated_explicitly_before_csys_uses_cached_values(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        created = []
+        def create(*args):
+            xf = world.Xform(*args)
+            calculate = xf.values
+            cached = {'frame':(calculate()[0],[1,0,0,0,1,0,0,0,1])}
+            xf.values = lambda:cached['frame']
+            def evaluate():
+                cached['frame'] = calculate()
+            xf.Evaluate = Mock(side_effect=evaluate)
+            created.append(xf)
+            return xf
+        trial.part.Xforms.CreateXform = create
+        trial.verify_mcs(trial.transfer_mcs())
+        self.assertGreaterEqual(created[0].Evaluate.call_count,2)
+
+    def test_unresponsive_plane_signs_fail_after_eight_attempts_without_replacing_csys(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        old = world.csys.xform
+        world.ignore_plane_flips = True
+        with self.assertRaisesRegex(RuntimeError,'без изменения опор') as caught:
+            trial.transfer_mcs()
+        self.assertEqual(str(caught.exception).count('Flip='),8)
+        self.assertIs(world.csys.xform,old)
+        self.assertFalse(trial.mcs_rebuilt)
+
+    def test_wrong_origin_cannot_be_corrected_by_flipping_or_numeric_replacement(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        old = world.csys.xform
+        def create(*args):
+            xf = world.Xform(*args)
+            calculate = xf.values
+            def wrong():
+                origin,axes = calculate()
+                return [origin[0]+0.5]+origin[1:],axes
+            xf.values = wrong
+            return xf
+        trial.part.Xforms.CreateXform = create
+        with self.assertRaisesRegex(RuntimeError,'не должно менять начало'):
+            trial.transfer_mcs()
+        self.assertIs(world.csys.xform,old)
+        trial.native.set_fixed_xform.assert_not_called()
+
+    def test_bad_frame_installed_by_replace_parameters_is_detected_immediately(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        replace = world.csys.ReplaceParameters
+        def wrong_replace(other):
+            replace(other)
+            origin,_ = world.csys.xform.values()
+            world.csys.xform.fixed = (origin,[1,0,0,0,-1,0,0,0,-1])
+        world.csys.ReplaceParameters = wrong_replace
+        with self.assertRaisesRegex(RuntimeError,'после ReplaceParameters'):
+            trial.transfer_mcs()
+        self.assertIn('после ReplaceParameters',trial.stage)
+
+    def test_parent_definition_mutation_during_evaluation_is_rejected(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        old = world.csys.xform
+        def create(*args):
+            xf = world.Xform(*args)
+            xf.Evaluate = lambda:world.parents.update({10:(11,)})
+            return xf
+        trial.part.Xforms.CreateXform = create
+        with self.assertRaisesRegex(RuntimeError,'определение исходной опоры'):
+            trial.transfer_mcs()
+        self.assertIs(world.csys.xform,old)
+
+    def test_post_update_drift_reuses_the_same_planes_and_xform(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        objects = set(world.objects)
+        graph = dict(world.parents)
+        world.xform_signs = (-1,1)
+        trial.stabilize_three_planes_after_update()
+        trial.verify_mcs(replacement)
+        self.assertEqual(set(world.objects),objects)
+        self.assertEqual(world.parents,graph)
+        trial.native.update_model.assert_called_once()
+        self.assertIn('после обновления модели','\n'.join(trial.lines))
+
+    def test_unstable_correction_fails_after_one_control_update(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        trial.transfer_mcs()
+        plane = world.csys.xform.inputs[0]
+        wrong = not plane.Flip
+        plane.SetFlip(wrong)
+        plane.Evaluate()
+        trial.native.update_model.side_effect = lambda: (plane.SetFlip(wrong),plane.Evaluate())
+        with self.assertRaisesRegex(RuntimeError,'контрольное обновление модели'):
+            trial.stabilize_three_planes_after_update()
+        trial.native.update_model.assert_called_once()
+
+    def test_stable_frame_does_not_trigger_an_extra_model_update(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        trial.transfer_mcs()
+        trial.stabilize_three_planes_after_update()
+        trial.native.update_model.assert_not_called()
+
+    def test_post_update_definition_change_is_not_repaired_as_an_axis_sign(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        trial.transfer_mcs()
+        world.parents[world.csys.xform.inputs[0].Tag] = ()
+        with self.assertRaisesRegex(RuntimeError,'Изменилось определение Three Planes'):
+            trial.stabilize_three_planes_after_update()
+        trial.native.update_model.assert_not_called()
+
+    def test_native_three_planes_that_drift_later_are_rebuilt_with_original_supports(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        old_origin, old_axes = trial.frames[world.csys.Tag]
+        world.xform.fixed = (trial.plane.point(old_origin),M.reflected_frame(old_axes,trial.plane))
+        replacement = trial.transfer_mcs()
+        self.assertFalse(trial.mcs_rebuilt)
+        world.xform.fixed = (trial.plane.point(old_origin),[1,0,0,0,-1,0,0,0,-1])
+        trial.stabilize_three_planes_after_update()
+        trial.verify_mcs(replacement)
+        self.assertIn(world.csys.Tag,trial.mcs_rebuilt)
+        self.assertEqual(tuple(p.GetGeometry()[0].Tag for p in world.csys.xform.inputs),(10,11,12))
+
+    def test_later_cam_read_cannot_bypass_final_axis_verification(self):
+        world = SmartWorld()
+        trial = world.trial()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        trial.stabilize_three_planes_after_update()
+        world.xform_signs = (-1,1)
+        with self.assertRaisesRegex(RuntimeError,'не совпадают начало или оси'):
+            trial.verify_mcs(replacement)
 
 
 class FixedXformTests(unittest.TestCase):
@@ -707,6 +898,7 @@ class HistoryTests(unittest.TestCase):
         trial.geometry_snapshot = lambda **kw:{}
         trial.capture_parameters, trial.capture_topology = Mock(),Mock(return_value={})
         trial.capture_body_history = Mock()
+        trial.stabilize_three_planes_after_update = Mock()
         trial.operation_snapshot = lambda:[]
         trial.frames, trial.refs, trial.bounds = {},{},{}
         trial.bodies, trial.protected_bodies, trial.operations = [NS(Tag=1)],set(),[]
