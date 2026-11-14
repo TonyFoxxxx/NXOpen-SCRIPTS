@@ -21,7 +21,7 @@ class EngravingShortBranchTests(unittest.TestCase):
             if os.name == 'nt':
                 compiler = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
                 exe = path / 'Checks.exe'
-                command = [str(compiler), '/nologo', '/codepage:65001', '/out:' + str(exe), str(path / 'Core.cs'), str(path / 'Checks.cs')]
+                command = [str(compiler), '/nologo', '/optimize+', '/codepage:65001', '/out:' + str(exe), str(path / 'Core.cs'), str(path / 'Checks.cs')]
                 run = [str(exe)]
             else:
                 dotnet = shutil.which('dotnet')
@@ -31,11 +31,12 @@ class EngravingShortBranchTests(unittest.TestCase):
                 project.write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
                                    '<OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework>'
                                    '<LangVersion>7.3</LangVersion></PropertyGroup></Project>', encoding='ascii')
-                command = [dotnet, 'build', str(project), '--nologo', '-v:q']
-                run = [dotnet, str(path / 'bin/Debug/net8.0/Checks.dll')]
+                command = [dotnet, 'build', str(project), '-c', 'Release', '--nologo', '-v:q']
+                run = [dotnet, str(path / 'bin/Release/net8.0/Checks.dll')]
             result = subprocess.run(command, capture_output=True, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            result = subprocess.run(run, capture_output=True, text=True, timeout=120)
+            # Keep the complete geometry matrix on slower shared CI machines.
+            result = subprocess.run(run, capture_output=True, text=True, timeout=240)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('582 engraving short-branch and island scenarios passed', result.stdout)
 

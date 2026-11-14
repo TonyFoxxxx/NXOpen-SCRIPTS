@@ -42,11 +42,36 @@ public class ShortBranchChecks
     }
     static double PointSegment(P p,P a,P b)
     { P v=b-a;double n=P.Dot(v,v);return (p-a-v*(n>0?Math.Max(0,Math.Min(1,P.Dot(p-a,v)/n)):0)).Length; }
-    static double Distance(EngravingCenterlines.Result raw,P p)
+    sealed class SampledSegment
+    {
+        internal P A,B;
+        internal double MinX,MinY,MaxX,MaxY;
+    }
+    static List<SampledSegment> Sample(EngravingCenterlines.Result raw)
+    {
+        var result=new List<SampledSegment>();
+        foreach(var path in raw.Curves)foreach(var b in path)
+        {
+            P a=b.A;int count=b.Line?1:64;
+            for(int i=1;i<=count;i++)
+            {
+                P q=b.At(i/(double)count);result.Add(new SampledSegment{A=a,B=q,
+                    MinX=Math.Min(a.X,q.X),MinY=Math.Min(a.Y,q.Y),MaxX=Math.Max(a.X,q.X),MaxY=Math.Max(a.Y,q.Y)});a=q;
+            }
+        }
+        return result;
+    }
+    static double Distance(List<SampledSegment> path,P p)
     {
         double best=double.MaxValue;
-        foreach(var path in raw.Curves)foreach(var b in path)
-        { P a=b.A;for(int i=1;i<=64;i++){P q=b.At(i/64.0);best=Math.Min(best,PointSegment(p,a,q));a=q;} }
+        foreach(var s in path)
+        {
+            // Sample each curve once. A box lower bound skips segments that cannot
+            // improve the answer; neither the sample density nor assertions change.
+            double dx=Math.Max(0,Math.Max(s.MinX-p.X,p.X-s.MaxX));
+            double dy=Math.Max(0,Math.Max(s.MinY-p.Y,p.Y-s.MaxY));
+            if(dx*dx+dy*dy<=best*best)best=Math.Min(best,PointSegment(p,s.A,s.B));
+        }
         return best;
     }
     static void CheckBowls(double h,double ratio,double fillet,double angle,double unit,bool mirror,int phase)
@@ -56,6 +81,7 @@ public class ShortBranchChecks
         {
             var region=new R(Transform(Bowls(h,ratio,fillet),angle,unit,mirror,phase));
             var raw=EngravingCenterlines.Build(region,.002*unit);
+            var rawSamples=Sample(raw);
             Require(raw.Curves.Count==3,"false corner branch remained: "+raw.Curves.Count);
             Require(raw.Circles.Count==0,"two islands mistaken for a dot");
             var ends=new List<P>();
@@ -69,9 +95,10 @@ public class ShortBranchChecks
             foreach(double y in new double[]{h*ratio/2,h-h*ratio/2})
             {
                 P corner=Transform(new P(h*ratio/2,y),angle,unit,mirror);
-                Require(Distance(raw,corner)<.002*unit,"ordinary corner was displaced");
+                Require(Distance(rawSamples,corner)<.002*unit,"ordinary corner was displaced");
             }
             var routed=EngravingRoutes.Build(raw,region,.02*unit,.002*unit);
+            var routeSamples=Sample(routed);
             Require(routed.Curves.Count==1&&!routed.Strokes[0].Closed,"expected one open path through both bowls");
             EngravingRoutes.Validate(routed,region,.002*unit,.00004*unit);
             // Routing may open the two junctions, but must retain the two curved lobes
@@ -79,7 +106,7 @@ public class ShortBranchChecks
             foreach(var path in raw.Curves)foreach(var b in path)for(int k=0;k<=8;k++)
             {
                 P p=b.At(k/8.0);bool nearNode=false;foreach(P q in nodes)if((q-p).Length<.12*unit)nearNode=true;
-                if(!nearNode)Require(Distance(routed,p)<.00001*unit,"lost part of a real stroke");
+                if(!nearNode)Require(Distance(routeSamples,p)<.00001*unit,"lost part of a real stroke");
             }
             scenarios++;
         }
