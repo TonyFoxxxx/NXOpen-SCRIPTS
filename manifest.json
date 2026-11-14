@@ -72,9 +72,9 @@
       "id": "NX_PlanarMill_Select_Curves",
       "name": "Оси гравировки для PLANAR_MILL",
       "file": "NX_PlanarMill_Select_Curves.cs",
-      "version": "V1.12",
+      "version": "V1.13",
       "path": "scripts/NX_PlanarMill_Select_Curves.cs",
-      "sha256": "45bb66de6441cc622433f34439dc4f95679939983105039646454ecbd4467c03",
+      "sha256": "95704d2ed833288f4c754e2a5c279957afe8afa54602c1aae15ef0299f9c9a2f",
       "description": "Средние линии по граням гравировки с разделением пересечений; точки D/2; назначение отдельных цепочек в PLANAR_MILL с Tool Position On."
     },
     {

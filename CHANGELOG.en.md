@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.13
+
+Closed chains and dot circles now use Boundary Type = Closed in Part Boundaries; open strokes and chains with junction gaps use Open. Set the type before and after appending curves, then verify the exact type after committing the operation.
+
+Keep the centerline geometry. Pass 492 CAM adapter contract checks and compilation against DC 2606 libraries for .NET Framework and .NET 10. Not run in NX. Recreate retained V1.01–V1.12 axes together with their boundaries when recalculating.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.09
 
 The V1.08 test recognized two protected stock features and two Three Planes CSYS definitions, but stopped while transferring a third associative CSYS. Its exact definition was absent from the old report; Workpiece editability and Three Planes transfer after reflection remain unconfirmed.

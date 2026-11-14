@@ -1,11 +1,11 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.12
+// SCRIPT_VERSION: V1.13
 // Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
 // Reconstructs straight and curved centerlines; round/compact square dots use half-width circles.
 // Free physical ends stop half the local stroke width before the terminal boundary.
 // Rechecks corner spurs after merging nodes; preserves genuine short branches and islands.
 // Restores sharp line/curve joints from the walls, preserving tangential fillets.
-// Preserves through-strokes; separates junctions by 0.004-0.02 mm and inherits operation tolerances.
+// Part Boundary type follows each chain: Closed for loops, Open for separated/open strokes.
 // Does not save files, generate a toolpath, or change the tool, depths, feeds or source body.
 
 using System;
@@ -25,10 +25,10 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.12";
+    private const string SCRIPT_VERSION = "V1.13";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "12";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "13";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -134,7 +134,7 @@ public class NXPlanarMillSelectCurves
                     for (int i = 0; i < objects.Length; i++) objects[i] = curves[chain.Items[i]].Curve;
                     V startPoint = curves[chain.Items[0]].Start;
                     BoundarySetPlanarMill set = EngravingCamBoundary.Append(builder.PartBoundary, objects,
-                        new Point3d(startPoint.X, startPoint.Y, startPoint.Z), matrix, boundaryPlane);
+                        new Point3d(startPoint.X, startPoint.Y, startPoint.Z), matrix, boundaryPlane, chain.Closed);
                     EngravingCamBoundary.Verify(set, chain.Closed);
                 }
                 builder.Commit();
@@ -997,18 +997,19 @@ public static class EngravingCamBoundary
     // BoundaryMemberSetPlanarMill uses its own integer convention: 0 = On.
     // This is also the setting used by the recorded journal in PlanarCHIK.cs; UF uses a different enum.
     private const int MemberOn = 0;
-    public static BoundarySetPlanarMill Append(BoundaryPlanarMill target, NXObject[] curves, Point3d start, Matrix3x3 matrix, Plane plane)
+    public static BoundarySetPlanarMill Append(BoundaryPlanarMill target, NXObject[] curves, Point3d start, Matrix3x3 matrix, Plane plane, bool geometricLoop)
     {
         if (curves == null || curves.Length == 0) throw new ArgumentException("Invalid engraving boundary.");
+        BoundarySet.BoundaryTypes type = geometricLoop ? BoundarySet.BoundaryTypes.Closed : BoundarySet.BoundaryTypes.Open;
         BoundarySetPlanarMill set = target.CreateBoundarySetPlanarMill();
         set.PlaneType = BoundarySet.PlaneTypes.UserDefined; set.Plane = plane;
-        set.BoundaryType = BoundarySet.BoundaryTypes.Open; set.ToolPosition = BoundarySet.ToolPositionTypes.On;
+        set.BoundaryType = type; set.ToolPosition = BoundarySet.ToolPositionTypes.On;
         set.ToolSide = BoundarySet.ToolSideTypes.InsideOrLeft;
         BoundaryPlanarMill.ToolPositionTypes initial = target.InitialToolPosition;
         try { target.InitialToolPosition = BoundaryPlanarMill.ToolPositionTypes.On; set.AppendCurves(curves, start, matrix); }
         finally { target.InitialToolPosition = initial; }
         // AppendCurves can infer defaults. Apply the engraving settings after the members exist.
-        set.BoundaryType = BoundarySet.BoundaryTypes.Open; set.ToolPosition = BoundarySet.ToolPositionTypes.On;
+        set.BoundaryType = type; set.ToolPosition = BoundarySet.ToolPositionTypes.On;
         set.CustomStock = true; set.Stock = 0; set.CustomTolerance = false;
         foreach (BoundaryMemberSet item in set.BoundaryMemberList.GetContents())
         {
@@ -1035,10 +1036,12 @@ public static class EngravingCamBoundary
     }
     public static void Verify(BoundarySetPlanarMill set, bool geometricLoop)
     {
-        // A complete circle may be reported as Closed. It is safe only for an actually closed source chain.
-        // Open chains must stay Open: otherwise CAM could insert an implicit closing cut.
-        if (set.BoundaryType != BoundarySet.BoundaryTypes.Open && !(geometricLoop && set.BoundaryType == BoundarySet.BoundaryTypes.Closed))
-            throw new InvalidOperationException("NX замкнул разомкнутую цепочку гравировки. Тип границы: " + set.BoundaryType + ".");
+        // Require an exact match both before Commit and when the saved builder is reopened.
+        // Closed curves must be Closed boundaries; separated/open strokes must remain Open.
+        BoundarySet.BoundaryTypes expected = geometricLoop ? BoundarySet.BoundaryTypes.Closed : BoundarySet.BoundaryTypes.Open;
+        if (set.BoundaryType != expected)
+            throw new InvalidOperationException("NX не сохранил тип границы гравировки: требуется " + expected
+                + ", получен " + set.BoundaryType + ".");
         CheckStock(set.CustomStock, set.Stock);
         BoundaryMemberSet[] members = set.BoundaryMemberList.GetContents();
         if (members.Length == 0) throw new InvalidOperationException("NX сохранил пустую границу гравировки.");

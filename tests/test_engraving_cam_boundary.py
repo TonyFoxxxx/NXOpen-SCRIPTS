@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class EngravingBoundaryTests(unittest.TestCase):
-    def test_open_profile_tolerances_stock_and_tool_position(self):
+    def test_open_and_closed_profiles_tolerances_stock_and_tool_position(self):
         source = (ROOT / 'scripts/NX_PlanarMill_Select_Curves.cs').read_text(encoding='utf-8-sig')
         core = source.split('// BEGIN ENGRAVING CAM BOUNDARY ADAPTER\n', 1)[1].split('// END ENGRAVING CAM BOUNDARY ADAPTER', 1)[0]
         with tempfile.TemporaryDirectory(prefix='nx-engraving-centerline-') as folder:
@@ -36,7 +36,7 @@ class EngravingBoundaryTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             result = subprocess.run(run, capture_output=True, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn('engraving-boundary contract checks passed', result.stdout)
+            self.assertIn('492 engraving-boundary contract checks passed', result.stdout)
 
 
 if __name__ == '__main__':
