@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.07
+
+Follow actual MCS/RCS parameter providers through UF. NX defaults now receive reflected bindings alongside local definitions; inherited nodes are not overwritten. Replace mandatory CSYS-tag equality with origin, axes, status and inheritance-provider checks, plus the available RCS/MCS link flag. Reject unresolved or cyclic providers. Diagnostics identify the node and expected/actual values; correct the stale boundary-reading stage in MCS failures.
+
+Reactivate the source after successful Undo. Leave the copy active if Undo fails; report restoration failures separately. Collapse repeated copy suffixes to one. Reserve names of open parts even after their files were deleted from disk. Do not automatically delete or close older copies; the data source remains the work part at launch.
+
+All 69 checks passed outside NX, including 25 with a C library. A complete V1.07 run and the specific reason for the V1.06 node mismatch still require validation in NX.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.06
 
 Fix passing a tuple instead of a list to `Csys.CreateMatrix` during topology capture. Apply the same correction to origin coordinates in the subsequent `Csys.CreateTempCsys` call. Pass the selected plane's matrix and origin as lists of floats without changing the stored plane data.

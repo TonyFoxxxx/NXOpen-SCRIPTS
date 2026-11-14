@@ -99,6 +99,32 @@ class GeometryTests(unittest.TestCase):
 
 
 class CopyTests(unittest.TestCase):
+    def test_repeated_copy_suffix_is_flattened_but_active_source_contents_are_used(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            original = root / 'part.prt'
+            original.write_bytes(b'original project')
+            for number in (1,2):
+                (root / ('part_MIRROR_TEST_' + str(number).zfill(3) + '.prt')).write_bytes(b'previous')
+            source = root / 'part_MIRROR_TEST_002_MIRROR_TEST_001.prt'
+            source.write_bytes(b'active copy contents')
+            target,_ = M.copy_exclusive(str(source))
+            self.assertEqual(Path(target).name,'part_MIRROR_TEST_003.prt')
+            self.assertEqual(Path(target).read_bytes(),b'active copy contents')
+            self.assertEqual(original.read_bytes(),b'original project')
+            self.assertEqual((root / 'part_MIRROR_TEST_002.prt').read_bytes(),b'previous')
+            self.assertTrue(source.exists())
+
+    def test_name_of_loaded_but_deleted_part_is_not_reused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'part.prt'
+            source.write_bytes(b'project')
+            loaded = Path(folder) / 'part_MIRROR_TEST_001.prt'
+            target,_ = M.copy_exclusive(str(source),[str(loaded)])
+            self.assertEqual(Path(target).name,'part_MIRROR_TEST_002.prt')
+            self.assertFalse(loaded.exists())
+            self.assertEqual(Path(target).read_bytes(),source.read_bytes())
+
     def test_copy_preserves_source_and_existing_destination(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "тест.prt"
@@ -437,7 +463,7 @@ class CsysArrayTests(unittest.TestCase):
         trial, systems = self.trial(plane)
         old_origin, old_axes = [3.0,-4.0,5.0], [1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0]
         trial.frames = {91: (old_origin,old_axes)}
-        trial.mcs_bindings = [(types.SimpleNamespace(Tag=7),59,91)]
+        trial.mcs_bindings = [(types.SimpleNamespace(Tag=7,Name='MCS_1'),59,91)]
         trial.geometry_snapshot = lambda **kw: {}
         trial.capture_parameters = lambda: None
         trial.operation_snapshot = lambda: []
@@ -553,7 +579,7 @@ class TransactionTests(unittest.TestCase):
                     M.execute(session, None, None, axis_plane())
             self.assertEqual(len(list(Path(folder).iterdir())), 1)
 
-    def run_with_trial(self, fails):
+    def run_with_trial(self, fails, rollback_fails=False, display_fails=False, delete_mark_fails=False):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.prt"
             source.write_bytes(b"prt-binary")
@@ -563,16 +589,31 @@ class TransactionTests(unittest.TestCase):
             class Parts:
                 Display = original
                 Work = original
+                def __iter__(self):
+                    return iter([original])
+                def SetDisplay(self, part, maintain_work, entire):
+                    if display_fails:
+                        raise RuntimeError('cannot restore display')
+                    self.Display = part
+                    events.append(('display',part.Tag))
+                    return object(), types.SimpleNamespace(Dispose=lambda: events.append('display-status-dispose'))
                 def OpenBaseDisplay(self, path):
                     self.Display = types.SimpleNamespace(Tag=2, FullPath=path)
                     status = types.SimpleNamespace(NumberUnloadedParts=0, Dispose=lambda: events.append("dispose"))
                     return self.Display, status
                 def SetWork(self, part):
                     self.Work = part
+            def undo(mark, name):
+                events.append(('undo',mark))
+                if rollback_fails:
+                    raise RuntimeError('undo failed')
+            def delete_mark(mark, name):
+                if delete_mark_fails:
+                    raise RuntimeError('cannot delete mark')
+                events.append(('delete-mark',mark))
             session = types.SimpleNamespace(Parts=Parts(),
                 SetUndoMark=lambda *a: 55,
-                UndoToMark=lambda mark, name: events.append(("undo", mark)),
-                DeleteUndoMark=lambda mark, name: events.append(("delete-mark", mark)))
+                UndoToMark=undo, DeleteUndoMark=delete_mark)
             nx = types.SimpleNamespace(Session=types.SimpleNamespace(MarkVisibility=types.SimpleNamespace(Visible=1)))
             class Trial:
                 stage = "reflection"
@@ -589,6 +630,7 @@ class TransactionTests(unittest.TestCase):
                         raise AssertionError("source mutated")
             with patch.object(M, "Trial", Trial):
                 report = M.execute(session, nx, None, axis_plane())
+            events.append(('active',session.Parts.Display.Tag,session.Parts.Work.Tag))
             self.assertEqual(source.read_bytes(), b"prt-binary")
             target = Path(folder) / "source_MIRROR_TEST_001.prt"
             self.assertEqual(target.read_bytes(), b"prt-binary")
@@ -599,6 +641,9 @@ class TransactionTests(unittest.TestCase):
         self.assertIn(("undo", 55), events)
         self.assertIn("ТЕСТ НЕ ПРОЙДЕН", report)
         self.assertIn("kernel rejected reflection", report)
+        self.assertIn(('active',1,1),events)
+        self.assertIn('display-status-dispose',events)
+        self.assertIn('Снова активен исходный проект',report)
 
     def test_boundary_access_violation_is_reported_and_rolls_back(self):
         events, report = self.run_with_trial(OSError('exception: access violation reading boundary'))
@@ -606,12 +651,34 @@ class TransactionTests(unittest.TestCase):
         self.assertIn('ТЕСТ НЕ ПРОЙДЕН', report)
         self.assertIn('access violation reading boundary', report)
 
+    def test_failed_undo_keeps_failed_copy_visible_and_reports_it(self):
+        events,report = self.run_with_trial(True,rollback_fails=True)
+        self.assertIn(('active',2,2),events)
+        self.assertNotIn(('display',1),events)
+        self.assertIn('Откат не выполнен',report)
+        self.assertNotIn('Снова активен исходный проект',report)
+
+    def test_display_failure_does_not_misreport_successful_undo(self):
+        events,report = self.run_with_trial(True,display_fails=True)
+        self.assertIn('Изменения теста в копии отменены',report)
+        self.assertIn('Не удалось вернуть исходный проект',report)
+        self.assertNotIn('Откат не выполнен',report)
+        self.assertIn(('active',2,2),events)
+
+    def test_undo_mark_cleanup_failure_still_restores_source(self):
+        events,report = self.run_with_trial(True,delete_mark_fails=True)
+        self.assertIn('не удалось удалить метку Undo',report)
+        self.assertNotIn('Откат не выполнен',report)
+        self.assertIn(('active',1,1),events)
+
     def test_success_keeps_visible_undo_and_requires_manual_save(self):
         events, report = self.run_with_trial(False)
         self.assertNotIn(("undo", 55), events)
         self.assertNotIn(("delete-mark", 55), events)
         self.assertIn("ЕЩЁ НЕ СОХРАНЁН", report)
         self.assertNotIn("ТЕСТ НЕ ПРОЙДЕН", report)
+        self.assertIn(('active',2,2),events)
+        self.assertNotIn(('display',1),events)
 
 
 if __name__ == "__main__":

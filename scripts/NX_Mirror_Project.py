@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.06
-SCRIPT_VERSION = "V1.06"
+# SCRIPT_VERSION: V1.07
+SCRIPT_VERSION = "V1.07"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -28,6 +28,7 @@ GEOMETRY_KINDS = ("Part", "Blank", "Check", "Trim", "Cut Area", "Wall", "Drive")
 MAX_OBJECTS = 20000
 # UF_PARAM_status_t, documented in Siemens uf_param.h.
 PARAM_DEFAULT, PARAM_INHERITED, PARAM_OVERRIDDEN, PARAM_INVALID_INDEX = range(4)
+PARAM_STATUS_NAMES = ("по умолчанию NX", "наследуется", "собственное значение")
 
 
 def reflect(values, axis, offset=0.0):
@@ -157,13 +158,19 @@ def digest(path):
     return h.hexdigest()
 
 
-def copy_exclusive(source):
+def copy_exclusive(source, reserved_paths=()):
     """Only the requested PRT copy is written; existing files are never replaced."""
     stem, extension = os.path.splitext(source)
+    folder, name = os.path.split(stem)
+    base = re.sub(r"(?:_MIRROR_TEST_[0-9]{3,})+$", "", name, flags=re.IGNORECASE)
+    stem = os.path.join(folder, base or name)
+    reserved = {os.path.normcase(os.path.abspath(path)) for path in reserved_paths if path}
     with open(source, "rb") as inp:
         before = os.fstat(inp.fileno())
         for number in range(1, 10000):
             target = stem + "_MIRROR_TEST_" + str(number).zfill(3) + extension
+            if os.path.normcase(os.path.abspath(target)) in reserved:
+                continue
             try:
                 out = open(target, "xb")
                 break
@@ -255,6 +262,7 @@ class NativeCam:
         self.member_entity = self.bind("UF_CAMBND_ask_item_entity", (p, ctypes.POINTER(u)))
         self.custom = self.bind("UF_CAMGEOM_ask_custom_points", (u, i, ip, pp))
         self.param_status = self.bind("UF_PARAM_ask_param_status", (u, i, ip))
+        self.param_definer = self.bind("UF_PARAM_ask_param_definer", (u, i, ctypes.POINTER(u)))
         dp = ctypes.POINTER(ctypes.c_double)
         self.set_boundary = self.bind("UF_CAMBND_set_boundary_plane", (p, dp, dp))
         self.mirror_matrix = self.bind("UF_MTX4_mirror", (dp, dp, dp))
@@ -325,6 +333,11 @@ class NativeCam:
             raise RuntimeError("Неизвестный статус параметра " + str(index) +
                                " объекта " + str(tag) + ": " + str(state.value))
         return state.value
+
+    def parameter_definer(self, tag, index):
+        source = ctypes.c_uint32()
+        self.check(self.param_definer(int(tag), index, ctypes.byref(source)), "UF_PARAM_ask_param_definer")
+        return source.value
 
     def read_boundary(self, handle):
         # Keep the opaque handle pointer-sized from ask_boundaries to this call;
@@ -499,6 +512,8 @@ class Trial:
         self.unavailable = set()
         self.box_csys = None
         self.mcs_expected = {}
+        self.mcs_sources = {}
+        self.mcs_links = {}
         self.boundary_planes, self.current_boundaries = {}, {}
         self.moved_boundary_count = 0
         if not self.bodies or not self.operations:
@@ -644,20 +659,15 @@ class Trial:
                 self.stage = context + " / параметр " + str(index)
                 attrs = self.uf.Param.AskParamAttributes(index)
                 kind = parameter_type(field(attrs, "type"), self.nx)
-                if kind == "tag":
+                if index == 41 and kind == "logical":
+                    # UF_PARAM_RCS_LINKED_TO_MCS: preserve this relationship.
+                    self.mcs_links[int(node.Tag)] = bool(self.uf.Param.AskLogicalValue(node.Tag, index))
+                elif kind == "tag":
                     tag = int(self.uf.Param.AskTagValue(node.Tag, index))
                     if tag:
                         self.reference(tag)
                     if index in (59, 60) and tag:
-                        state = self.native.parameter_status(node.Tag, index)
-                        self.mcs_expected[(int(node.Tag), index)] = tag
-                        if tag not in self.frames:
-                            matrix, origin = self.uf.Csys.AskCsysInfo(tag)
-                            axes = list(self.uf.Csys.AskMatrixValues(matrix))
-                            reflected_frame(axes, self.plane)
-                            self.frames[tag] = (list(origin), axes)
-                        if state == PARAM_OVERRIDDEN or int(node.Tag) == int(self.root.Tag):
-                            self.mcs_bindings.append((node, index, tag))
+                        self.capture_mcs(node, index, tag)
                 elif kind == "vlatag":
                     for tag in counted(self.uf.Param.AskTagVla(node.Tag, index)):
                         self.reference(tag)
@@ -668,6 +678,110 @@ class Trial:
                             self.raw_spatial.append(str(node.Name) + ": " + str(field(attrs, "name")) + " = " + str(value))
         if not self.frames:
             raise RuntimeError("Не найдены системы координат MCS")
+        self.resolve_mcs_sources()
+
+    def capture_mcs(self, node, index, tag):
+        key = (int(node.Tag), index)
+        if key in self.mcs_expected:
+            return
+        label = str(node.Name) + " [" + type(node).__name__ + "] / " + ("MCS" if index == 59 else "RCS")
+        self.stage = "Чтение MCS и параметров: " + label + " / параметр " + str(index)
+        state = self.native.parameter_status(node.Tag, index)
+        definer = (self.native.parameter_definer(node.Tag, index) if state == PARAM_INHERITED
+                   else int(node.Tag) if state == PARAM_OVERRIDDEN else 0)
+        self.mcs_expected[key] = tag
+        self.mcs_sources[key] = (state, definer, label)
+        if tag not in self.frames:
+            matrix, origin = self.uf.Csys.AskCsysInfo(tag)
+            axes = list(self.uf.Csys.AskMatrixValues(matrix))
+            reflected_frame(axes, self.plane)
+            self.frames[tag] = (list(origin), axes)
+        # NX defaults are not inheritance from another CAM object. Materialize
+        # their reflected value in this copy; never override an inherited child.
+        if state != PARAM_INHERITED:
+            self.mcs_bindings.append((node, index, tag))
+
+    def resolve_mcs_sources(self):
+        pending = list(self.mcs_expected)
+        for key in pending:
+            state, definer, label = self.mcs_sources[key]
+            if state != PARAM_INHERITED:
+                continue
+            self.stage = "Чтение источника наследования: " + label
+            if not definer or definer == key[0]:
+                raise RuntimeError("Не определён источник наследования " + label + ": " + str(definer))
+            source_key = (definer, key[1])
+            if source_key not in self.mcs_expected:
+                if len(pending) >= MAX_OBJECTS:
+                    raise RuntimeError("Слишком много источников MCS/RCS")
+                # Follow the actual UF provider, not an assumed geometry parent.
+                self.reference(definer)
+                source_node = self.nx.TaggedObjectManager.GetTaggedObject(definer)
+                source_tag = int(self.uf.Param.AskTagValue(definer, key[1]))
+                if not source_tag:
+                    raise RuntimeError("У источника наследования отсутствует система координат: " + label)
+                self.reference(source_tag)
+                self.capture_mcs(source_node, key[1], source_tag)
+                pending.append(source_key)
+            value = self.frames[self.mcs_expected[key]]
+            source_value = self.frames[self.mcs_expected[source_key]]
+            if not all(close_values(a, b) for a, b in zip(value, source_value)):
+                raise RuntimeError("Различаются система координат и её источник наследования: " + label)
+        for first in pending:
+            seen, key = set(), first
+            while self.mcs_sources[key][0] == PARAM_INHERITED:
+                if key in seen:
+                    raise RuntimeError("Цикл наследования MCS/RCS: " + self.mcs_sources[first][2])
+                seen.add(key)
+                key = (self.mcs_sources[key][1], key[1])
+
+    def transfer_mcs(self):
+        replacement = {}
+        for tag, (old_origin, axes) in self.frames.items():
+            origin = self.plane.point(old_origin)
+            axes = reflected_frame(axes, self.plane)
+            matrix_tag = self.uf.Csys.CreateMatrix(axes)
+            replacement[tag] = self.uf.Csys.CreateCsys(origin, matrix_tag)
+        for node, index, old_tag in self.mcs_bindings:
+            self.stage = "Перенос систем координат: " + str(node.Name) + " / параметр " + str(index)
+            self.uf.Param.SetTagValue(node.Tag, index, replacement[old_tag])
+        return replacement
+
+    def verify_mcs(self, replacement):
+        for (tag, index), old_tag in self.mcs_expected.items():
+            old_state, old_definer, label = self.mcs_sources[(tag, index)]
+            self.stage = "Проверка MCS/RCS: " + label + " / параметр " + str(index)
+            actual = int(self.uf.Param.AskTagValue(tag, index))
+            state = self.native.parameter_status(tag, index)
+            definer = (self.native.parameter_definer(tag, index) if state == PARAM_INHERITED
+                       else tag if state == PARAM_OVERRIDDEN else 0)
+            expected_origin, expected_axes = self.frames[old_tag]
+            expected_origin = self.plane.point(expected_origin)
+            expected_axes = reflected_frame(expected_axes, self.plane)
+            origin, axes = [], []
+            if actual:
+                self.reference(actual)
+                matrix_tag, origin = self.uf.Csys.AskCsysInfo(actual)
+                axes = self.uf.Csys.AskMatrixValues(matrix_tag)
+            inherited = old_state == PARAM_INHERITED
+            source_ok = (state == PARAM_INHERITED and definer == old_definer) if inherited else state == PARAM_OVERRIDDEN
+            frame_ok = close_values(origin, expected_origin) and close_values(axes, expected_axes)
+            # NX may supply an equivalent CSYS object. A matching tag alone is
+            # neither necessary nor sufficient: verify frame AND inheritance.
+            if not source_ok or not frame_ok:
+                details = ["Не подтверждён перенос " + label + " (узел " + str(tag) + ")",
+                           "Причина: " + ("изменилось наследование" if not source_ok else "не совпадают начало или оси"),
+                           "Система: исходная=" + str(old_tag) + "; созданная=" + str(replacement[old_tag]) + "; фактическая=" + str(actual),
+                           "Статус: " + PARAM_STATUS_NAMES[old_state] + " → " + PARAM_STATUS_NAMES[state],
+                           "Источник наследования: " + str(old_definer) + " → " + str(definer),
+                           "Начало ожидаемое: " + str(expected_origin) + "; фактическое: " + str(list(origin)),
+                           "Оси ожидаемые: " + str(expected_axes) + "; фактические: " + str(list(axes))]
+                raise RuntimeError("\n".join(details))
+        for tag, linked in self.mcs_links.items():
+            label = self.mcs_sources.get((tag, 59), (None, None, str(tag)))[2]
+            self.stage = "Проверка связи RCS с MCS: " + label
+            if bool(self.uf.Param.AskLogicalValue(tag, 41)) != linked:
+                raise RuntimeError("Изменился параметр связи RCS с MCS: " + label)
 
     def capture_topology(self):
         # The Python UF wrapper requires List[float]; the stored plane is immutable.
@@ -733,14 +847,7 @@ class Trial:
         self.stage = "Отражение геометрии и её модельных родителей"
         self.native.transform_entities(list(targets), matrix)
         self.stage = "Перенос систем координат"
-        replacement = {}
-        for tag, (old_origin, axes) in self.frames.items():
-            origin = self.plane.point(old_origin)
-            axes = reflected_frame(axes, self.plane)
-            matrix_tag = self.uf.Csys.CreateMatrix(axes)
-            replacement[tag] = self.uf.Csys.CreateCsys(origin, matrix_tag)
-        for node, index, old_tag in self.mcs_bindings:
-            self.uf.Param.SetTagValue(node.Tag, index, replacement[old_tag])
+        replacement = self.transfer_mcs()
         self.stage = "Удаление рассчитанных траекторий в копии"
         self.setup.DeleteToolPath(self.operations)
         self.stage = "Обновление и проверка результата"
@@ -767,16 +874,10 @@ class Trial:
                                    "\nПолучено: " + str(actual))
         if self.geometry_snapshot() != geometry:
             raise RuntimeError("Изменились ссылки на выбранную CAM-геометрию/границы")
+        self.stage = "Проверка плоскостей границ"
         self.verify_boundary_planes()
-        for (tag, index), old_tag in self.mcs_expected.items():
-            actual = self.uf.Param.AskTagValue(tag, index)
-            if int(actual) != int(replacement[old_tag]):
-                raise RuntimeError("Не подтверждено наследование MCS/RCS: " + str(tag))
-            matrix_tag, origin = self.uf.Csys.AskCsysInfo(actual)
-            axes = self.uf.Csys.AskMatrixValues(matrix_tag)
-            expected_origin, expected_axes = self.frames[old_tag]
-            if not close_values(origin, self.plane.point(expected_origin)) or not close_values(axes, reflected_frame(expected_axes, self.plane)):
-                raise RuntimeError("MCS/RCS не соответствует ожидаемому отражению")
+        self.verify_mcs(replacement)
+        self.stage = "Удаление временной системы проверки"
         self.uf.Obj.DeleteObject(self.box_csys)
         self.box_csys = None
         self.lines.append("ПРОЙДЕНО: отражение проверенных объектов, сохранение их идентификаторов,")
@@ -814,7 +915,8 @@ def preflight_source(session):
 def execute(session, nx, uf, plane, native=None):
     lines = [TITLE, "Выбранная плоскость ABS: точка " + str(plane.origin) + "; нормаль " + str(plane.normal)]
     source_part, source = preflight_source(session)
-    target, source_hash = copy_exclusive(source)
+    target, source_hash = copy_exclusive(source, [str(part.FullPath) for part in session.Parts])
+    lines.append("Исходный проект: " + source)
     lines.append("Файл тестовой копии: " + target)
     trial, mark, stage = None, None, "Открытие копии"
     try:
@@ -846,18 +948,45 @@ def execute(session, nx, uf, plane, native=None):
         lines.append("\nТЕСТ НЕ ПРОЙДЕН. Этап: " + (trial.stage if trial else stage))
         lines.append(type(exc).__name__ + ": " + str(exc))
         if mark is not None:
+            rolled_back = False
             try:
                 session.UndoToMark(mark, None)
+                rolled_back = True
                 session.DeleteUndoMark(mark, None)
                 lines.append("Изменения теста в копии отменены через Undo.")
             except Exception as rollback:
-                lines.append("Откат не выполнен: " + str(rollback) + ". Закройте тестовую копию без сохранения.")
+                if rolled_back:
+                    lines.append("Изменения отменены; не удалось удалить метку Undo: " + str(rollback))
+                else:
+                    lines.append("Откат не выполнен: " + str(rollback) + ". Закройте тестовую копию без сохранения.")
+            if rolled_back:
+                try:
+                    restore_source_display(session, source_part)
+                    lines.append("Снова активен исходный проект: " + source)
+                except Exception as restore:
+                    lines.append("Не удалось вернуть исходный проект на экран: " + str(restore))
         lines.append("Новая копия на диске не перезаписывалась; исходник не сохранялся.")
         if digest(source) != source_hash:
             lines.append("ВНИМАНИЕ: контрольная сумма исходника изменилась во время теста.")
         lines.append("\n" + traceback.format_exc())
     lines.append("\nНажмите «Копировать всё» и пришлите результат теста.")
     return "\r\n".join(lines)
+
+
+def restore_source_display(session, source_part):
+    # SetDisplay returns (SdpsStatus, PartLoadStatus) in NX Python.
+    result = session.Parts.SetDisplay(source_part, False, False)
+    values = result if isinstance(result, tuple) else (result,)
+    try:
+        session.Parts.SetWork(source_part)
+        if (session.Parts.Display is None or session.Parts.Work is None or
+                int(session.Parts.Display.Tag) != int(source_part.Tag) or
+                int(session.Parts.Work.Tag) != int(source_part.Tag)):
+            raise RuntimeError("NX не подтвердил рабочую и отображаемую деталь")
+    finally:
+        for value in values:
+            if hasattr(value, "Dispose"):
+                value.Dispose()
 
 
 def plane_from_object(obj, part, nx, native):

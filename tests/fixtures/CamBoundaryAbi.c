@@ -10,8 +10,8 @@ typedef enum {
 } UF_PARAM_status_t;
 _Static_assert(sizeof(UF_PARAM_status_t) == sizeof(int), "UF parameter status uses C int storage");
 static struct {
-    uint32_t tag;
-    int index, state, error;
+    uint32_t tag, definer;
+    int index, state, error, definer_error;
 } parameter_statuses[32];
 static int parameter_count;
 
@@ -25,9 +25,33 @@ void fixture_param_status(uint32_t tag, int index, int state, int error) {
     }
     if (parameter_count >= 32) abort();
     parameter_statuses[parameter_count].tag = tag;
+    parameter_statuses[parameter_count].definer = 0;
+    parameter_statuses[parameter_count].definer_error = 0;
     parameter_statuses[parameter_count].index = index;
     parameter_statuses[parameter_count].state = state;
     parameter_statuses[parameter_count++].error = error;
+}
+
+void fixture_param_definer(uint32_t tag, int index, uint32_t definer, int error) {
+    for (int n = 0; n < parameter_count; ++n) {
+        if (parameter_statuses[n].tag == tag && parameter_statuses[n].index == index) {
+            parameter_statuses[n].definer = definer;
+            parameter_statuses[n].definer_error = error;
+            return;
+        }
+    }
+    abort();
+}
+
+int UF_PARAM_ask_param_definer(uint32_t tag, int index, uint32_t *definer) {
+    for (int n = 0; n < parameter_count; ++n) {
+        if (parameter_statuses[n].tag == tag && parameter_statuses[n].index == index) {
+            if (parameter_statuses[n].definer_error) return parameter_statuses[n].definer_error;
+            *definer = parameter_statuses[n].definer;
+            return 0;
+        }
+    }
+    return 90005;
 }
 
 int UF_PARAM_ask_param_status(uint32_t tag, int index, UF_PARAM_status_t *status) {

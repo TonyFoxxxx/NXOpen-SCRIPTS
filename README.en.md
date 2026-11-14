@@ -32,16 +32,16 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.06 | Trial reflection of one part and MCS transfer; no components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.07 | Trial reflection of one part and MCS transfer; no components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.06 · 2026-11-14
+### Latest update — Mirrored CAM project trial V1.07 · 2026-11-14
 
-Fix “Expecting List of double type, found tuple” while reading body topology. Pass the temporary coordinate system's matrix and origin to NX as lists of numbers. Check both calls and subsequent MCS creation with strict argument types. A complete NX run remains unconfirmed.
+MCS/RCS transfer accounts for actual inheritance providers and NX defaults. Verify origin, axes, inheritance and the available RCS-to-MCS link parameter; a different CSYS tag alone is not a failure. Reactivate the source after successful rollback. Copy filenames no longer accumulate suffixes and also avoid names of parts still open in NX.
 
-Update **«Зеркальная копия CAM-проекта — тест» to V1.06** in the updater. [Test workflow and limitations](docs/en/mirror-project.md).
+Update **«Зеркальная копия CAM-проекта — тест» to V1.07** in the updater. A complete NX run remains unconfirmed. [Test workflow and limitations](docs/en/mirror-project.md).
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.11 · 2026-11-14
 

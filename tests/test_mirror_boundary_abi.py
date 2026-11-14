@@ -44,7 +44,9 @@ class BoundaryAbiTests(unittest.TestCase):
         self.native.set_boundary = self.native.bind('UF_CAMBND_set_boundary_plane', (p,ctypes.POINTER(ctypes.c_double),ctypes.POINTER(ctypes.c_double)))
         self.native.model_update = self.native.bind('UF_MODL_update', ())
         self.native.param_status = self.native.bind('UF_PARAM_ask_param_status', (u,i,ip))
+        self.native.param_definer = self.native.bind('UF_PARAM_ask_param_definer', (u,i,ctypes.POINTER(u)))
         self.parameter = self.native.bind('fixture_param_status', (u,i,i,i), None)
+        self.definer = self.native.bind('fixture_param_definer', (u,i,u,i), None)
         self.native.members = self.native.bind('UF_CAMBND_ask_boundary_items', (p,ip,pp))
         self.native.member_entity = self.native.bind('UF_CAMBND_ask_item_entity', (p,ctypes.POINTER(u)))
         self.native.fail_message = lambda code, buffer: setattr(buffer, 'value', b'C ABI probe error')
@@ -187,24 +189,31 @@ class BoundaryAbiTests(unittest.TestCase):
     def parameter_trial(self, rows):
         # A plain Enum reproduces NX's non-integer ParamStatusMemberType.
         status_type = Enum('ParamStatusMemberType', 'Default Inherited Overridden')
-        kind_type = Enum('Type', 'TypeTag Type3d Type3dLength')
+        kind_type = Enum('Type', 'TypeTag Type3d Type3dLength TypeLogical')
         trial = object.__new__(M.Trial)
         trial.native, trial.plane = self.native, M.MirrorPlane([0,0,0], [1,0,0])
         trial.nodes = [types.SimpleNamespace(Tag=tag, Name='NODE_' + str(tag))
                        for tag in sorted({key[0] for key in rows})]
         trial.root = trial.nodes[0]
         trial.frames, trial.refs, trial.mcs_expected = {}, {}, {}
+        trial.mcs_sources = {}
+        trial.mcs_links = {}
         trial.mcs_bindings, trial.raw_spatial = [], []
         trial.reference = lambda tag: trial.refs.setdefault(tag, object())
         kinds = {index: kind for (_,index), (kind,_,_,_) in rows.items()}
         for (tag,index), (_,state,_,error) in rows.items():
             self.parameter(tag,index,state,error)
+            if state == 1 and index in (59,60):
+                source = next(t for (t,i), (_,s,value,_) in rows.items()
+                              if i == index and s != 1 and value == rows[(tag,index)][2])
+                self.definer(tag,index,source,0)
         trial.nx = types.SimpleNamespace(UF=types.SimpleNamespace(Param=types.SimpleNamespace(Type=kind_type)))
         trial.uf = types.SimpleNamespace(
             Param=types.SimpleNamespace(
                 AskRequiredParams=lambda tag: (sum(t == tag for t,_ in rows), [i for t,i in rows if t == tag]),
                 AskParamAttributes=lambda index: types.SimpleNamespace(type=getattr(kind_type,kinds[index]), name='P_' + str(index)),
                 AskTagValue=lambda tag,index: rows[(tag,index)][2],
+                AskLogicalValue=lambda tag,index: rows[(tag,index)][2],
                 AskParamStatus=Mock(return_value=status_type.Overridden),
                 Ask3dValue=Mock(side_effect=lambda tag,index: rows[(tag,index)][2])),
             Csys=types.SimpleNamespace(
@@ -243,12 +252,143 @@ class BoundaryAbiTests(unittest.TestCase):
         })
         trial.capture_parameters()
         self.assertEqual([(node.Tag,index,tag) for node,index,tag in trial.mcs_bindings],
-                         [(1,59,81),(1,60,81),(2,59,82),(4,60,83)])
+                         [(1,59,81),(1,60,81),(2,59,82),(4,59,81),(4,60,83)])
         self.assertEqual(trial.mcs_expected, {(1,59):81,(1,60):81,(2,59):82,(2,60):81,
                                             (3,59):82,(3,60):81,(4,59):81,(4,60):83})
         self.assertEqual(set(trial.frames), {81,82,83})
         self.assertEqual(trial.uf.Csys.AskCsysInfo.call_count, 3)
         trial.uf.Param.AskParamStatus.assert_not_called()
+
+    def test_native_parameter_definer_keeps_unsigned_tag_and_reports_error(self):
+        self.parameter(0xf0000042,59,1,0)
+        self.definer(0xf0000042,59,0xe0000001,0)
+        self.assertEqual(self.native.parameter_definer(0xf0000042,59),0xe0000001)
+        self.definer(0xf0000042,59,0,1345005)
+        with self.assertRaises(M.NativeApiError) as caught:
+            self.native.parameter_definer(0xf0000042,59)
+        self.assertEqual(caught.exception.context,'UF_PARAM_ask_param_definer')
+        self.assertEqual(caught.exception.code,1345005)
+
+    def test_hidden_parameter_provider_is_captured_without_overriding_child(self):
+        trial = self.parameter_trial({(1,59): ('TypeTag',2,81,0),(2,59): ('TypeTag',1,81,0)})
+        trial.nodes = trial.nodes[1:]
+        trial.nx.TaggedObjectManager = types.SimpleNamespace(
+            GetTaggedObject=lambda tag: types.SimpleNamespace(Tag=tag,Name='PROVIDER'))
+        trial.capture_parameters()
+        self.assertEqual([(node.Tag,index,tag) for node,index,tag in trial.mcs_bindings],[(1,59,81)])
+        self.assertEqual(trial.mcs_sources[(2,59)][:2],(1,1))
+        self.assertEqual(set(trial.mcs_expected),{(1,59),(2,59)})
+
+    def test_zero_self_and_cyclic_inheritance_providers_stop_before_transform(self):
+        for provider in (0,2):
+            with self.subTest(provider=provider):
+                trial = self.parameter_trial({(1,59): ('TypeTag',2,81,0),(2,59): ('TypeTag',1,81,0)})
+                self.definer(2,59,provider,0)
+                with self.assertRaisesRegex(RuntimeError,'Не определён источник'):
+                    trial.capture_parameters()
+        trial = self.parameter_trial({(1,59): ('TypeTag',2,81,0),(2,59): ('TypeTag',1,81,0),(3,59): ('TypeTag',1,81,0)})
+        self.definer(2,59,3,0)
+        self.definer(3,59,2,0)
+        with self.assertRaisesRegex(RuntimeError,'Цикл наследования'):
+            trial.capture_parameters()
+
+    def transferred_mcs_trial(self):
+        rows = {(1,41): ('TypeLogical',2,True,0),
+                (1,59): ('TypeTag',0,81,0), (1,60): ('TypeTag',0,81,0),
+                (2,59): ('TypeTag',1,81,0), (2,60): ('TypeTag',1,81,0),
+                (3,59): ('TypeTag',2,82,0), (4,59): ('TypeTag',0,81,0)}
+        trial = self.parameter_trial(rows)
+        trial.capture_parameters()
+        values = {key: row[2] for key,row in rows.items()}
+        frames, matrices = {}, {}
+        def create_matrix(axes):
+            tag = 1000 + len(matrices)
+            matrices[tag] = list(axes)
+            return tag
+        def create_csys(origin, matrix):
+            tag = 2000 + len(frames)
+            frames[tag] = (list(origin),matrix)
+            return tag
+        def set_value(tag, index, value):
+            self.parameter(tag,index,2,0)
+            values[(tag,index)] = value
+        def get_value(tag, index):
+            if self.native.parameter_status(tag,index) == 1:
+                return get_value(self.native.parameter_definer(tag,index),index)
+            return values[(tag,index)]
+        trial.uf.Csys = types.SimpleNamespace(CreateMatrix=create_matrix,CreateCsys=create_csys,
+            AskCsysInfo=lambda tag: (frames[tag][1],frames[tag][0]),
+            AskMatrixValues=lambda tag: matrices[tag])
+        trial.uf.Param.SetTagValue = Mock(side_effect=set_value)
+        trial.uf.Param.AskTagValue = get_value
+        replacement = trial.transfer_mcs()
+        return trial,replacement,values,frames,matrices
+
+    def test_default_and_local_frames_move_while_children_keep_inheritance(self):
+        trial,replacement,values,frames,matrices = self.transferred_mcs_trial()
+        trial.verify_mcs(replacement)
+        written = [call.args[:2] for call in trial.uf.Param.SetTagValue.call_args_list]
+        self.assertEqual(written,[(1,59),(1,60),(3,59),(4,59)])
+        self.assertEqual(self.native.parameter_status(2,59),1)
+        self.assertEqual(self.native.parameter_definer(2,59),1)
+        self.assertEqual(self.native.parameter_status(4,59),2)
+        self.assertIn('MCS',trial.stage)
+
+    def test_equivalent_csys_tags_are_accepted_only_with_preserved_inheritance(self):
+        trial,replacement,values,frames,matrices = self.transferred_mcs_trial()
+        frames[9000] = frames[replacement[81]]
+        values[(1,59)] = 9000
+        values[(1,60)] = 9000
+        trial.verify_mcs(replacement)
+        self.assertEqual(trial.uf.Param.AskTagValue(2,59),9000)
+        self.assertEqual(self.native.parameter_status(2,59),1)
+
+    def test_expected_tag_with_wrong_origin_or_axes_is_rejected_with_details(self):
+        for change in ('origin','axes'):
+            with self.subTest(change=change):
+                trial,replacement,values,frames,matrices = self.transferred_mcs_trial()
+                frame = replacement[81]
+                origin,matrix = frames[frame]
+                if change == 'origin':
+                    frames[frame] = ([origin[0]+1,origin[1],origin[2]],matrix)
+                else:
+                    matrices[matrix] = [1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0]
+                with self.assertRaisesRegex(RuntimeError,'не совпадают начало или оси') as caught:
+                    trial.verify_mcs(replacement)
+                report = str(caught.exception)
+                for detail in ('NODE_1','MCS','Начало ожидаемое','Оси ожидаемые','фактическая='):
+                    self.assertIn(detail,report)
+                self.assertIn('Проверка MCS/RCS',trial.stage)
+                self.assertIn('параметр 59',trial.stage)
+
+    def test_matching_coordinates_do_not_hide_detached_or_reparented_inheritance(self):
+        for mode in ('local','other_provider'):
+            with self.subTest(mode=mode):
+                trial,replacement,values,frames,matrices = self.transferred_mcs_trial()
+                if mode == 'local':
+                    self.parameter(2,59,2,0)
+                    values[(2,59)] = replacement[81]
+                else:
+                    self.definer(2,59,3,0)
+                with self.assertRaisesRegex(RuntimeError,'изменилось наследование') as caught:
+                    trial.verify_mcs(replacement)
+                self.assertIn('NODE_2',str(caught.exception))
+
+    def test_failed_frame_assignment_is_not_repaired_by_overriding_children(self):
+        trial,replacement,values,frames,matrices = self.transferred_mcs_trial()
+        self.parameter(1,59,0,0)
+        with self.assertRaisesRegex(RuntimeError,'изменилось наследование'):
+            trial.verify_mcs(replacement)
+        self.assertFalse(any(call.args[0] == 2 for call in trial.uf.Param.SetTagValue.call_args_list))
+
+    def test_rcs_link_flag_is_preserved_and_a_change_is_rejected(self):
+        trial,replacement,values,frames,matrices = self.transferred_mcs_trial()
+        self.assertEqual(trial.mcs_links,{1:True})
+        trial.verify_mcs(replacement)
+        trial.uf.Param.AskLogicalValue = Mock(return_value=False)
+        with self.assertRaisesRegex(RuntimeError,'Изменился параметр связи RCS с MCS'):
+            trial.verify_mcs(replacement)
+        self.assertIn('Проверка связи RCS с MCS',trial.stage)
 
     def test_parameter_capture_reports_only_nonzero_local_spatial_values(self):
         trial = self.parameter_trial({
