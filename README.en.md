@@ -32,22 +32,22 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.07 | Trial reflection of one part and MCS transfer; no components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.08 | Trial reflection of one part and MCS transfer; no components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Engraving centerlines for PLANAR_MILL V1.12 · 2026-11-14
+### Latest update — Mirrored CAM project trial V1.08 · 2026-11-14
+
+Parametric Tooling Box stock is excluded from direct solid reflection and updated through existing features. MCS transfer retains supported Three Planes definitions and selected support planes. Added checks of Workpiece/operation editor data, parametric history and CSYS associativity; a failure triggers rollback.
+
+Update **«Зеркальная копия CAM-проекта — тест» to V1.08** in the updater. Retest from a healthy original project. Checks outside NX passed; V1.08 has not yet been validated on a real PRT. [Test workflow and limitations](docs/en/mirror-project.md).
+
+### Also released — Engraving centerlines for PLANAR_MILL V1.12 · 2026-11-14
 
 Fix reproduced short-branch failures near corners. Recheck continuing wall support after merging nearby nodes; remove artificial loops produced by corner snapping and reconnect the main stroke. Trim genuine short arms only as much as clearance requires, increasing the trim after measuring curve separation. Errors identify and highlight the failed face group.
 
 Update **«Оси гравировки для PLANAR_MILL»** to **V1.12** in the updater. [Workflow, limits and validation](docs/en/planar-mill-curves.md).
-
-### Also released — Mirrored CAM project trial V1.07 · 2026-11-14
-
-MCS/RCS transfer accounts for actual inheritance providers and NX defaults. Verify origin, axes, inheritance and the available RCS-to-MCS link parameter; a different CSYS tag alone is not a failure. Reactivate the source after successful rollback. Copy filenames no longer accumulate suffixes and also avoid names of parts still open in NX.
-
-Update **«Зеркальная копия CAM-проекта — тест» to V1.07** in the updater. A complete NX run remains unconfirmed. [Test workflow and limitations](docs/en/mirror-project.md).
 
 ## Installation
 

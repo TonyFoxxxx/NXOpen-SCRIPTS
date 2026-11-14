@@ -2,17 +2,17 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.07**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.08**.
 
 ## Latest release
 
-**V1.07 · 2026-11-14** — revise MCS/RCS transfer and verification. Follow actual parameter providers through `UF_PARAM_ask_param_definer`, including definitions outside the initial geometry-tree traversal. Local definitions and NX defaults receive explicit reflected bindings only in the copy; inherited nodes are not overwritten.
+**V1.08 · 2026-11-14** — addresses the V1.07 test result: selected faces remained linked and highlighted, but Workpiece and dependent operations could not open because bounding-geometry feature parameters were lost. Three Planes MCS definitions were replaced by numerical CSYS objects shown as Dynamic.
 
-After update, verify actual origin, axes, inheritance status and provider. A different CSYS tag is accepted only when coordinates and expected inheritance match. Preserve the RCS-to-MCS link flag when present in the required-parameter list. On failure, report the node name, MCS or RCS, original/created/actual systems, statuses, provider and expected/actual coordinates. The stage label no longer remains on the previously read CAM boundary. Cyclic or unresolved providers stop the trial before reflection.
+Tooling Box solids are now excluded from the general transformation. When needed, edit the existing parametric stock feature and verify its type, offsets and references. Compare model history before and after to detect lost features and parameters. Before and after reflection, create API editors for Workpiece, MCS and supported operations, reload available geometry and run Validate. An error fails the trial and triggers rollback.
 
-After failure and successful Undo, restore the source as work and displayed part. Report any restoration failure separately from Undo. A successful mirrored copy stays active. Existing copies are neither deleted nor closed automatically. Repeated `_MIRROR_TEST_...` filename suffixes collapse to one; names of parts still open in NX remain reserved even if their disk files were deleted.
+MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the same three support faces/planes and their original associative definitions. If directions need correction, linked coincident planes rebuild the Three Planes construction inside the existing CSYS; X/Z are reflected and Y completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance and the stored dependency graph separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This remains a trial. A complete successful run in NX / Designcenter 2606 is not yet confirmed. Other numerical directions and coordinates inside operation settings are not transformed yet.**
+**This is a trial version. V1.08 has not been tested on a real PRT in NX / Designcenter 2606. Retest from a healthy original project whose Workpiece opens. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
@@ -29,8 +29,8 @@ After failure and successful Undo, restore the source as work and displayed part
 
 - Copies the saved PRT byte for byte, verifies checksums and opens a separate part. Source CAM data is not processed.
 - Reads operations, MCS/RCS and Part, Blank, Check, Trim, Cut Area, Wall and Drive geometry references in the copy, including collector members and supported boundaries.
-- Reflects bodies and supported referenced geometry through a model-parent transformation. Body, face and edge identifiers must remain stable; otherwise the trial fails.
-- Creates transferred MCS/RCS frames. X and Z are reflected; Y is reconstructed to form a right-handed coordinate system. Local definitions and NX defaults receive explicit reflected bindings. Resolve inheritance providers through UF; do not overwrite inherited nodes. Verify coordinates, parameter status/provider and the available RCS-to-MCS link flag.
+- Reflects ordinary bodies and supported referenced geometry through a model-parent transformation. Parametric stock is updated through its existing Tooling Box. Body identifiers and all selected references must remain stable. All faces/edges are checked on ordinary bodies; the body and explicitly selected faces/edges are checked on regenerated stock. Unselected internal stock topology may be regenerated.
+- Transfers existing MCS/RCS while retaining supported Three Planes definitions and verifying associativity. X and Z are reflected; Y completes a right-handed frame. Only implicit NX defaults receive new numerical bindings. Resolve inheritance providers through UF; do not overwrite inherited nodes. Verify coordinates, parameter status/provider and the available RCS-to-MCS link flag.
 - Transfers user-defined boundary planes without recreating contours. Plane X/Y axes are reflected and Z is reconstructed as the negative of that plane's reflected original Z. MCS Z is transferred separately. The geometric plane and material side should follow the reflection. Parameters and references are checked after update. The copy's WCS is restored to its original position.
 - Removes calculated toolpaths in the copy. Does not create mirrored CAM operations, generate paths or postprocess.
 - Checks exact oriented object bounds in the selected-plane frame, geometry identifiers, available selected CAM references, operation membership and geometry parents, missing toolpaths and transferred MCS/RCS frames. Finally checks the source file checksum and modification flag.
@@ -38,6 +38,8 @@ After failure and successful Undo, restore the source as work and displayed part
 
 ## First-trial limits
 
+- Three Planes rebuilding supports recognized mutually perpendicular support planes with unit scale. An unconfirmed definition or damaged support stops the trial. Other associative CSYS definitions are accepted only if native updates retain their definition and produce the correct reflected frame.
+- Some parametric stock cannot reach the reflected position without changing its settings. If original orientation, asymmetric offsets or dependencies prevent exact reflection, verification stops the trial. The journal does not switch stock to From Geometry or zero its offsets.
 - Only operation classes `VolumeBased25DMillingOperation`, `SurfaceContour`, `PlanarMilling` and `TpMultiAxisDeburring` are accepted. Existing mirrored operations are rejected.
 - Supported simple local feature history: DATUM_CSYS, DATUM_PLANE, DATUM_AXIS, SKETCH, EXTRUDE, BLEND, Tooling Box, FSET, BREP, BLOCK, CYLINDER, CONE, SPHERE, IMPORTED_BODY, IMPORT. Other types and detected external parents stop the trial before transformation.
 - Components, non-associative boundaries without geometry references and detected custom start/predrill points are not supported yet.
@@ -49,4 +51,10 @@ After failure and successful Undo, restore the source as work and displayed part
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-Sixty-nine checks passed outside NX, including 25 with a separately compiled C library. New coverage includes providers outside the initial traversal, NX defaults, inheritance and RCS/MCS link preservation, equivalent CSYS objects with different tags, rejection of incorrect coordinates/providers, short copy filenames and restoring the source after Undo. The V1.06 report completed reflection and available-geometry checks, then failed the MCS/RCS tag comparison; that report does not include the failing node's actual coordinates or status. A complete V1.07 run still requires validation in NX.
+Eighty-six checks passed outside NX, including 28 with a separately compiled C library. New coverage includes the one-byte UF logical and parent arrays, retaining three selected planes during axial and oblique reflection, rejecting Dynamic substitution even with matching coordinates, bounding-geometry errors, excluding stock from direct transformation, and checking selected stock faces and offsets. These tests do not validate the NX kernel, actual dialogs or toolpath generation on the user's PRT.
+
+## Later stages — not implemented yet
+
+- Select two planes and automatically construct the mirror plane between them. Parallel planes use their midplane; behavior for nonparallel planes needs a separate decision.
+- Component checkboxes: for example, mirror fixtures while leaving vises unmirrored. Component copying, placement and dependencies need separate validation.
+- Reuse the Setup Card component-selection window behavior. These features are deferred until the trial without components works correctly.

@@ -151,6 +151,39 @@ void UF_free(void *array) {
     ++invalid_frees;
 }
 
+/* uf_defs.h: C logical is unsigned char, C++ logical is bool (one byte).
+ * uf_so.h also returns an allocated array of 32-bit tags. */
+int UF_SO_is_so(uint32_t tag, unsigned char *is_so) {
+    *is_so = tag == 1 ? 0 : 1;
+    return 0;
+}
+
+int UF_SO_ask_update_error_code(uint32_t tag, int *error) {
+    *error = tag == 2 ? 777 : 0;
+    return 0;
+}
+
+int UF_SO_ask_parents(uint32_t tag, int options, int *count, uint32_t **parents) {
+    if (options != 8) return 90006;
+    *count = 0;
+    *parents = NULL;
+    if (tag == 3) return 0;
+    for (int i = 0; i < 8; ++i) {
+        if (!allocations[i]) {
+            uint32_t *array = malloc(3 * sizeof(uint32_t));
+            if (!array) return 90001;
+            array[0] = UINT32_C(0xf0000001);
+            array[1] = 29;
+            array[2] = UINT32_C(0xf0000003);
+            allocations[i] = array;
+            *count = 3;
+            *parents = array;
+            return tag == 5 ? 90007 : 0;
+        }
+    }
+    return 90002;
+}
+
 int UF_CAMBND_ask_boundaries(uint32_t object_tag, int kind, int *count, UF_CAMBND_boundary_t **out) {
     (void)object_tag;
     *count = 0;

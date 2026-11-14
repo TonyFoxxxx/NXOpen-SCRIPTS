@@ -45,6 +45,9 @@ class BoundaryAbiTests(unittest.TestCase):
         self.native.model_update = self.native.bind('UF_MODL_update', ())
         self.native.param_status = self.native.bind('UF_PARAM_ask_param_status', (u,i,ip))
         self.native.param_definer = self.native.bind('UF_PARAM_ask_param_definer', (u,i,ctypes.POINTER(u)))
+        self.native.so_test = self.native.bind('UF_SO_is_so', (u,ctypes.POINTER(ctypes.c_ubyte)))
+        self.native.so_parents = self.native.bind('UF_SO_ask_parents', (u,i,ip,pp))
+        self.native.so_error = self.native.bind('UF_SO_ask_update_error_code', (u,ip))
         self.parameter = self.native.bind('fixture_param_status', (u,i,i,i), None)
         self.definer = self.native.bind('fixture_param_definer', (u,i,u,i), None)
         self.native.members = self.native.bind('UF_CAMBND_ask_boundary_items', (p,ip,pp))
@@ -61,6 +64,22 @@ class BoundaryAbiTests(unittest.TestCase):
 
     def handle(self):
         return self.native.pointers(self.native.boundaries, 100, 1)[0]
+
+    def test_smart_parents_uses_unsigned_tag_array_and_frees_it(self):
+        self.assertEqual(self.native.smart_parents(4), (0xf0000001,29,0xf0000003))
+        self.assertEqual(self.stat(0),1)
+
+    def test_smart_empty_and_dumb_are_distinct_and_errors_are_fatal(self):
+        self.assertIsNone(self.native.smart_parents(1))
+        self.assertEqual(self.native.smart_parents(3),())
+        with self.assertRaisesRegex(RuntimeError,'777'):
+            self.native.smart_parents(2)
+        self.assertEqual(self.stat(0),0)
+
+    def test_smart_parent_array_is_freed_even_on_failed_read(self):
+        with self.assertRaises(M.NativeApiError):
+            self.native.smart_parents(5)
+        self.assertEqual(self.stat(0),1)
 
     def trial(self):
         class Operation:
@@ -198,6 +217,10 @@ class BoundaryAbiTests(unittest.TestCase):
         trial.frames, trial.refs, trial.mcs_expected = {}, {}, {}
         trial.mcs_sources = {}
         trial.mcs_links = {}
+        trial.mcs_definitions, trial.mcs_verified_definitions = {}, {}
+        trial.check_cam_builders = lambda: None
+        trial.model_history = lambda: {}
+        trial.capture_stock = lambda: None
         trial.mcs_bindings, trial.raw_spatial = [], []
         trial.reference = lambda tag: trial.refs.setdefault(tag, object())
         kinds = {index: kind for (_,index), (kind,_,_,_) in rows.items()}
@@ -299,6 +322,7 @@ class BoundaryAbiTests(unittest.TestCase):
                 (3,59): ('TypeTag',2,82,0), (4,59): ('TypeTag',0,81,0)}
         trial = self.parameter_trial(rows)
         trial.capture_parameters()
+        trial.mcs_definitions = {tag: ({tag: None}, None) for tag in trial.frames}
         values = {key: row[2] for key,row in rows.items()}
         frames, matrices = {}, {}
         def create_matrix(axes):
@@ -318,7 +342,9 @@ class BoundaryAbiTests(unittest.TestCase):
             return values[(tag,index)]
         trial.uf.Csys = types.SimpleNamespace(CreateMatrix=create_matrix,CreateCsys=create_csys,
             AskCsysInfo=lambda tag: (frames[tag][1],frames[tag][0]),
-            AskMatrixValues=lambda tag: matrices[tag])
+            AskMatrixValues=lambda tag: matrices[tag],
+            SetOrigin=lambda tag, origin: frames.__setitem__(tag, (origin, frames.get(tag, (None,None))[1])),
+            EditMatrixOfObject=lambda tag, matrix: frames.__setitem__(tag, (frames[tag][0],matrix)))
         trial.uf.Param.SetTagValue = Mock(side_effect=set_value)
         trial.uf.Param.AskTagValue = get_value
         replacement = trial.transfer_mcs()
@@ -328,7 +354,8 @@ class BoundaryAbiTests(unittest.TestCase):
         trial,replacement,values,frames,matrices = self.transferred_mcs_trial()
         trial.verify_mcs(replacement)
         written = [call.args[:2] for call in trial.uf.Param.SetTagValue.call_args_list]
-        self.assertEqual(written,[(1,59),(1,60),(3,59),(4,59)])
+        self.assertEqual(written,[(1,59),(1,60),(4,59)])
+        self.assertEqual(replacement[82],82, 'An existing local CSYS keeps its tag')
         self.assertEqual(self.native.parameter_status(2,59),1)
         self.assertEqual(self.native.parameter_definer(2,59),1)
         self.assertEqual(self.native.parameter_status(4,59),2)

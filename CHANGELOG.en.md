@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.08
+
+The V1.07 test retained selected faces, but bounding-geometry errors blocked Workpiece and dependent operations, and Three Planes MCS definitions changed to Dynamic. Exclude Tooling Box solids from direct transformation and update their existing parametric features. Check type, offsets, references, bounds and model-history preservation.
+
+Retain the existing CSYS. When needed, rebuild supported Three Planes definitions on the same three supports using associative coincident planes, with reflected X/Z and a right-handed frame. Do not replace unknown associative definitions with numerical CSYS. Verify the dependency graph, inheritance and available RCS/MCS link flag. Read Workpiece/MCS/operation editor data before and after reflection; editor creation or Validate errors fail the trial. A modified test copy no longer prompts the user to save it before retesting.
+
+Eighty-six checks passed outside NX, including 28 with a C library. V1.08 on a real PRT, actual NX dialogs and toolpath generation remain unconfirmed. Retest from a healthy original. The guide records future two-plane selection, component checkboxes and a Setup Card-style selection window; these features are not implemented yet.
+
 ## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.12
 
 Fix reproduced short-branch failures near corners. Recheck continuing wall support after merging nearby nodes; remove artificial loops produced by corner snapping and reconnect the main stroke. Trim genuine short arms only as much as clearance requires, increasing the trim after measuring curve separation. Errors identify and highlight the failed face group.

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.07
-SCRIPT_VERSION = "V1.07"
+# SCRIPT_VERSION: V1.08
+SCRIPT_VERSION = "V1.08"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -263,6 +263,10 @@ class NativeCam:
         self.custom = self.bind("UF_CAMGEOM_ask_custom_points", (u, i, ip, pp))
         self.param_status = self.bind("UF_PARAM_ask_param_status", (u, i, ip))
         self.param_definer = self.bind("UF_PARAM_ask_param_definer", (u, i, ctypes.POINTER(u)))
+        # uf_defs.h: logical is bool / unsigned char, NOT a C int.
+        self.so_test = self.bind("UF_SO_is_so", (u, ctypes.POINTER(ctypes.c_ubyte)))
+        self.so_parents = self.bind("UF_SO_ask_parents", (u, i, ip, pp))
+        self.so_error = self.bind("UF_SO_ask_update_error_code", (u, ip))
         dp = ctypes.POINTER(ctypes.c_double)
         self.set_boundary = self.bind("UF_CAMBND_set_boundary_plane", (p, dp, dp))
         self.mirror_matrix = self.bind("UF_MTX4_mirror", (dp, dp, dp))
@@ -301,6 +305,34 @@ class NativeCam:
             raise ValueError("Нужна плоская грань, а не цилиндрическая или криволинейная поверхность")
         # Reflection is independent of the normal's sign / face sense.
         return MirrorPlane(point, normal)
+
+    def smart_parents(self, tag):
+        """None means non-parametric; () is a parameterized object with no parents."""
+        smart = ctypes.c_ubyte(255)
+        self.check(self.so_test(int(tag), ctypes.byref(smart)), "UF_SO_is_so")
+        if smart.value not in (0, 1):
+            raise RuntimeError("Некорректный ответ UF_SO_is_so")
+        if not smart.value:
+            return None
+        error = ctypes.c_int(-1)
+        self.check(self.so_error(int(tag), ctypes.byref(error)), "UF_SO_ask_update_error_code")
+        if error.value:
+            raise RuntimeError("Ошибка обновления ассоциативного объекта " + str(tag) + ": " + str(error.value))
+        count, data = ctypes.c_int(), ctypes.c_void_p()
+        try:
+            # UF_SO_ASK_ALL_PARENTS = 1 << 3. Immediate parents, not a flattened
+            # recursive list: preserve the three-plane construction graph.
+            self.check(self.so_parents(int(tag), 8, ctypes.byref(count), ctypes.byref(data)), "UF_SO_ask_parents")
+            if not 0 <= count.value <= MAX_OBJECTS or (count.value and not data.value):
+                raise RuntimeError("Некорректный массив родителей ассоциативного объекта")
+            values = ctypes.cast(data, ctypes.POINTER(ctypes.c_uint32))
+            result = tuple(int(values[i]) for i in range(count.value))
+            if any(not item for item in result):
+                raise RuntimeError("Пустой родитель ассоциативного объекта")
+            return result
+        finally:
+            if data.value:
+                self.free(data)
 
     def bounding_box_exact(self, tag, csys):
         corner, distances = (ctypes.c_double * 3)(), (ctypes.c_double * 3)()
@@ -457,6 +489,21 @@ class NativeCam:
         return list(matrix)
 
 
+def xyz(value):
+    return [float(value.X), float(value.Y), float(value.Z)]
+
+
+def graph_branch(graph, root):
+    result, pending = {}, [root]
+    while pending:
+        tag = pending.pop()
+        if tag in result:
+            continue
+        result[tag] = graph[tag]
+        pending.extend(graph[tag] or ())
+    return result
+
+
 def counted(value):
     count, items = value
     items = [] if items is None else list(items)
@@ -514,6 +561,9 @@ class Trial:
         self.mcs_expected = {}
         self.mcs_sources = {}
         self.mcs_links = {}
+        self.mcs_definitions, self.mcs_verified_definitions = {}, {}
+        self.stock_features, self.protected_bodies = {}, set()
+        self.cam_builder_state = None
         self.boundary_planes, self.current_boundaries = {}, {}
         self.moved_boundary_count = 0
         if not self.bodies or not self.operations:
@@ -549,6 +599,227 @@ class Trial:
         if bool(getattr(obj, "IsOccurrence", False)):
             raise RuntimeError("Обнаружено вхождение компонента")
         self.refs[tag] = obj
+
+    def smart_graph(self, tag):
+        result, pending = {}, [int(tag)]
+        while pending:
+            current = pending.pop()
+            if current in result:
+                continue
+            if len(result) >= MAX_OBJECTS:
+                raise RuntimeError("Слишком много родителей системы координат")
+            self.reference(current)
+            parents = self.native.smart_parents(current)
+            result[current] = parents
+            if parents is not None:
+                pending.extend(parents)
+        return result
+
+    def plane_data(self, obj):
+        if isinstance(obj, self.nx.Face):
+            return self.native.face_plane(obj.Tag)
+        if isinstance(obj, (self.nx.Plane, self.nx.DatumPlane)):
+            return MirrorPlane(xyz(obj.Origin), xyz(obj.Normal))
+        raise RuntimeError("Не поддержана опорная плоскость MCS: " + type(obj).__name__)
+
+    def capture_csys_definition(self, tag, origin, axes):
+        graph = self.smart_graph(tag)
+        planes = None
+        # Recognize the actual NX Three Planes graph, not a display name or a
+        # flattened set of arbitrary ancestors. Reject ambiguous constructions.
+        parents = graph[tag]
+        if parents is not None:
+            xforms = [self.refs[p] for p in parents if isinstance(self.refs[p], self.nx.Xform)]
+            if len(xforms) == 1 and len(parents) == 1:
+                inputs = graph[int(xforms[0].Tag)]
+                if inputs is not None:
+                    planar = [self.refs[p] for p in inputs
+                              if isinstance(self.refs[p], (self.nx.Face, self.nx.Plane, self.nx.DatumPlane))]
+                    others = [self.refs[p] for p in inputs if self.refs[p] not in planar]
+                    if (len(planar) == 3 and all(isinstance(o, self.nx.Scalar) for o in others)
+                            and close_values([float(xforms[0].Scale)], [1.0])):
+                        data = [(obj, self.plane_data(obj)) for obj in planar]
+                        ordered = []
+                        for axis in (axes[:3], axes[3:6], axes[6:]):
+                            matching = [obj for obj, plane in data
+                                        if abs(dot(plane.normal, axis)) > 1.0 - 1e-7
+                                        and abs(dot(plane.normal, [a-b for a,b in zip(origin, plane.origin)])) < 1e-5]
+                            if len(matching) != 1:
+                                break
+                            ordered.append(int(matching[0].Tag))
+                        if len(set(ordered)) == 3:
+                            planes = tuple(ordered)
+        self.mcs_definitions[tag] = (graph, planes)
+        self.mcs_verified_definitions[tag] = graph
+        description = "Three Planes" if planes else "ассоциативная СК" if parents is not None else "числовая СК"
+        self.lines.append("Определение СК " + str(tag) + ": " + description +
+                          ("; плоскости " + str(planes) if planes else ""))
+
+    def rebuild_three_planes(self, tag, planes, expected_axes):
+        nx = self.nx
+        oriented = []
+        for index, source in enumerate(planes):
+            obj = self.refs[source]
+            # Coincident smart planes retain the exact selected face/datum/plane,
+            # including an existing offset plane. Flip Y when needed to keep Z
+            # directed toward the same side of the reflected part.
+            plane = self.part.Planes.CreatePlane(nx.Point3d(0.0, 0.0, 0.0),
+                nx.Vector3d(0.0, 0.0, 1.0), nx.SmartObject.UpdateOption.AfterModeling)
+            plane.SetMethod(nx.PlaneTypes.MethodType.Coincident)
+            plane.SetGeometry([obj])
+            plane.Evaluate()
+            direction = expected_axes[index*3:index*3+3]
+            if dot(xyz(plane.Normal), direction) < 0.0:
+                plane.SetFlip(not plane.Flip)
+                plane.Evaluate()
+            if not close_values(xyz(plane.Normal), direction):
+                raise RuntimeError("Не подтверждено направление плоскости Three Planes: " + str(source))
+            if tuple(int(o.Tag) for o in plane.GetGeometry()) != (source,):
+                raise RuntimeError("Изменилась выбранная плоскость Three Planes")
+            plane.SetVisibility(nx.SmartObject.VisibilityOption.Invisible)
+            oriented.append(plane)
+        xform = self.part.Xforms.CreateXform(oriented[0], oriented[1], oriented[2],
+                                            nx.SmartObject.UpdateOption.AfterModeling, 1.0)
+        replacement = self.part.CoordinateSystems.CreateCoordinateSystem(xform, nx.SmartObject.UpdateOption.AfterModeling)
+        self.refs[tag].ReplaceParameters(replacement)
+        self.refs[tag].Evaluate()
+        # Verify actual stored construction, not merely the temporary objects.
+        graph = self.smart_graph(tag)
+        inputs = set(graph.get(int(xform.Tag)) or ())
+        plane_tags = {int(p.Tag) for p in oriented}
+        if (graph[tag] != (int(xform.Tag),) or not plane_tags.issubset(inputs)
+                or any(not isinstance(self.refs[p], nx.Scalar) for p in inputs - plane_tags)
+                or not close_values([float(xform.Scale)], [1.0])):
+            raise RuntimeError("NX не сохранил определение Three Planes")
+        for p, source in zip(oriented, planes):
+            if source not in (graph[int(p.Tag)] or ()):
+                raise RuntimeError("NX не сохранил ссылку Three Planes на исходную плоскость")
+        self.mcs_verified_definitions[tag] = graph
+
+    def model_history(self):
+        result = {}
+        for feature in self.part.Features:
+            self.stage = "Проверка параметрической истории: " + str(feature.Name)
+            errors = list(feature.GetFeatureErrorMessages())
+            if errors:
+                raise RuntimeError("Ошибка модельного элемента " + str(feature.Name) + ": " + "; ".join(errors))
+            result[int(feature.Tag)] = (str(feature.FeatureType),
+                tuple(sorted(int(p.Tag) for p in feature.GetParents())),
+                tuple(sorted(int(e.Tag) for e in feature.GetExpressions())))
+        return result
+
+    def tooling_builder(self, feature):
+        return self.part.Features.ToolingFeatureCollection.CreateToolingBoxBuilder(feature)
+
+    def stock_state(self, builder):
+        flags = ("Type", "ReferenceCsysType", "CsysAssociative", "NonAlignedMinimumBox", "SingleOffset")
+        offsets = ("Clearance", "OffsetNegativeX", "OffsetNegativeY", "OffsetNegativeZ",
+                   "OffsetPositiveX", "OffsetPositiveY", "OffsetPositiveZ", "RadialOffset")
+        values = {name: getattr(builder, name) for name in flags}
+        # Some inactive fields are temporary builder expressions. Compare their
+        # definitions/values, not transient expression tags across editor opens.
+        values.update({name: (str(getattr(builder, name).RightHandSide), float(getattr(builder, name).Value))
+                       for name in offsets})
+        values["BoundedObject"] = tuple(sorted(int(o.Tag) for o in builder.BoundedObject.GetObjects()))
+        selected = self.nx.Features.ToolingBoxBuilder.RefCsysType.SelectedCsys
+        csys = builder.CsysSelection.Value if builder.ReferenceCsysType == selected else None
+        values["Csys"] = int(csys.Tag) if csys is not None else 0
+        types = self.nx.Features.ToolingBoxBuilder.Types
+        if builder.Type == types.BoundedCylinder:
+            for name in ("AxisPoint", "AxisVector"):
+                obj = getattr(builder, name)
+                values[name] = int(obj.Tag) if obj is not None else 0
+        elif builder.Type == types.CenterAndLengths:
+            for name in ("XValue", "YValue", "ZValue"):
+                expression = getattr(builder, name)
+                values[name] = (str(expression.RightHandSide), float(expression.Value))
+        return values
+
+    def capture_stock(self):
+        for feature in self.part.Features:
+            if str(feature.FeatureType).upper() != "TOOLING BOX":
+                continue
+            self.stage = "Чтение параметрической заготовки: " + str(feature.Name)
+            builder = self.tooling_builder(feature)
+            try:
+                state = self.stock_state(builder)
+                if not builder.Validate():
+                    raise RuntimeError("Некорректные параметры исходной заготовки")
+                bodies = tuple(int(b.Tag) for b in feature.GetBodies())
+                if not bodies:
+                    raise RuntimeError("У параметрической заготовки отсутствует тело")
+                self.protected_bodies.update(bodies)
+                self.stock_features[int(feature.Tag)] = (feature, bodies, state, xyz(builder.BoxPosition))
+                self.lines.append("Защищённая заготовка: " + str(feature.Name) + "; " + str(state["Type"]))
+            finally:
+                builder.Destroy()
+
+    def update_stock(self):
+        for feature, bodies, state, position in self.stock_features.values():
+            self.stage = "Обновление параметрической заготовки: " + str(feature.Name)
+            builder = self.tooling_builder(feature)
+            try:
+                if self.stock_state(builder) != state:
+                    raise RuntimeError("Изменились параметры заготовки до обновления: " + str(feature.Name))
+                # Often an associative Tooling Box has already followed its part.
+                # Otherwise edit its existing feature, never transform its solid
+                # directly or replace the CAM blank with From Geometry.
+                if not all(close_values(self.bounding_box(b), reflected_box(self.bounds[b], 0, 0.0)) for b in bodies):
+                    if builder.Type == self.nx.Features.ToolingBoxBuilder.Types.CenterAndLengths:
+                        builder.BoxPosition = self.nx.Point3d(*self.plane.point(position))
+                    else:
+                        builder.CalculateBoxSize()
+                    if not builder.Validate():
+                        raise RuntimeError("Некорректное обновление параметрической заготовки")
+                    committed = builder.Commit()
+                    if committed is None or int(committed.Tag) != int(feature.Tag):
+                        raise RuntimeError("NX заменил параметрический элемент заготовки")
+                if self.stock_state(builder) != state:
+                    raise RuntimeError("Изменились тип, припуски или ссылки параметрической заготовки")
+            finally:
+                builder.Destroy()
+        self.native.update_model()
+
+    def check_cam_builders(self):
+        factories = {"FeatureGeometry": (self.setup.CAMGroupCollection, "CreateMillGeomBuilder"),
+                     "OrientGeometry": (self.setup.CAMGroupCollection, "CreateMillOrientGeomBuilder"),
+                     "VolumeBased25DMillingOperation": (self.setup.CAMOperationCollection, "CreateVolumeBased25dMillingOperationBuilder"),
+                     "SurfaceContour": (self.setup.CAMOperationCollection, "CreateSurfaceContourBuilder"),
+                     "PlanarMilling": (self.setup.CAMOperationCollection, "CreatePlanarMillingBuilder"),
+                     "TpMultiAxisDeburring": (self.setup.CAMOperationCollection, "CreateMultiAxisDeburringBuilder")}
+        result = {}
+        for node in self.nodes:
+            kind = type(node).__name__
+            if kind not in factories:
+                continue
+            self.stage = "Проверка открытия CAM: " + str(node.Name) + " [" + kind + "]"
+            collection, factory = factories[kind]
+            builder = getattr(collection, factory)(node)
+            try:
+                state = {}
+                for name in ("PartGeometry", "BlankGeometry", "CheckGeometry", "CutAreaGeometry"):
+                    geometry = getattr(builder, name, None)
+                    if isinstance(geometry, self.nx.CAM.Geometry):
+                        self.stage = "Чтение CAM через редактор: " + str(node.Name) + " / " + name
+                        geometry.InitializeData(True)
+                        if name == "BlankGeometry" and isinstance(geometry, self.nx.CAM.GeometryGroup):
+                            fields = ("BlankDefinitionType", "BlankCreationType", "BlankToggleValue",
+                                      "OrientationType", "DirectionType", "OffsetFromPart", "OffsetNegativeZ", "OffsetPositiveZ",
+                                      "AutoBlockOffsetNegativeX", "AutoBlockOffsetPositiveX", "AutoBlockOffsetNegativeY",
+                                      "AutoBlockOffsetPositiveY", "AutoBlockOffsetNegativeZ", "AutoBlockOffsetPositiveZ")
+                            state[name] = tuple(getattr(geometry, f) for f in fields)
+                if kind == "OrientGeometry":
+                    state["MCS"] = (builder.McsLocationMode, builder.LinkRcsToMcs)
+                self.stage = "Проверка редактора CAM: " + str(node.Name)
+                if not builder.Validate():
+                    raise RuntimeError("Редактор CAM не прошёл проверку: " + str(node.Name))
+                result[int(node.Tag)] = state
+            finally:
+                # Validation only: no CAM Commit, generation, or parameter edits.
+                builder.Destroy()
+        if self.cam_builder_state is not None and result != self.cam_builder_state:
+            raise RuntimeError("Изменились параметры заготовки или режим размещения MCS в редакторе CAM")
+        self.cam_builder_state = result
 
     def geometry_snapshot(self, collect=False):
         result = {}
@@ -740,11 +1011,43 @@ class Trial:
         for tag, (old_origin, axes) in self.frames.items():
             origin = self.plane.point(old_origin)
             axes = reflected_frame(axes, self.plane)
-            matrix_tag = self.uf.Csys.CreateMatrix(axes)
-            replacement[tag] = self.uf.Csys.CreateCsys(origin, matrix_tag)
+            self.stage = "Перенос определения MCS/RCS: " + str(tag)
+            graph, planes = self.mcs_definitions[tag]
+            is_default = any(old == tag and self.mcs_sources[(int(node.Tag), index)][0] == PARAM_DEFAULT
+                             for node, index, old in self.mcs_bindings)
+            if is_default:
+                # The root's implicit default is not a user's Three Planes
+                # definition. Do not modify an NX default shared elsewhere.
+                if planes or any(old == tag and self.mcs_sources[(int(node.Tag), index)][0] == PARAM_OVERRIDDEN
+                                 for node, index, old in self.mcs_bindings):
+                    raise RuntimeError("Значение MCS по умолчанию разделяется с собственным определением")
+                matrix_tag = self.uf.Csys.CreateMatrix(axes)
+                replacement[tag] = self.uf.Csys.CreateCsys(origin, matrix_tag)
+                continue
+            replacement[tag] = tag
+            if graph[tag] is not None:
+                obj = self.refs[tag]
+                obj.Evaluate()
+                matrix_tag, actual_origin = self.uf.Csys.AskCsysInfo(tag)
+                actual_axes = self.uf.Csys.AskMatrixValues(matrix_tag)
+                if not (close_values(actual_origin, origin) and close_values(actual_axes, axes)):
+                    if planes is None:
+                        raise RuntimeError("Нельзя сохранить способ задания ассоциативной СК " + str(tag) +
+                                           ". Требуется поддержка её определения; замена на Dynamic запрещена.")
+                    # Preserve every original support-plane definition. Only the
+                    # CSYS/xform construction is replaced, retaining the CSYS tag.
+                    for source in planes:
+                        if self.smart_graph(source) != graph_branch(graph, source):
+                            raise RuntimeError("Повреждено определение опорной плоскости MCS " + str(source))
+                    self.rebuild_three_planes(tag, planes, axes)
+            else:
+                matrix_tag = self.uf.Csys.CreateMatrix(axes)
+                self.uf.Csys.SetOrigin(tag, origin)
+                self.uf.Csys.EditMatrixOfObject(tag, matrix_tag)
         for node, index, old_tag in self.mcs_bindings:
-            self.stage = "Перенос систем координат: " + str(node.Name) + " / параметр " + str(index)
-            self.uf.Param.SetTagValue(node.Tag, index, replacement[old_tag])
+            if replacement[old_tag] != old_tag:
+                self.stage = "Перенос систем координат: " + str(node.Name) + " / параметр " + str(index)
+                self.uf.Param.SetTagValue(node.Tag, index, replacement[old_tag])
         return replacement
 
     def verify_mcs(self, replacement):
@@ -766,6 +1069,9 @@ class Trial:
             inherited = old_state == PARAM_INHERITED
             source_ok = (state == PARAM_INHERITED and definer == old_definer) if inherited else state == PARAM_OVERRIDDEN
             frame_ok = close_values(origin, expected_origin) and close_values(axes, expected_axes)
+            if replacement[old_tag] == old_tag and self.mcs_definitions[old_tag][0][old_tag] is not None:
+                if actual != old_tag or self.smart_graph(actual) != self.mcs_verified_definitions[old_tag]:
+                    raise RuntimeError("Изменилось ассоциативное определение " + label + "; переход на Dynamic не разрешён")
             # NX may supply an equivalent CSYS object. A matching tag alone is
             # neither necessary nor sufficient: verify frame AND inheritance.
             if not source_ok or not frame_ok:
@@ -794,7 +1100,11 @@ class Trial:
             result[int(body.Tag)] = (tuple(sorted(int(f.Tag) for f in faces)),
                                      tuple(sorted(int(e.Tag) for e in edges)))
             for obj in [body] + faces + edges:
-                self.bounds[int(obj.Tag)] = self.bounding_box(obj.Tag)
+                # A regenerated bounding solid may rename its internal faces.
+                # Its body and any explicitly selected faces/edges still must
+                # reflect exactly; no selected reference is exempted.
+                if int(body.Tag) not in self.protected_bodies or int(obj.Tag) in self.refs:
+                    self.bounds[int(obj.Tag)] = self.bounding_box(obj.Tag)
         return result
 
     def bounding_box(self, tag):
@@ -824,18 +1134,27 @@ class Trial:
             set_wcs_values(wcs, self.nx, origin, axes)
 
     def run_in_absolute_wcs(self):
+        self.check_cam_builders()
+        history = self.model_history()
+        self.capture_stock()
         self.stage = "Чтение геометрических ссылок в копии"
         geometry = self.geometry_snapshot(collect=True)
         self.stage = "Чтение MCS и ссылочных параметров в копии"
         self.capture_parameters()
+        for tag, (origin, axes) in self.frames.items():
+            self.capture_csys_definition(tag, origin, axes)
         self.stage = "Чтение топологии тел"
         topology = self.capture_topology()
         operations = self.operation_snapshot()
-        targets = {int(body.Tag): body for body in self.bodies}
+        targets = {int(body.Tag): body for body in self.bodies if int(body.Tag) not in self.protected_bodies}
         transformable = tuple(getattr(self.nx, name) for name in
             ("Curve", "Point", "Plane", "DatumPlane") if hasattr(self.nx, name))
-        for tag, obj in self.refs.items():
+        for tag, obj in list(self.refs.items()):
             if isinstance(obj, transformable):
+                # Smart objects follow their defining geometry. Transforming a
+                # smart plane explicitly would also transform its parent stock.
+                if self.native.smart_parents(tag) is not None:
+                    continue
                 targets[tag] = obj
                 if isinstance(obj, (self.nx.Curve, self.nx.Point)):
                     self.bounds[tag] = self.bounding_box(tag)
@@ -848,11 +1167,15 @@ class Trial:
         self.native.transform_entities(list(targets), matrix)
         self.stage = "Перенос систем координат"
         replacement = self.transfer_mcs()
+        self.update_stock()
         self.stage = "Удаление рассчитанных траекторий в копии"
         self.setup.DeleteToolPath(self.operations)
         self.stage = "Обновление и проверка результата"
         self.native.update_model()
         self.transfer_boundary_planes(geometry)
+        self.check_cam_builders()
+        if self.model_history() != history:
+            raise RuntimeError("Изменились модельные элементы, их родители или параметры. Связи CAM не подтверждены.")
         self.stage = "Проверка отражённой геометрии, границ и MCS"
         if self.operation_snapshot() != operations:
             raise RuntimeError("Изменился состав операций или их геометрические родители")
@@ -864,7 +1187,7 @@ class Trial:
         for body in current_bodies:
             current = (tuple(sorted(int(f.Tag) for f in body.GetFaces())),
                        tuple(sorted(int(e.Tag) for e in body.GetEdges())))
-            if current != topology[int(body.Tag)]:
+            if int(body.Tag) not in self.protected_bodies and current != topology[int(body.Tag)]:
                 raise RuntimeError("Изменились идентификаторы граней/рёбер; привязки не подтверждены")
         for tag, box in self.bounds.items():
             actual = self.bounding_box(tag)
@@ -884,6 +1207,9 @@ class Trial:
         self.lines.append("доступных ссылок CAM-геометрии, состава операций и переноса MCS/RCS.")
         self.lines.append("Рассчитанные траектории удалены; зеркальные операции не создавались.")
         self.lines.append("Перенесены и проверены заданные плоскости границ: " + str(self.moved_boundary_count))
+        self.lines.append("Проверены данные редакторов Workpiece/MCS/операций: " + str(len(self.cam_builder_state)))
+        self.lines.append("Параметрические заготовки сохранены: " + str(len(self.stock_features)))
+        self.lines.append("Сохранены определения Three Planes: " + str(sum(bool(p) for _, p in self.mcs_definitions.values())))
         if self.unavailable:
             self.lines.append("\nНЕ ПРОВЕРЕНЫ через UF (код 1345005): " + str(len(self.unavailable)) + " разделов.")
             self.lines.extend(sorted(self.unavailable))
@@ -908,6 +1234,8 @@ def preflight_source(session):
     if not os.path.isfile(source) or os.path.splitext(source)[1].lower() != ".prt":
         raise RuntimeError("Сначала сохраните тестовую деталь в обычный файл .prt")
     if part.IsModified:
+        if re.search(r"_MIRROR_TEST_\d+$", os.path.splitext(source)[0], re.IGNORECASE):
+            raise RuntimeError("Открыта изменённая тестовая копия. Для повторного теста активируйте исправный исходный проект. Копию с ошибками не используйте как исходник.")
         raise RuntimeError("В исходнике есть несохранённые изменения. Сохраните его обычной командой NX и запустите скрипт снова. Скрипт сам исходник не сохраняет.")
     return part, source
 
@@ -1143,6 +1471,7 @@ def main():
         sys.dont_write_bytecode = True
         import NXOpen
         import NXOpen.CAM
+        import NXOpen.Features
         import NXOpen.UF
     finally:
         sys.dont_write_bytecode = previous

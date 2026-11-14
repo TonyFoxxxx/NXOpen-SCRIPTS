@@ -431,6 +431,7 @@ class CsysArrayTests(unittest.TestCase):
             CreateCsys=lambda origin,matrix: create_csys(origin,matrix,False))
         trial = object.__new__(M.Trial)
         trial.plane, trial.refs, trial.bounds = plane, {}, {}
+        trial.protected_bodies = set()
         trial.reference = lambda tag: trial.refs.setdefault(tag, object())
         trial.bodies = [types.SimpleNamespace(Tag=1,
             GetFaces=lambda: [types.SimpleNamespace(Tag=3),types.SimpleNamespace(Tag=2)],
@@ -464,25 +465,15 @@ class CsysArrayTests(unittest.TestCase):
         old_origin, old_axes = [3.0,-4.0,5.0], [1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0]
         trial.frames = {91: (old_origin,old_axes)}
         trial.mcs_bindings = [(types.SimpleNamespace(Tag=7,Name='MCS_1'),59,91)]
-        trial.geometry_snapshot = lambda **kw: {}
-        trial.capture_parameters = lambda: None
-        trial.operation_snapshot = lambda: []
-        trial.lines, trial.operations = [], []
-        trial.native.reflection_matrix = lambda plane: [0.0] * 16
-        trial.native.transform_entities = Mock()
-        class ReachedToolpathDeletion(Exception):
-            pass
-        trial.setup = types.SimpleNamespace(DeleteToolPath=Mock(side_effect=ReachedToolpathDeletion))
-        with self.assertRaises(ReachedToolpathDeletion):
-            trial.run_in_absolute_wcs()
-        self.assertEqual(len(systems), 2)
+        trial.mcs_definitions = {91: ({91: None}, None)}
+        trial.mcs_sources = {(7,59): (M.PARAM_DEFAULT,0,'MCS_1')}
+        trial.transfer_mcs()
+        self.assertEqual(len(systems), 1)
         target = next(tag for tag, (_,_,temporary) in systems.items() if not temporary)
         origin, axes, _ = systems[target]
         self.assertTrue(M.close_values(origin, plane.point(old_origin)))
         self.assertTrue(M.close_values(axes, M.reflected_frame(old_axes, plane)))
         trial.uf.Param.SetTagValue.assert_called_once_with(7,59,target)
-        trial.native.transform_entities.assert_called_once_with([1],[0.0] * 16)
-        trial.setup.DeleteToolPath.assert_called_once_with([])
 
 
 class PlaneSelectionTests(unittest.TestCase):
@@ -567,6 +558,17 @@ class WcsTests(unittest.TestCase):
 
 
 class TransactionTests(unittest.TestCase):
+    def test_dirty_trial_copy_does_not_prompt_to_save_a_broken_result(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'part_MIRROR_TEST_003.prt'
+            source.write_bytes(b'prt')
+            part = types.SimpleNamespace(Tag=1, FullPath=str(source), IsModified=True, IsFullyLoaded=True,
+                ComponentAssembly=types.SimpleNamespace(RootComponent=None))
+            session = types.SimpleNamespace(Parts=types.SimpleNamespace(Display=part, Work=part))
+            with self.assertRaisesRegex(RuntimeError, 'исправный исходный проект') as caught:
+                M.preflight_source(session)
+            self.assertNotIn('Сохраните',str(caught.exception))
+
     def test_dirty_source_is_rejected_before_copying(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.prt"
