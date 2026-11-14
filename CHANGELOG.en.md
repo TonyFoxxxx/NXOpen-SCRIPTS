@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.15
+
+V1.14 passed automated checks and the user confirmed correct Workpiece selection, but reported missing selected faces in Three Planes. An extra Coincident → original Plane → face layer was identified. Replace that wrapper with CopyPlane of the original definition, retaining its method and direct geometry. Original Face/DatumPlane inputs still use one coincident plane with a direct reference. Intentional intermediate supports are not flattened to faces.
+
+Before reflection, freeze each original Plane's method and ordered direct selection. Verify them during construction and orientation, after installing the definition, after model update and at final verification, independently of coordinates and the UF graph. Missing/substituted geometry or a changed method stops the trial. Verify that CopyPlane returned a separate object in the same part. The report lists directly selected X/Y/Z objects. Axis, original-support, stock, CAM and rollback checks remain.
+
+All 189 checks outside NX passed, including 31 with a C library. Add 12 scenarios covering direct choices, definition copying and selection loss despite unchanged coordinates. Face highlighting/editing in the actual NX dialog, saving/reopening and toolpath generation on the user's PRT still need validation.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.14
 
 In the user's V1.13 run, candidate MCS axes matched expectations but its origin stayed at X = +60 instead of −60; Undo returned Internal error. Correct premature MCS transfer before protected-stock updates. Before reflection, derive an order from actual references to CSYS, bodies, faces, edges and stock features. Handle both MCS depending on stock and stock depending on CSYS. A cycle stops the trial before transformation.

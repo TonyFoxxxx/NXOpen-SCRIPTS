@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.14
-SCRIPT_VERSION = "V1.14"
+# SCRIPT_VERSION: V1.15
+SCRIPT_VERSION = "V1.15"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -692,6 +692,7 @@ class Trial:
         self.mcs_fixed_xforms = {}
         self.mcs_rebuilt = {}
         self.mcs_supports = {}
+        self.mcs_plane_selections = {}
         self.stock_features, self.protected_bodies = {}, set()
         self.cam_builder_state, self.cam_builder_labels = None, {}
         self.history_baseline, self.history_previous = None, None
@@ -792,6 +793,8 @@ class Trial:
                             planes = tuple(ordered)
                             for obj, plane in data:
                                 self.mcs_supports[int(obj.Tag)] = plane
+                                if isinstance(obj, self.nx.Plane):
+                                    self.mcs_plane_selections[int(obj.Tag)] = self.plane_selection(obj)
         self.mcs_definitions[tag] = (graph, planes)
         self.mcs_verified_definitions[tag] = graph
         fixed = self.mcs_fixed_xforms.get(tag)
@@ -823,6 +826,39 @@ class Trial:
         matrix, origin = self.uf.Csys.AskCsysInfo(tag)
         return list(origin), list(self.uf.Csys.AskMatrixValues(matrix))
 
+    def plane_selection(self, plane):
+        # A transitive UF parent path to a face does not prove that the native
+        # plane editor still selects that face. Freeze its DIRECT selection and
+        # construction method separately, before any geometry is transformed.
+        method = cam_enum_snapshot(plane.Method, self.nx.PlaneTypes.MethodType,
+                                   "Способ задания плоскости " + str(plane.Tag))
+        return (method, tuple(int(obj.Tag) for obj in plane.GetGeometry()))
+
+    def require_plane_selection(self, plane, expected, context):
+        actual = self.plane_selection(plane)
+        if actual != expected:
+            raise RuntimeError("Изменился прямой выбор Three Planes / " + context +
+                "\nСпособ ожидался: " + cam_value_text(expected[0]) +
+                "; фактически: " + cam_value_text(actual[0]) +
+                "\nВыбранные объекты ожидались: " + str(expected[1]) +
+                "; фактически: " + str(actual[1]))
+
+    def require_source_plane_selection(self, source):
+        if source in self.mcs_plane_selections:
+            self.require_plane_selection(self.refs[source], self.mcs_plane_selections[source],
+                                         "исходная опора " + str(source))
+
+    def verify_three_plane_selections(self, tag):
+        _, sources = self.mcs_definitions[tag]
+        if sources is None:
+            return
+        for source in sources:
+            self.require_source_plane_selection(source)
+        data = self.mcs_rebuilt.get(tag)
+        if data is not None:
+            for axis, plane, expected in zip("XYZ", data["planes"], data["selections"]):
+                self.require_plane_selection(plane, expected, "СК " + str(tag) + " / " + axis)
+
     def verify_support_plane(self, source):
         old = self.mcs_supports[source]
         expected = MirrorPlane(self.plane.point(old.origin), self.plane.vector(old.normal))
@@ -841,6 +877,7 @@ class Trial:
         self.stage = "Обновление опорных плоскостей MCS: " + str(tag)
         branches = {}
         for source in planes:
+            self.require_source_plane_selection(source)
             branch = graph_branch(graph, source)
             if self.smart_graph(source) != branch:
                 raise RuntimeError("Повреждено определение опорной плоскости MCS " + str(source))
@@ -853,6 +890,7 @@ class Trial:
             if branches[source] is not None and callable(evaluate):
                 evaluate()
         for source in planes:
+            self.require_source_plane_selection(source)
             if self.smart_graph(source) != graph_branch(graph, source):
                 raise RuntimeError("Изменилось определение опоры при обновлении MCS: " + str(source))
             self.stage = "Проверка положения опоры MCS " + str(tag) + " / " + str(source)
@@ -870,11 +908,11 @@ class Trial:
     def evaluate_three_planes(self, csys, data):
         # SmartObject.Evaluate is not recursive: explicitly evaluate parents
         # before their Xform, and the Xform before the CSYS which consumes it.
-        for plane, source in zip(data["planes"], data["sources"]):
+        for plane, source, selection in zip(data["planes"], data["sources"], data["selections"]):
             plane.Evaluate()
             self.verify_support_plane(source)
-            if tuple(int(o.Tag) for o in plane.GetGeometry()) != (source,):
-                raise RuntimeError("Изменилась выбранная плоскость Three Planes: " + str(source))
+            self.require_source_plane_selection(source)
+            self.require_plane_selection(plane, selection, "опора " + str(source))
             support = self.plane_data(self.refs[source])
             normal = MirrorPlane(xyz(plane.Origin), xyz(plane.Normal)).normal
             distance = dot(support.normal, [a-b for a,b in zip(xyz(plane.Origin), support.origin)])
@@ -913,30 +951,47 @@ class Trial:
 
     def rebuild_three_planes(self, tag, planes, expected_origin, expected_axes):
         nx = self.nx
-        oriented = []
+        oriented, selections = [], []
         for index, source in enumerate(planes):
             obj = self.refs[source]
             direction = expected_axes[index*3:index*3+3]
-            # Seed with the intended orientation; the actual associative plane
-            # still comes from the same selected face/datum/offset plane.
-            plane = self.part.Planes.CreatePlane(nx.Point3d(*expected_origin),
-                nx.Vector3d(*direction), nx.SmartObject.UpdateOption.AfterModeling)
-            plane.SetMethod(nx.PlaneTypes.MethodType.Coincident)
-            plane.SetGeometry([obj])
+            if isinstance(obj, nx.Plane):
+                # Copy the native definition, not Coincident([oldPlane]). The
+                # extra wrapper in V1.14 retained a transitive face dependency
+                # but changed what the Three Planes editor directly selected.
+                self.require_source_plane_selection(source)
+                selection = self.mcs_plane_selections[source]
+                plane = obj.CopyPlane()
+                if (plane is None or not isinstance(plane, nx.Plane)
+                        or not int(plane.Tag) or int(plane.Tag) in self.refs
+                        or plane.OwningPart is None or int(plane.OwningPart.Tag) != int(self.part.Tag)):
+                    raise RuntimeError("NX не создал отдельную копию определения плоскости " + str(source))
+            else:
+                # A directly selected Face/DatumPlane has no Plane definition
+                # to copy. One coincident Plane retains that direct selection.
+                plane = self.part.Planes.CreatePlane(nx.Point3d(*expected_origin),
+                    nx.Vector3d(*direction), nx.SmartObject.UpdateOption.AfterModeling)
+                plane.SetMethod(nx.PlaneTypes.MethodType.Coincident)
+                plane.SetGeometry([obj])
+                method = cam_enum_snapshot(nx.PlaneTypes.MethodType.Coincident,
+                    nx.PlaneTypes.MethodType, "Three Planes / совпадающая плоскость")
+                selection = (method, (source,))
+            self.require_plane_selection(plane, selection, "создание опоры " + str(source))
             plane.Evaluate()
             if dot(xyz(plane.Normal), direction) < 0.0:
                 plane.SetFlip(not plane.Flip)
                 plane.Evaluate()
             if not close_values(xyz(plane.Normal), direction):
                 raise RuntimeError("Не подтверждено направление плоскости Three Planes: " + str(source))
-            if tuple(int(o.Tag) for o in plane.GetGeometry()) != (source,):
-                raise RuntimeError("Изменилась выбранная плоскость Three Planes")
+            self.require_plane_selection(plane, selection, "ориентация опоры " + str(source))
             plane.SetVisibility(nx.SmartObject.VisibilityOption.Invisible)
             oriented.append(plane)
+            selections.append(selection)
         xform = self.part.Xforms.CreateXform(oriented[0], oriented[1], oriented[2],
                                             nx.SmartObject.UpdateOption.AfterModeling, 1.0)
         replacement = self.part.CoordinateSystems.CreateCoordinateSystem(xform, nx.SmartObject.UpdateOption.AfterModeling)
         data = {"planes": tuple(oriented), "sources": tuple(planes), "xform": xform,
+                "selections": tuple(selections),
                 "origin": tuple(expected_origin), "axes": tuple(expected_axes),
                 "source_graphs": {source: graph_branch(self.mcs_definitions[tag][0], source) for source in planes}}
         # A candidate must have the requested frame before touching the existing
@@ -954,11 +1009,12 @@ class Trial:
                 or any(not isinstance(self.refs[p], nx.Scalar) for p in inputs - plane_tags)
                 or not close_values([float(xform.Scale)], [1.0])):
             raise RuntimeError("NX не сохранил определение Three Planes")
-        for p, source in zip(oriented, planes):
-            if source not in (graph[int(p.Tag)] or ()):
-                raise RuntimeError("NX не сохранил ссылку Three Planes на исходную плоскость")
+        for p, selection in zip(oriented, selections):
+            if not set(selection[1]).issubset(graph[int(p.Tag)] or ()):
+                raise RuntimeError("NX не сохранил прямые ссылки Three Planes на выбранные объекты")
         self.mcs_verified_definitions[tag] = graph
         self.mcs_rebuilt[tag] = data
+        self.verify_three_plane_selections(tag)
 
     def stabilize_three_planes_after_update(self):
         repaired = False
@@ -970,6 +1026,7 @@ class Trial:
             self.stage = "Проверка Three Planes после обновления модели: " + str(tag)
             if self.smart_graph(tag) != self.mcs_verified_definitions[tag]:
                 raise RuntimeError("Изменилось определение Three Planes после обновления модели: " + str(tag))
+            self.verify_three_plane_selections(tag)
             actual_origin, actual_axes = self.csys_frame(tag)
             if close_values(actual_origin, origin) and close_values(actual_axes, axes):
                 continue
@@ -995,6 +1052,7 @@ class Trial:
                 continue
             if self.smart_graph(tag) != self.mcs_verified_definitions[tag]:
                 raise RuntimeError("Изменилось определение Three Planes при контрольном обновлении: " + str(tag))
+            self.verify_three_plane_selections(tag)
             origin, axes = self.frames[tag]
             self.require_csys_frame(tag, self.plane.point(origin), reflected_frame(axes, self.plane),
                                     "контрольное обновление модели")
@@ -1636,6 +1694,9 @@ class Trial:
         return replacement
 
     def verify_mcs(self, replacement):
+        for tag in self.mcs_definitions:
+            self.stage = "Итоговая проверка прямого выбора Three Planes: " + str(tag)
+            self.verify_three_plane_selections(tag)
         for source in self.mcs_supports:
             self.stage = "Итоговая проверка опоры MCS: " + str(source)
             self.verify_support_plane(source)
@@ -1676,6 +1737,17 @@ class Trial:
             self.stage = "Проверка связи RCS с MCS: " + label
             if bool(self.uf.Param.AskLogicalValue(tag, 41)) != linked:
                 raise RuntimeError("Изменился параметр связи RCS с MCS: " + label)
+        for tag, (_, sources) in self.mcs_definitions.items():
+            if sources is None:
+                continue
+            data = self.mcs_rebuilt.get(tag)
+            selections = (data["selections"] if data is not None else
+                tuple(self.mcs_plane_selections.get(source, (None, (source,))) for source in sources))
+            for axis, (_, selected) in zip("XYZ", selections):
+                labels = [type(self.nx.TaggedObjectManager.GetTaggedObject(value)).__name__ + " " + str(value)
+                          for value in selected]
+                self.lines.append("Прямой выбор Three Planes " + str(tag) + " / " + axis + ": " +
+                                  (", ".join(labels) if labels else "нет объектов в исходном определении"))
 
     def capture_topology(self):
         # The Python UF wrapper requires List[float]; the stored plane is immutable.
