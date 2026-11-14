@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SPEC = importlib.util.spec_from_file_location("mirror_trial", Path(__file__).parents[1] / "scripts/NX_Mirror_Project.py")
@@ -378,6 +378,85 @@ class NativeModellingTests(unittest.TestCase):
                 call()
             self.assertEqual(caught.exception.code, 999)
             self.assertEqual(caught.exception.context, context)
+
+
+class CsysArrayTests(unittest.TestCase):
+    def trial(self, plane):
+        matrices, systems = {}, {}
+        def require_doubles(value, count):
+            if type(value) is not list:
+                raise TypeError('Expecting List of double type, found ' + type(value).__name__)
+            self.assertEqual(len(value), count)
+            self.assertTrue(all(type(v) is float for v in value))
+        def create_matrix(values):
+            require_doubles(values, 9)
+            tag = 100 + len(matrices)
+            matrices[tag] = values[:]
+            return tag
+        def create_csys(origin, matrix, temporary):
+            require_doubles(origin, 3)
+            self.assertIn(matrix, matrices)
+            tag = 200 + len(systems)
+            systems[tag] = (origin[:], matrices[matrix], temporary)
+            return tag
+        csys = types.SimpleNamespace(
+            CreateMatrix=create_matrix,
+            CreateTempCsys=lambda origin,matrix: create_csys(origin,matrix,True),
+            CreateCsys=lambda origin,matrix: create_csys(origin,matrix,False))
+        trial = object.__new__(M.Trial)
+        trial.plane, trial.refs, trial.bounds = plane, {}, {}
+        trial.reference = lambda tag: trial.refs.setdefault(tag, object())
+        trial.bodies = [types.SimpleNamespace(Tag=1,
+            GetFaces=lambda: [types.SimpleNamespace(Tag=3),types.SimpleNamespace(Tag=2)],
+            GetEdges=lambda: [types.SimpleNamespace(Tag=5),types.SimpleNamespace(Tag=4)])]
+        trial.uf = types.SimpleNamespace(Csys=csys, Param=types.SimpleNamespace(SetTagValue=Mock()))
+        trial.nx = types.SimpleNamespace(Point=type('Point', (), {}), Curve=type('Curve', (), {}))
+        trial.native = types.SimpleNamespace(bounding_box_exact=Mock(return_value=(
+            [1.0,2.0,3.0], [[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]], [4.0,5.0,6.0])))
+        return trial, systems
+
+    def test_topology_accepts_immutable_plane_with_strict_uf_list_arguments(self):
+        for normal in ((-1,0,0), (1,2,3)):
+            with self.subTest(normal=normal):
+                plane = M.MirrorPlane((0,-24.99999999999998,8), normal)
+                original_origin, original_basis = plane.origin, plane.basis
+                trial, systems = self.trial(plane)
+                topology = trial.capture_topology()
+                self.assertEqual(topology, {1: ((2,3),(4,5))})
+                self.assertEqual(set(trial.bounds), {1,2,3,4,5})
+                self.assertEqual(systems[trial.box_csys], (list(original_origin),list(original_basis),True))
+                self.assertEqual([call.args for call in trial.native.bounding_box_exact.call_args_list],
+                                 [(tag,trial.box_csys) for tag in (1,3,2,5,4)])
+                self.assertIs(plane.origin, original_origin)
+                self.assertIs(plane.basis, original_basis)
+                self.assertIsInstance(plane.origin, tuple)
+                self.assertIsInstance(plane.basis, tuple)
+
+    def test_next_mcs_creation_also_meets_strict_uf_double_list_contract(self):
+        plane = M.MirrorPlane((4,2,7), (1,2,3))
+        trial, systems = self.trial(plane)
+        old_origin, old_axes = [3.0,-4.0,5.0], [1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0]
+        trial.frames = {91: (old_origin,old_axes)}
+        trial.mcs_bindings = [(types.SimpleNamespace(Tag=7),59,91)]
+        trial.geometry_snapshot = lambda **kw: {}
+        trial.capture_parameters = lambda: None
+        trial.operation_snapshot = lambda: []
+        trial.lines, trial.operations = [], []
+        trial.native.reflection_matrix = lambda plane: [0.0] * 16
+        trial.native.transform_entities = Mock()
+        class ReachedToolpathDeletion(Exception):
+            pass
+        trial.setup = types.SimpleNamespace(DeleteToolPath=Mock(side_effect=ReachedToolpathDeletion))
+        with self.assertRaises(ReachedToolpathDeletion):
+            trial.run_in_absolute_wcs()
+        self.assertEqual(len(systems), 2)
+        target = next(tag for tag, (_,_,temporary) in systems.items() if not temporary)
+        origin, axes, _ = systems[target]
+        self.assertTrue(M.close_values(origin, plane.point(old_origin)))
+        self.assertTrue(M.close_values(axes, M.reflected_frame(old_axes, plane)))
+        trial.uf.Param.SetTagValue.assert_called_once_with(7,59,target)
+        trial.native.transform_entities.assert_called_once_with([1],[0.0] * 16)
+        trial.setup.DeleteToolPath.assert_called_once_with([])
 
 
 class PlaneSelectionTests(unittest.TestCase):

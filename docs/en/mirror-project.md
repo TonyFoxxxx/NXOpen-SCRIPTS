@@ -2,13 +2,13 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.05**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.06**.
 
 ## Latest release
 
-**V1.05 · 2026-11-14** — fix conversion of `NXOpen.UF.ParamStatusMemberType` to an integer when reading MCS/RCS. Fix the same call when reading local 3D operation parameters.
+**V1.06 · 2026-11-14** — fix “Expecting List of double type, found tuple” when creating the coordinate system for topology and bounds checks. Pass a list of nine numbers to `Csys.CreateMatrix` and a list of three coordinates to `Csys.CreateTempCsys`. Preserve the original selected-plane data.
 
-Read status through `UF_PARAM_ask_param_status` with the types declared in `uf_param.h`. Explicitly distinguish default, inherited and locally overridden values. Inherited MCS/RCS definitions are not added to the local replacement list; the root-frame rule is retained. An invalid index, unknown status or API error stops the trial before geometry transformation. The report identifies the CAM node and parameter index.
+New checks reproduced the V1.05 error, then passed with the fix. Coverage includes both calls for the reported plane and an oblique plane, plus argument types during subsequent reflected MCS creation. Reflection mathematics and the model workflow are retained.
 
 **This remains a trial. A complete successful run in NX / Designcenter 2606 is not yet confirmed. Other numerical directions and coordinates inside operation settings are not transformed yet.**
 
@@ -16,7 +16,7 @@ Read status through `UF_PARAM_ask_param_status` with the types declared in `uf_p
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.05**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.06**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files are never replaced.
 6. Read and share the report using **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. Then save the open test copy using the normal NX command and regenerate operations.
@@ -47,4 +47,4 @@ Read status through `UF_PARAM_ask_param_status` with the types declared in `uf_p
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-Fifty-three checks passed outside NX, including 16 with a separately compiled C library. New checks cover parameter statuses, local and inherited MCS/RCS, local nonzero 3D parameters, invalid/unknown statuses and API errors. Geometry, boundary, plane selection, WCS restoration and rollback checks are retained. The V1.04 report reached MCS capture after reading geometry references, then failed while converting the MCS status. A complete V1.05 run still requires validation in NX.
+Fifty-five checks passed outside NX, including 16 with a separately compiled C library. Two new checks require lists of floats when creating the temporary coordinate system and reflected MCS; before the fix they reproduced the tuple argument error. Status, MCS/RCS inheritance, geometry, boundary, plane selection, WCS restoration and rollback checks are retained. The V1.05 report completed MCS and reference parameter capture, then stopped at the start of topology capture. A complete V1.06 run still requires validation in NX.

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.05
-SCRIPT_VERSION = "V1.05"
+# SCRIPT_VERSION: V1.06
+SCRIPT_VERSION = "V1.06"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -670,8 +670,9 @@ class Trial:
             raise RuntimeError("Не найдены системы координат MCS")
 
     def capture_topology(self):
-        matrix_tag = self.uf.Csys.CreateMatrix(self.plane.basis)
-        self.box_csys = self.uf.Csys.CreateTempCsys(self.plane.origin, matrix_tag)
+        # The Python UF wrapper requires List[float]; the stored plane is immutable.
+        matrix_tag = self.uf.Csys.CreateMatrix(list(self.plane.basis))
+        self.box_csys = self.uf.Csys.CreateTempCsys(list(self.plane.origin), matrix_tag)
         result = {}
         for body in self.bodies:
             self.reference(body.Tag)

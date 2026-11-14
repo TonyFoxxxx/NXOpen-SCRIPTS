@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.06
+
+Fix passing a tuple instead of a list to `Csys.CreateMatrix` during topology capture. Apply the same correction to origin coordinates in the subsequent `Csys.CreateTempCsys` call. Pass the selected plane's matrix and origin as lists of floats without changing the stored plane data.
+
+Two new checks reproduced the V1.05 error and passed after the fix. Check argument types for temporary coordinate system creation and subsequent MCS transfer, including an oblique plane. All 55 checks passed outside NX, including 16 with a C library. A complete V1.06 run in NX remains unconfirmed.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.05
 
 Fix `int(NXOpen.UF.ParamStatusMemberType)` when reading MCS/RCS and local spatial parameters. Read status through `UF_PARAM_ask_param_status` using its documented C type. Preserve the distinction between local and inherited coordinate systems, including root handling; invalid/unknown statuses and API errors stop the trial. The report identifies the CAM node and parameter index.
