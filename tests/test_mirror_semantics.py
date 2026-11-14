@@ -522,11 +522,216 @@ class CamStateTests(unittest.TestCase):
             trial.check_cam_builders()
 
 
+class HistoryTests(unittest.TestCase):
+    def trial(self):
+        class Expression:
+            def __init__(self, tag, name, rhs, kind='Number'):
+                self.Tag, self.Name, self.RightHandSide, self.Type = tag,name,rhs,kind
+            @property
+            def Units(self):
+                if self.Type != 'Number':
+                    raise AssertionError('Units must only be read on Number expressions')
+                return NS(Name='MilliMeter')
+        class Feature:
+            def __init__(self, tag, name, kind, parents=(), expressions=()):
+                self.Tag, self.Name, self.FeatureType = tag,name,kind
+                self.parents, self.expressions, self.errors = list(parents),list(expressions),[]
+            def GetParents(self):
+                return list(self.parents)
+            def GetExpressions(self):
+                return list(self.expressions)
+            def GetFeatureErrorMessages(self):
+                return list(self.errors)
+        body = Feature(10,'Part','BREP')
+        stock = Feature(20,'Part Box','TOOLING BOX',[body],[Expression(100,'stock_offset','2.5')])
+        group = Feature(90,'CAM_WORKPIECE','FSET',[body,stock])
+        trial = object.__new__(M.Trial)
+        trial.part = NS(Features=[body,stock,group])
+        trial.history_baseline, trial.history_previous = None,None
+        trial.lines = []
+        return trial,body,stock,group,Expression,Feature
+
+    def test_reordering_features_parents_and_expressions_is_not_a_change(self):
+        trial,body,stock,group,Expression,_ = self.trial()
+        stock.expressions.append(Expression(101,'height','16'))
+        trial.checkpoint_model_history('Before')
+        trial.part.Features.reverse()
+        group.parents.reverse()
+        stock.expressions.reverse()
+        trial.checkpoint_model_history('After')
+        trial.verify_model_history()
+        self.assertFalse(trial.lines)
+
+    def test_coordinate_formula_changes_are_not_misreported_as_lost_expression_ids(self):
+        trial,_,stock,_,_,_ = self.trial()
+        trial.checkpoint_model_history('Before')
+        stock.expressions[0].RightHandSide = '-2.5'
+        trial.checkpoint_model_history('Reflection')
+        trial.verify_model_history()
+        self.assertFalse(trial.lines)
+        self.assertIn('= 2.5',trial.history_baseline[20]['expressions'][100])
+        self.assertIn('= -2.5',trial.history_previous[20]['expressions'][100])
+
+    def test_deleted_feature_reports_its_name_and_frozen_parameters_not_last_feature(self):
+        trial,_,stock,_,_,_ = self.trial()
+        trial.checkpoint_model_history('Before')
+        trial.part.Features.remove(stock)
+        stock.GetExpressions = Mock(side_effect=AssertionError('Deleted NX object must not be reread'))
+        trial.checkpoint_model_history('Reflection')
+        with self.assertRaises(RuntimeError) as caught:
+            trial.verify_model_history()
+        report = str(caught.exception)
+        self.assertIn('Удалён: Part Box [TOOLING BOX] (элемент 20)',report)
+        self.assertIn('100: stock_offset [Number] = 2.5; единицы: MilliMeter',report)
+        self.assertIn('Part Box',trial.stage)
+        self.assertNotIn('CAM_WORKPIECE',trial.stage)
+        stock.GetExpressions.assert_not_called()
+
+    def test_added_feature_is_identified_instead_of_silently_adopted(self):
+        trial,_,_,_,Expression,Feature = self.trial()
+        trial.checkpoint_model_history('Before')
+        trial.part.Features.append(Feature(30,'New datum','DATUM_PLANE',expressions=[Expression(110,'offset','0')]))
+        trial.checkpoint_model_history('MCS transfer')
+        with self.assertRaisesRegex(RuntimeError,'Добавлен: New datum.*DATUM_PLANE'):
+            trial.verify_model_history()
+        self.assertIn('MCS transfer','\n'.join(trial.lines))
+
+    def test_replaced_parent_is_detected_with_the_same_parent_count(self):
+        trial,_,stock,_,_,Feature = self.trial()
+        other = Feature(11,'Other Part','BREP')
+        trial.part.Features.insert(1,other)
+        trial.checkpoint_model_history('Before')
+        stock.parents = [other]
+        trial.checkpoint_model_history('Stock update')
+        with self.assertRaises(RuntimeError) as caught:
+            trial.verify_model_history()
+        report = str(caught.exception)
+        self.assertIn('Родители: количество 1 → 1',report)
+        self.assertIn('10: Part [BREP]',report)
+        self.assertIn('11: Other Part [BREP]',report)
+
+    def test_matching_formula_does_not_authorize_replacement_expression_ids(self):
+        trial,_,stock,_,Expression,_ = self.trial()
+        trial.checkpoint_model_history('Before')
+        stock.expressions = [Expression(200,'stock_offset','2.5')]
+        trial.checkpoint_model_history('Stock update')
+        with self.assertRaises(RuntimeError) as caught:
+            trial.verify_model_history()
+        report = str(caught.exception)
+        self.assertIn('Выражения: количество 1 → 1',report)
+        self.assertIn('100: stock_offset',report)
+        self.assertIn('200: stock_offset',report)
+
+    def test_removed_feature_parameters_remain_a_failure(self):
+        trial,_,stock,_,_,_ = self.trial()
+        trial.checkpoint_model_history('Before')
+        stock.expressions.clear()
+        trial.checkpoint_model_history('Reflection')
+        with self.assertRaisesRegex(RuntimeError,'Выражения: количество 1 → 0'):
+            trial.verify_model_history()
+
+    def test_feature_type_change_is_reported_even_when_ids_are_retained(self):
+        trial,_,stock,_,_,_ = self.trial()
+        trial.checkpoint_model_history('Before')
+        stock.FeatureType = 'BREP'
+        trial.checkpoint_model_history('Reflection')
+        with self.assertRaisesRegex(RuntimeError,'Тип: до = TOOLING BOX; после = BREP'):
+            trial.verify_model_history()
+
+    def test_checkpoint_deltas_do_not_reassign_earlier_changes_to_later_steps(self):
+        trial,body,stock,_,Expression,_ = self.trial()
+        trial.checkpoint_model_history('Before')
+        body.FeatureType = 'IMPORTED_BODY'
+        trial.checkpoint_model_history('Reflection')
+        count = len(trial.lines)
+        trial.checkpoint_model_history('Unchanged CAM read')
+        self.assertEqual(len(trial.lines),count)
+        stock.expressions.append(Expression(200,'new_offset','0'))
+        trial.checkpoint_model_history('Stock update')
+        self.assertIn('Stock update','\n'.join(trial.lines[count:]))
+        self.assertNotIn('IMPORTED_BODY','\n'.join(trial.lines[count:]))
+        with self.assertRaisesRegex(RuntimeError,'элементов: 2'):
+            trial.verify_model_history()
+
+    def test_temporary_change_restored_before_final_check_does_not_reset_baseline(self):
+        trial,_,stock,_,Expression,_ = self.trial()
+        trial.checkpoint_model_history('Before')
+        baseline = trial.history_baseline
+        original = stock.expressions[:]
+        stock.expressions = [Expression(200,'temporary','2.5')]
+        trial.checkpoint_model_history('Intermediate')
+        stock.expressions = original
+        trial.checkpoint_model_history('Restored')
+        trial.verify_model_history()
+        self.assertIs(trial.history_baseline,baseline)
+        self.assertIn('Intermediate','\n'.join(trial.lines))
+        self.assertIn('Restored','\n'.join(trial.lines))
+
+    def test_model_error_identifies_feature_and_action(self):
+        trial,_,stock,_,_,_ = self.trial()
+        trial.checkpoint_model_history('Before')
+        stock.errors = ['feature update failed']
+        with self.assertRaisesRegex(RuntimeError,'Part Box.*Stock update.*feature update failed'):
+            trial.checkpoint_model_history('Stock update',check_errors=True)
+        self.assertIn('Part Box',trial.stage)
+        self.assertIn('Stock update',trial.stage)
+
+    def test_intermediate_snapshot_does_not_reject_a_temporary_error_before_update(self):
+        trial,_,stock,_,_,_ = self.trial()
+        trial.checkpoint_model_history('Before',check_errors=True)
+        stock.errors = ['update pending']
+        trial.checkpoint_model_history('Before stock update')
+        stock.errors = []
+        trial.checkpoint_model_history('After model update',check_errors=True)
+        trial.verify_model_history()
+
+    def test_string_expression_does_not_query_numeric_units(self):
+        trial,_,stock,_,Expression,_ = self.trial()
+        stock.expressions = [Expression(101,'description','"fixture"','String')]
+        snapshot = trial.model_history()
+        self.assertEqual(snapshot[20]['expressions'][101],'description [String] = "fixture"')
+
+    def test_unavailable_optional_expression_description_does_not_erase_id(self):
+        trial,_,stock,_,_,_ = self.trial()
+        stock.expressions = [NS(Tag=100)]
+        trial.checkpoint_model_history('Before')
+        self.assertIn('описание недоступно',trial.history_baseline[20]['expressions'][100])
+        stock.expressions = []
+        trial.checkpoint_model_history('Stock update')
+        with self.assertRaisesRegex(RuntimeError,'100: описание недоступно'):
+            trial.verify_model_history()
+
+    def test_full_workflow_locates_stock_change_without_skipping_cam_or_changing_baseline(self):
+        trial,_,stock,_,Expression,_ = self.trial()
+        trial.check_cam_builders, trial.capture_stock = Mock(),Mock()
+        trial.geometry_snapshot = lambda **kw:{}
+        trial.capture_parameters, trial.capture_topology = Mock(),Mock(return_value={})
+        trial.operation_snapshot = lambda:[]
+        trial.frames, trial.refs, trial.bounds = {},{},{}
+        trial.bodies, trial.protected_bodies, trial.operations = [NS(Tag=1)],set(),[]
+        trial.nx = NS(Curve=type('Curve',(),{}),Point=type('Point',(),{}))
+        trial.native = NS(reflection_matrix=lambda plane:[0]*16,transform_entities=Mock(),update_model=Mock())
+        trial.plane = M.MirrorPlane([0,0,0],[1,0,0])
+        trial.transfer_mcs = Mock(return_value={})
+        trial.update_stock = lambda:stock.expressions.append(Expression(200,'new_offset','0'))
+        trial.setup = NS(DeleteToolPath=Mock())
+        trial.transfer_boundary_planes = Mock()
+        with self.assertRaisesRegex(RuntimeError,'200: new_offset'):
+            trial.run_in_absolute_wcs()
+        report = '\n'.join(trial.lines)
+        self.assertIn('Изменения истории зафиксированы после этапа: Обновление параметрических заготовок',report)
+        self.assertNotIn('после этапа: Отражение геометрии',report)
+        self.assertNotIn(200,trial.history_baseline[20]['expressions'])
+        self.assertEqual(trial.check_cam_builders.call_count,2)
+        trial.native.transform_entities.assert_called_once()
+        trial.setup.DeleteToolPath.assert_called_once()
+
+
 class StockTests(unittest.TestCase):
     def test_protected_stock_is_excluded_from_raw_transform(self):
         trial = object.__new__(M.Trial)
         trial.check_cam_builders, trial.capture_stock = Mock(), Mock()
-        trial.model_history = lambda:{}
+        trial.model_history = lambda *args:{}
         trial.geometry_snapshot = lambda **kw:{}
         trial.capture_parameters, trial.capture_topology = Mock(), Mock(return_value={})
         trial.operation_snapshot = lambda:[]

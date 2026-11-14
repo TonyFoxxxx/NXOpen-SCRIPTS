@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.10
-SCRIPT_VERSION = "V1.10"
+# SCRIPT_VERSION: V1.11
+SCRIPT_VERSION = "V1.11"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -80,6 +80,47 @@ def cam_value_text(value):
     if value[0] == "enum":
         return (value[2] + " " if value[2] else "") + "(код " + str(value[1]) + ")"
     return str(value[1])
+
+
+def history_feature_label(tag, record):
+    if record is None:
+        return "элемент " + str(tag)
+    return (record["name"] or "Без имени") + " [" + record["type"] + "] (элемент " + str(tag) + ")"
+
+
+def history_reference_text(values, tags):
+    return "; ".join(str(tag) + ": " + values[tag] for tag in sorted(tags)) or "нет"
+
+
+def model_history_changes(before, after):
+    """Compare the same structural invariants as before; descriptions are only
+    diagnostic. Reflection can legitimately change coordinate-expression RHS.
+    A matching RHS does not make a lost/replaced expression tag acceptable.
+    """
+    differences = []
+    for tag in sorted(set(before) | set(after)):
+        old, new = before.get(tag), after.get(tag)
+        if old is None or new is None:
+            record = new if old is None else old
+            differences.append((tag, [
+                ("Добавлен: " if old is None else "Удалён: ") + history_feature_label(tag, record),
+                "  Родители: " + history_reference_text(record["parents"], record["parents"]),
+                "  Выражения: " + history_reference_text(record["expressions"], record["expressions"])]))
+            continue
+        details = []
+        if old["type"] != new["type"]:
+            details.append("  Тип: до = " + old["type"] + "; после = " + new["type"])
+        for field, caption in (("parents", "Родители"), ("expressions", "Выражения")):
+            removed = set(old[field]) - set(new[field])
+            added = set(new[field]) - set(old[field])
+            if removed or added:
+                details.extend([
+                    "  " + caption + ": количество " + str(len(old[field])) + " → " + str(len(new[field])),
+                    "    Убраны из определения: " + history_reference_text(old[field], removed),
+                    "    Добавлены в определение: " + history_reference_text(new[field], added)])
+        if details:
+            differences.append((tag, ["Изменён: " + history_feature_label(tag, new)] + details))
+    return differences
 
 
 def reflect(values, axis, offset=0.0):
@@ -632,6 +673,7 @@ class Trial:
         self.mcs_fixed_xforms = {}
         self.stock_features, self.protected_bodies = {}, set()
         self.cam_builder_state, self.cam_builder_labels = None, {}
+        self.history_baseline, self.history_previous = None, None
         self.boundary_planes, self.current_boundaries = {}, {}
         self.moved_boundary_count = 0
         if not self.bodies or not self.operations:
@@ -794,17 +836,67 @@ class Trial:
                 raise RuntimeError("NX не сохранил ссылку Three Planes на исходную плоскость")
         self.mcs_verified_definitions[tag] = graph
 
-    def model_history(self):
+    def model_history(self, context="исходное состояние", check_errors=True):
         result = {}
         for feature in self.part.Features:
-            self.stage = "Проверка параметрической истории: " + str(feature.Name)
-            errors = list(feature.GetFeatureErrorMessages())
+            tag = int(feature.Tag)
+            record = {"name": str(feature.Name), "type": str(feature.FeatureType)}
+            self.stage = "Чтение истории модели / " + context + " / " + history_feature_label(tag, record)
+            # Intermediate snapshots do not introduce an extra model update or
+            # reject a temporary error before MCS/stock repair has completed.
+            # Validate errors at the original initial/final checkpoints only.
+            errors = list(feature.GetFeatureErrorMessages()) if check_errors else []
             if errors:
-                raise RuntimeError("Ошибка модельного элемента " + str(feature.Name) + ": " + "; ".join(errors))
-            result[int(feature.Tag)] = (str(feature.FeatureType),
-                tuple(sorted(int(p.Tag) for p in feature.GetParents())),
-                tuple(sorted(int(e.Tag) for e in feature.GetExpressions())))
+                raise RuntimeError("Ошибка модельного элемента " + history_feature_label(tag, record) +
+                                   " после этапа «" + context + "»: " + "; ".join(str(e) for e in errors))
+            record["parents"] = {int(p.Tag): str(p.Name) + " [" + str(p.FeatureType) + "]"
+                                 for p in feature.GetParents()}
+            expressions = {}
+            for expression in feature.GetExpressions():
+                expression_tag = int(expression.Tag)
+                # These descriptions must be frozen while the object is alive:
+                # a later transform may remove the expression. They do not
+                # authorize changing or recreating any parameter.
+                try:
+                    kind = str(expression.Type)
+                    text = str(expression.Name) + " [" + kind + "] = " + str(expression.RightHandSide)
+                    # NX Expression.Units is only valid for Number expressions.
+                    if kind.lower() == "number":
+                        units = expression.Units
+                        text += "; единицы: " + (str(units.Name) if units is not None else "безразмерное")
+                except Exception as error:
+                    text = "описание недоступно: " + type(error).__name__ + ": " + str(error)
+                expressions[expression_tag] = text
+            record["expressions"] = expressions
+            result[tag] = record
         return result
+
+    def checkpoint_model_history(self, context, check_errors=False):
+        current = self.model_history(context, check_errors)
+        if self.history_baseline is None:
+            self.history_baseline = current
+        else:
+            changes = model_history_changes(self.history_previous, current)
+            if changes:
+                self.lines.append("\nИзменения истории зафиксированы после этапа: " + context)
+                for _, details in changes:
+                    self.lines.extend(details)
+        self.history_previous = current
+        self.stage = "История модели: " + context
+        return current
+
+    def verify_model_history(self):
+        changes = model_history_changes(self.history_baseline, self.history_previous)
+        if not changes:
+            return
+        tag = changes[0][0]
+        record = self.history_previous.get(tag, self.history_baseline.get(tag))
+        self.stage = "Сравнение истории модели: " + history_feature_label(tag, record)
+        details = ["В итоговой истории изменились элементы, родители или состав выражений; элементов: " + str(len(changes))]
+        for _, lines in changes:
+            details.extend(lines)
+        details.append("Этапы появления различий приведены выше. Допустимость этих изменений не подтверждена.")
+        raise RuntimeError("\n".join(details))
 
     def tooling_builder(self, feature):
         return self.part.Features.ToolingFeatureCollection.CreateToolingBoxBuilder(feature)
@@ -1297,7 +1389,8 @@ class Trial:
 
     def run_in_absolute_wcs(self):
         self.check_cam_builders()
-        history = self.model_history()
+        self.history_baseline, self.history_previous = None, None
+        self.checkpoint_model_history("Исходное состояние после первичного чтения CAM", check_errors=True)
         self.capture_stock()
         self.stage = "Чтение геометрических ссылок в копии"
         geometry = self.geometry_snapshot(collect=True)
@@ -1323,21 +1416,29 @@ class Trial:
         self.lines.append("Тела: " + str(len(self.bodies)) + "; операции: " + str(len(self.operations)))
         self.lines.append("Проверяемые тела/грани/рёбра/кривые/точки: " + str(len(self.bounds)))
         self.lines.append("MCS/RCS, включая корневую систему: " + str(len(self.frames)))
+        self.checkpoint_model_history("Подготовка геометрии, MCS и заготовок до отражения")
         self.stage = "Создание матрицы отражения"
         matrix = self.native.reflection_matrix(self.plane)
         self.stage = "Отражение геометрии и её модельных родителей"
         self.native.transform_entities(list(targets), matrix)
+        self.checkpoint_model_history("Отражение геометрии и её модельных родителей")
         self.stage = "Перенос систем координат"
         replacement = self.transfer_mcs()
+        self.checkpoint_model_history("Перенос определений MCS/RCS")
+        self.stage = "Обновление параметрических заготовок"
         self.update_stock()
+        self.checkpoint_model_history("Обновление параметрических заготовок")
         self.stage = "Удаление рассчитанных траекторий в копии"
         self.setup.DeleteToolPath(self.operations)
         self.stage = "Обновление и проверка результата"
         self.native.update_model()
+        self.checkpoint_model_history("Удаление траекторий и обновление модели")
+        self.stage = "Перенос заданных плоскостей границ"
         self.transfer_boundary_planes(geometry)
+        self.checkpoint_model_history("Перенос заданных плоскостей границ")
         self.check_cam_builders()
-        if self.model_history() != history:
-            raise RuntimeError("Изменились модельные элементы, их родители или параметры. Связи CAM не подтверждены.")
+        self.checkpoint_model_history("Повторное чтение редакторов CAM", check_errors=True)
+        self.verify_model_history()
         self.stage = "Проверка отражённой геометрии, границ и MCS"
         if self.operation_snapshot() != operations:
             raise RuntimeError("Изменился состав операций или их геометрические родители")

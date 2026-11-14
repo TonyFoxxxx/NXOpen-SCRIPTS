@@ -255,7 +255,7 @@ class BoundaryAbiTests(unittest.TestCase):
         trial.mcs_definitions, trial.mcs_verified_definitions = {}, {}
         trial.mcs_fixed_xforms = {}
         trial.check_cam_builders = lambda: None
-        trial.model_history = lambda: {}
+        trial.model_history = lambda *args: {}
         trial.capture_stock = lambda: None
         trial.mcs_bindings, trial.raw_spatial = [], []
         trial.reference = lambda tag: trial.refs.setdefault(tag, object())

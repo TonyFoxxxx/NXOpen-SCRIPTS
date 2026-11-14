@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.11
+
+V1.10 passed CAM settings validation but stopped at the final model-history comparison. CAM_WORKPIECE was the last read stage, not an established source of the discrepancy. Report specific added, deleted and changed features, types, parents and expression membership before/after. Freeze names and available formulas in memory before objects can be deleted; read units only for numeric expressions. Explicitly mark unavailable optional descriptions while retaining the identifier in validation.
+
+Capture history after preparation, geometry reflection, MCS/RCS transfer, stock update, path removal/model update, boundary-plane transfer and CAM reads. Show only new differences between stages and compare the final result with the unchanged original baseline. Additional reads do not update the model; feature errors are checked at the original initial/final checkpoints. Do not automatically permit feature/parameter deletion, changed parents or replacement expressions with identical formulas. A formula change under the same identifier did not and does not itself count as parameter loss; this checks history membership, not every CAD value.
+
+All 125 checks outside NX passed, including 31 with a C library. New cases cover locating differences, lost parameters, frozen descriptions of deleted objects, temporary changes and validation inside the full trial workflow. This is a diagnostic release: the exact cause in the user's PRT, its correction, a complete run and NX toolpath generation remain unconfirmed.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.10
 
 The V1.09 report identified the GEOMETRY root CSYS as backed by a numerical Xform and the two MCS definitions as Three Planes. Execution reached the second read and Validate of Workpiece/MCS/operation editors, then stopped at the aggregate settings comparison. The last inspected operation's name did not identify the source of the difference, and the changed field was not reported.
