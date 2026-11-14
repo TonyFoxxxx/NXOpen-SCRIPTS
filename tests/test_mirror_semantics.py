@@ -44,6 +44,7 @@ class SmartWorld:
             def __init__(self, origin, normal, update):
                 super().__init__()
                 self.Origin, self.Normal, self.Flip = origin, normal, False
+                self.Method, self.distance = 1, 0.0
             def SetMethod(self, value):
                 self.Method = value
             def SetGeometry(self, objects):
@@ -53,13 +54,19 @@ class SmartWorld:
                 return self.sources
             def Evaluate(self):
                 world.events.append(('plane',self.Tag))
-                self.Origin = self.sources[0].Origin
+                parent = self.sources[0]
+                self.Origin = xyz(*(a+self.distance*b for a,b in zip(M.xyz(parent.Origin),M.xyz(parent.Normal))))
                 sign = -1 if self.Flip else 1
                 self.Normal = xyz(*(sign*v for v in M.xyz(self.sources[0].Normal)))
             def SetFlip(self, flip):
                 self.Flip = flip
             def SetVisibility(self, value):
                 self.Visibility = value
+            def CopyPlane(self):
+                plane = Plane(self.Origin,self.Normal,2)
+                plane.Method, plane.distance, plane.Flip = self.Method,self.distance,self.Flip
+                plane.SetGeometry(self.GetGeometry())
+                return plane
 
         class Xform(Object):
             Scale = 1.0
@@ -110,7 +117,7 @@ class SmartWorld:
         self.nx = NS(Face=Face, Plane=Plane, DatumPlane=type('DatumPlane',(),{}), Xform=Xform,
                      Scalar=type('Scalar',(),{}), Point3d=xyz, Vector3d=xyz,
                      SmartObject=NS(UpdateOption=NS(AfterModeling=2), VisibilityOption=NS(Invisible=0)),
-                     PlaneTypes=NS(MethodType=NS(Coincident=1)),
+                     PlaneTypes=NS(MethodType=NS(Coincident=1,Distance=2)),
                      TaggedObjectManager=NS(GetTaggedObject=lambda tag:self.objects[tag]))
 
     def trial(self, mirror=None):
@@ -123,6 +130,7 @@ class SmartWorld:
         trial.mcs_fixed_xforms = {}
         trial.mcs_rebuilt = {}
         trial.mcs_supports = {}
+        trial.mcs_plane_selections = {}
         trial.stock_features = {}
         def set_fixed_xform(tag, origin, axes):
             if self.parents[tag] is not None:
@@ -534,6 +542,154 @@ class SupportDependencyTests(unittest.TestCase):
             with self.subTest(graph=graph):
                 with self.assertRaises(RuntimeError):
                     M.parent_order(graph)
+
+
+class DirectPlaneSelectionTests(unittest.TestCase):
+    def linked_world(self, depth=1):
+        return SupportDependencyTests().linked_world(depth)
+
+    def test_face_backed_planes_preserve_the_direct_face_choices_without_wrappers(self):
+        for mirror in (M.MirrorPlane([0,-25,8],[-1,0,0]), M.MirrorPlane([4,-3,2],[1,2,3])):
+            with self.subTest(normal=mirror.normal):
+                world,trial,originals = self.linked_world()
+                trial.plane = mirror
+                states = [(p.Tag,p.Method,p.Flip,tuple(p.GetGeometry())) for p in originals]
+                world.reflect_faces(mirror)
+                replacement = trial.transfer_mcs()
+                trial.verify_mcs(replacement)
+                for installed,original,face in zip(world.csys.xform.inputs,originals,world.faces):
+                    self.assertIsNot(installed,original)
+                    self.assertEqual(installed.GetGeometry(),[face])
+                    self.assertNotIn(original.Tag,trial.smart_graph(installed.Tag))
+                self.assertEqual(states,[(p.Tag,p.Method,p.Flip,tuple(p.GetGeometry())) for p in originals])
+                self.assertIn('/ X: Face 10','\n'.join(trial.lines))
+                for actual,expected in zip(trial.csys_frame(world.csys.Tag)[0],mirror.point([60,-25,16])):
+                    self.assertAlmostEqual(actual,expected,places=10)
+
+    def test_an_intentionally_selected_parent_plane_is_not_flattened_to_its_face(self):
+        world,trial,originals = self.linked_world(depth=2)
+        choices = [p.GetGeometry() for p in originals]
+        world.reflect_faces(trial.plane)
+        trial.verify_mcs(trial.transfer_mcs())
+        for installed,choice in zip(world.csys.xform.inputs,choices):
+            self.assertEqual(installed.GetGeometry(),choice)
+            self.assertIsInstance(choice[0],world.Plane)
+
+    def test_offset_plane_keeps_its_method_and_distance_and_direct_face(self):
+        world,_,originals = self.linked_world()
+        originals[0].Method, originals[0].distance = 2,7.0
+        originals[0].Evaluate()
+        trial = world.trial(M.MirrorPlane([0,-25,8],[-1,0,0]))
+        world.reflect_faces(trial.plane)
+        trial.verify_mcs(trial.transfer_mcs())
+        installed = world.csys.xform.inputs[0]
+        self.assertEqual((installed.Method,installed.distance),(2,7.0))
+        self.assertEqual(installed.GetGeometry(),[world.faces[0]])
+        self.assertEqual(trial.csys_frame(world.csys.Tag)[0],[-67,-25,16])
+
+    def test_copy_failure_stops_before_replacing_csys(self):
+        world,trial,planes = self.linked_world()
+        old = world.csys.xform
+        planes[0].CopyPlane = Mock(side_effect=RuntimeError('copy definition failed'))
+        world.reflect_faces(trial.plane)
+        with self.assertRaisesRegex(RuntimeError,'copy definition failed'):
+            trial.transfer_mcs()
+        self.assertIs(world.csys.xform,old)
+
+    def test_alias_copy_is_rejected_before_flipping_the_source(self):
+        world,trial,planes = self.linked_world()
+        source = planes[0]
+        old_flip,old_xform = source.Flip,world.csys.xform
+        source.CopyPlane = lambda:source
+        world.reflect_faces(trial.plane)
+        with self.assertRaisesRegex(RuntimeError,'отдельную копию'):
+            trial.transfer_mcs()
+        self.assertEqual(source.Flip,old_flip)
+        self.assertIs(world.csys.xform,old_xform)
+
+    def test_coincident_wrapper_is_rejected_despite_reaching_the_same_face(self):
+        world,trial,planes = self.linked_world()
+        source = planes[0]
+        old = world.csys.xform
+        def bad_copy():
+            plane = world.Plane(source.Origin,source.Normal,2)
+            plane.SetGeometry([source])
+            return plane
+        source.CopyPlane = bad_copy
+        world.reflect_faces(trial.plane)
+        with self.assertRaisesRegex(RuntimeError,'прямой выбор'):
+            trial.transfer_mcs()
+        self.assertIs(world.csys.xform,old)
+
+    def test_copied_selection_cannot_be_empty_or_select_a_same_plane_face(self):
+        for empty in (True,False):
+            with self.subTest(empty=empty):
+                world,trial,planes = self.linked_world()
+                source = planes[0]
+                copy = source.CopyPlane
+                def bad_copy():
+                    plane = copy()
+                    same_plane_face = world.Face(900,[-60,0,0],[-1,0,0])
+                    plane.SetGeometry([] if empty else [same_plane_face])
+                    return plane
+                source.CopyPlane = bad_copy
+                world.reflect_faces(trial.plane)
+                with self.assertRaisesRegex(RuntimeError,'прямой выбор'):
+                    trial.transfer_mcs()
+
+    def test_changed_copy_method_is_rejected_with_same_geometry(self):
+        world,trial,planes = self.linked_world()
+        copy = planes[0].CopyPlane
+        def bad_copy():
+            plane = copy()
+            plane.Method = 2
+            return plane
+        planes[0].CopyPlane = bad_copy
+        world.reflect_faces(trial.plane)
+        with self.assertRaisesRegex(RuntimeError,'Способ ожидался'):
+            trial.transfer_mcs()
+
+    def test_original_direct_choices_are_checked_before_creating_a_copy(self):
+        world,trial,planes = self.linked_world()
+        planes[0].CopyPlane = Mock()
+        # Keep the UF graph unchanged to prove the new editor-data check is
+        # independent of the old transitive-parent check.
+        planes[0].sources = []
+        world.reflect_faces(trial.plane)
+        with self.assertRaisesRegex(RuntimeError,'исходная опора'):
+            trial.transfer_mcs()
+        planes[0].CopyPlane.assert_not_called()
+
+    def test_lost_direct_selection_fails_final_check_despite_unchanged_frame_and_graph(self):
+        world,trial,_ = self.linked_world()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        installed = world.csys.xform.inputs[0]
+        frame,graph = trial.csys_frame(world.csys.Tag),trial.smart_graph(world.csys.Tag)
+        installed.sources = []
+        self.assertEqual(frame,trial.csys_frame(world.csys.Tag))
+        self.assertEqual(graph,trial.smart_graph(world.csys.Tag))
+        with self.assertRaisesRegex(RuntimeError,'прямой выбор'):
+            trial.verify_mcs(replacement)
+
+    def test_lost_selection_after_update_is_not_treated_as_a_stable_frame(self):
+        world,trial,_ = self.linked_world()
+        world.reflect_faces(trial.plane)
+        trial.transfer_mcs()
+        world.csys.xform.inputs[0].sources = []
+        with self.assertRaisesRegex(RuntimeError,'прямой выбор'):
+            trial.stabilize_three_planes_after_update()
+
+    def test_final_check_covers_unrebuilt_native_plane_selections(self):
+        world,trial,planes = self.linked_world()
+        world.reflect_faces(trial.plane)
+        origin,axes = trial.frames[world.csys.Tag]
+        world.xform.fixed = (trial.plane.point(origin),M.reflected_frame(axes,trial.plane))
+        replacement = trial.transfer_mcs()
+        self.assertFalse(trial.mcs_rebuilt)
+        planes[0].sources = []
+        with self.assertRaisesRegex(RuntimeError,'исходная опора'):
+            trial.verify_mcs(replacement)
 
 
 class FixedXformTests(unittest.TestCase):
