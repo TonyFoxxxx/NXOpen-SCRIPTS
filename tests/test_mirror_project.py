@@ -89,7 +89,30 @@ class GeometryTests(unittest.TestCase):
                 x, y, z = mirrored[:3], mirrored[3:6], mirrored[6:]
                 self.assertAlmostEqual(M.dot(M.cross(x, y), z), 1.0)
                 self.assertTrue(M.close_values(M.reflected_frame(mirrored, axis_plane(axis)), frame))
+                self.assertEqual(y, M.reflect(frame[3:6], axis))
                 self.assertEqual(z, M.reflect(frame[6:], axis))
+                self.assertTrue(M.close_values(x, [-v for v in M.reflect(frame[:3], axis)]))
+
+    def test_yz_mirror_keeps_the_two_reported_setups_axis_directions(self):
+        # Independent expected frames from the requested upper/lower setups.
+        plane = M.MirrorPlane([0,-25,8],[-1,0,0])
+        cases = [([60,-25,16],[-60,-25,16],[1,0,0,0,1,0,0,0,1]),
+                 ([0,-50,0],[0,-50,0],[1,0,0,0,-1,0,0,0,-1])]
+        for origin,expected_origin,frame in cases:
+            with self.subTest(frame=frame):
+                self.assertEqual(M.reflected_frame(frame,plane),frame)
+                self.assertEqual(plane.point(origin),expected_origin)
+
+    def test_yz_priority_is_relative_to_the_mirror_not_fixed_absolute_directions(self):
+        frame = [1,0,0,0,1,0,0,0,1]
+        cases = [([0,1,0],[-1,0,0,0,-1,0,0,0,1]),
+                 ([0,0,1],[-1,0,0,0,1,0,0,0,-1]),
+                 ([1,1,0],[0,1,0,-1,0,0,0,0,1])]
+        for normal,expected in cases:
+            with self.subTest(normal=normal):
+                for sign in (1,-1):
+                    plane = M.MirrorPlane([4,-3,2],[sign*v for v in normal])
+                    self.assertTrue(M.close_values(M.reflected_frame(frame,plane),expected))
 
     def test_invalid_mcs_and_nonfinite_verification_are_rejected(self):
         for frame in ([1,0,0,0,1,0,0,0,-1], [2,0,0,0,1,0,0,0,1]):

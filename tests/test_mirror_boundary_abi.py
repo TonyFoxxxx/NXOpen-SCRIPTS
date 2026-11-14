@@ -417,7 +417,9 @@ class BoundaryAbiTests(unittest.TestCase):
                 if change == 'origin':
                     frames[frame] = ([origin[0]+1,origin[1],origin[2]],matrix)
                 else:
-                    matrices[matrix] = [1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0]
+                    # Rotate the actual frame 180 degrees about its tool Z;
+                    # this is wrong under either MCS reflection convention.
+                    matrices[matrix] = [-v for v in matrices[matrix][:6]] + matrices[matrix][6:]
                 with self.assertRaisesRegex(RuntimeError,'не совпадают начало или оси') as caught:
                     trial.verify_mcs(replacement)
                 report = str(caught.exception)

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.16
-SCRIPT_VERSION = "V1.16"
+# SCRIPT_VERSION: V1.17
+SCRIPT_VERSION = "V1.17"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -182,10 +182,16 @@ def frame_axes(matrix, label):
 
 
 def reflected_frame(matrix, plane):
-    """Preserve reflected X and Z; reconstruct Y for a right-handed MCS."""
+    """Preserve reflected Y and tool Z; reconstruct X for a right-handed MCS.
+
+    A reflection reverses handedness. X is therefore -reflect(old X), while
+    Y/Z follow the geometry without an additional sign reversal. For the
+    reported YZ-plane mirror of axis-aligned setups, all axis directions stay
+    unchanged and only the origin moves to the reflected location.
+    """
     x, y, z = frame_axes(matrix, "MCS")
-    x, z = plane.vector(x), plane.vector(z)
-    return x + cross(z, x) + z
+    y, z = plane.vector(y), plane.vector(z)
+    return cross(y, z) + y + z
 
 
 def reflected_boundary_frame(matrix, plane):
@@ -809,6 +815,7 @@ class Trial:
                 self.lines.append("  Источник: " + label + "; узел " + str(key[0]) +
                                   "; статус " + PARAM_STATUS_NAMES[state] + "; источник параметра " + str(definer))
         self.lines.append("  Наследующих параметров: " + str(inherited) + "; начало ABS: " + str(origin))
+        self.lines.append("  Исходные оси ABS: X=" + str(axes[:3]) + "; Y=" + str(axes[3:6]) + "; Z=" + str(axes[6:]))
         if parents is not None and not planes and not fixed:
             self.lines.extend(self.csys_definition_details(tag, graph))
 
@@ -1740,6 +1747,7 @@ class Trial:
         return replacement
 
     def verify_mcs(self, replacement):
+        verified_frames = {}
         for tag in self.mcs_definitions:
             self.stage = "Итоговая проверка прямого выбора Three Planes: " + str(tag)
             self.verify_three_plane_selections(tag)
@@ -1775,12 +1783,18 @@ class Trial:
                            "Начало ожидаемое: " + str(expected_origin) + "; фактическое: " + str(list(origin)),
                            "Оси ожидаемые: " + str(expected_axes) + "; фактические: " + str(list(axes))]
                 raise RuntimeError("\n".join(details))
+            verified_frames[old_tag] = (actual, list(origin), list(axes))
         for tag, linked in self.mcs_links.items():
             label = self.mcs_sources.get((tag, 59), (None, None, str(tag)))[2]
             self.stage = "Проверка связи RCS с MCS: " + label
             if bool(self.uf.Param.AskLogicalValue(tag, 41)) != linked:
                 raise RuntimeError("Изменился параметр связи RCS с MCS: " + label)
         for tag, (_, sources) in self.mcs_definitions.items():
+            if tag in verified_frames:
+                actual, origin, axes = verified_frames[tag]
+                self.lines.append("Проверены оси MCS/RCS " + str(tag) + " (текущая СК " + str(actual) +
+                                  ") / ABS: X=" + str(axes[:3]) + "; Y=" + str(axes[3:6]) +
+                                  "; Z=" + str(axes[6:]) + "; начало=" + str(origin))
             if sources is None:
                 continue
             data = self.mcs_rebuilt.get(tag)
@@ -1838,6 +1852,7 @@ class Trial:
 
     def run_in_absolute_wcs(self):
         self.lines.append("Режим: геометрия и CAM. В копии допускается замена истории модельных тел на BREP; заготовки и MCS защищены отдельно.")
+        self.lines.append("Правило MCS/RCS: Y и Z следуют отражению без дополнительного разворота; X = Y × Z для правой системы координат.")
         self.check_cam_builders()
         self.history_baseline, self.history_previous = None, None
         self.checkpoint_model_history("Исходное состояние после первичного чтения CAM", check_errors=True)
