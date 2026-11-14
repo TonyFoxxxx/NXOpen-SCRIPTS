@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.17
-SCRIPT_VERSION = "V1.17"
+# SCRIPT_VERSION: V1.18
+SCRIPT_VERSION = "V1.18"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -709,7 +709,7 @@ class Trial:
             raise RuntimeError("В копии должны быть тела и CAM-операции")
         if any(op.IsMirror() for op in self.operations):
             raise RuntimeError("В этой версии нужны обычные операции, без существующих зеркальных операций")
-        allowed_operations = {"VolumeBased25DMillingOperation", "SurfaceContour", "PlanarMilling", "TpMultiAxisDeburring"}
+        allowed_operations = {"VolumeBased25DMillingOperation", "SurfaceContour", "PlanarMilling", "CavityMilling", "TpMultiAxisDeburring"}
         for op in self.operations:
             if type(op).__name__ not in allowed_operations:
                 raise RuntimeError("В первом тесте пока не поддержан тип операции " + type(op).__name__)
@@ -1414,6 +1414,7 @@ class Trial:
                      "VolumeBased25DMillingOperation": (self.setup.CAMOperationCollection, "CreateVolumeBased25dMillingOperationBuilder"),
                      "SurfaceContour": (self.setup.CAMOperationCollection, "CreateSurfaceContourBuilder"),
                      "PlanarMilling": (self.setup.CAMOperationCollection, "CreatePlanarMillingBuilder"),
+                     "CavityMilling": (self.setup.CAMOperationCollection, "CreateCavityMillingBuilder"),
                      "TpMultiAxisDeburring": (self.setup.CAMOperationCollection, "CreateMultiAxisDeburringBuilder")}
         result, labels = {}, {}
         for node in self.nodes:
@@ -1548,7 +1549,7 @@ class Trial:
                     for tag in tags:
                         self.reference(tag)
             if isinstance(node, self.nx.CAM.Operation):
-                kinds = {"PlanarMilling": (0, 1), "VolumeBased25DMillingOperation": (0, 1),
+                kinds = {"CavityMilling": (0, 1), "PlanarMilling": (0, 1), "VolumeBased25DMillingOperation": (0, 1),
                          "SurfaceContour": (1,), "TpMultiAxisDeburring": ()}[type(node).__name__]
                 for kind in kinds:
                     self.stage = "Чтение пользовательских точек: " + str(node.Name) + " / " + str(kind)
