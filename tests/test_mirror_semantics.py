@@ -234,6 +234,36 @@ class AssociativityTests(unittest.TestCase):
 
 
 class ThreePlanesOrientationTests(unittest.TestCase):
+    def test_reported_upper_and_lower_three_planes_keep_y_and_tool_side(self):
+        cases = [([60,-25,16],[-60,-25,16],1,[1,0,0,0,1,0,0,0,1]),
+                 ([0,-50,0],[0,-50,0],-1,[1,0,0,0,-1,0,0,0,-1])]
+        for origin,expected_origin,side,expected_axes in cases:
+            with self.subTest(side=side):
+                world,_,originals = SupportDependencyTests().linked_world()
+                normals = ([1,0,0],[0,side,0],[0,0,side])
+                for face,normal,plane in zip(world.faces,normals,originals):
+                    face.Origin,face.Normal = xyz(*origin),xyz(*normal)
+                    plane.Evaluate()
+                trial = world.trial(M.MirrorPlane([0,-25,8],[-1,0,0]))
+                csys_tag = world.csys.Tag
+                world.reflect_faces(trial.plane)
+                replacement = trial.transfer_mcs()
+                world.retire(originals)
+                trial.stabilize_three_planes_after_update()
+                trial.verify_mcs(replacement)
+                self.assertEqual(trial.csys_frame(csys_tag),(expected_origin,expected_axes))
+                self.assertEqual([p.GetGeometry() for p in world.csys.xform.inputs],[[f] for f in world.faces])
+                self.assertEqual(world.csys.Tag,csys_tag)
+                trial.uf.Param.SetTagValue.assert_not_called()
+
+    def test_previous_extra_y_reversal_is_rejected_by_final_frame_verification(self):
+        world,trial,_ = SupportDependencyTests().linked_world()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        world.csys.xform.fixed = ([-60,-25,16],[-1,0,0,0,-1,0,0,0,1])
+        with self.assertRaisesRegex(RuntimeError,'не совпадают начало или оси'):
+            trial.verify_mcs(replacement)
+
     def test_reported_x_and_z_reversal_is_corrected_using_actual_csys_frame(self):
         world = SmartWorld()
         for face, origin in zip(world.faces,([60,0,0],[0,-25,0],[0,0,16])):
@@ -248,7 +278,7 @@ class ThreePlanesOrientationTests(unittest.TestCase):
         trial.verify_mcs(replacement)
         origin, axes = trial.csys_frame(old_tag)
         self.assertEqual(origin,[-60,-25,16])
-        self.assertEqual(axes,[-1,0,0,0,-1,0,0,0,1])
+        self.assertEqual(axes,[1,0,0,0,1,0,0,0,1])
         self.assertEqual(world.csys.Tag,old_tag)
         self.assertEqual(tuple(p.GetGeometry()[0].Tag for p in world.csys.xform.inputs),old_sources)
         self.assertIn('вариантов: 2','\n'.join(trial.lines))
@@ -450,7 +480,7 @@ class SupportDependencyTests(unittest.TestCase):
         trial.verify_mcs(replacement)
         origin,axes = trial.csys_frame(world.csys.Tag)
         self.assertEqual(origin,[-60,-25,16])
-        self.assertEqual(axes,[-1,0,0,0,-1,0,0,0,1])
+        self.assertEqual(axes,[1,0,0,0,1,0,0,0,1])
         for plane in planes:
             self.assertEqual(trial.smart_graph(plane.Tag),M.graph_branch(old_graph,plane.Tag))
         trial.native.set_fixed_xform.assert_not_called()
@@ -744,7 +774,7 @@ class ThreePlanesLifetimeTests(unittest.TestCase):
         trial.stabilize_three_planes_after_update()
         trial.verify_mcs(replacement)
         trial.native.update_model.assert_called_once()
-        self.assertEqual(trial.csys_frame(world.csys.Tag)[1],[-1,0,0,0,-1,0,0,0,1])
+        self.assertEqual(trial.csys_frame(world.csys.Tag)[1],[1,0,0,0,1,0,0,0,1])
 
     def test_unused_old_plane_drift_is_not_confused_with_current_support_drift(self):
         world,trial,old_planes = self.linked_world()

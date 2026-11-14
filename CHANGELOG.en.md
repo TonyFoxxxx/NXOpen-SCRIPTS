@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.17
+
+After confirming retained face selections in V1.16, the user reported an unwanted Y reversal. Change MCS/RCS transfer: Y and Z follow the reflection, and X = Y × Z ensures a right-handed frame. This replaces the previous reflected X/Z convention with its extra Y inversion. For X=0 reflection and ABS-aligned setups, all original axis directions remain unchanged while the origin is reflected. With an oblique mirror, Y/Z follow the selected plane.
+
+Apply the common rule to Three Planes, numerical CSYS/Xform, the root MCS and result checks. Report the rule and original/verified final ABS axes. Retain direct face selections, Plane lifetime handling and the separate boundary-plane transformation.
+
+All 205 checks outside NX passed, including 31 with a separately compiled C library. Add four cases for the axis convention: expected upper/lower setup directions, other axis-aligned and oblique mirrors, complete Three Planes transfer followed by old-support cleanup, and rejection of the previous unwanted Y reversal. Check handedness, reflected Y/Z and double-reflection reversibility. Selection, object lifetime, stock, BREP, CAM, boundary and rollback checks remain. These emulate API behavior; V1.17 still requires an NX test and toolpath regeneration.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.16
 
 Fix `Object no longer exists` during post-update Three Planes verification: V1.15 read original Plane objects after replacing the definition even though NX had already removed an unused support. Verification and bounded orientation correction use the active CSYS planes, reacquired by identifier, and frozen original selection/placement data.
