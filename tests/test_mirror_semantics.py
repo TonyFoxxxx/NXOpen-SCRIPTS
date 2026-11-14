@@ -976,7 +976,7 @@ class CamEditorTests(unittest.TestCase):
         builder = NS(PartGeometry=Geometry(), Validate=Mock(return_value=True), Destroy=Mock(), Commit=Mock())
         trial = object.__new__(M.Trial)
         trial.nx = NS(CAM=NS(Geometry=Geometry,GeometryGroup=GeometryGroup))
-        trial.nodes, trial.cam_builder_state = [node], None
+        trial.nodes, trial.cam_builder_state, trial.lines = [node], None, []
         trial.setup = NS(CAMGroupCollection=NS(CreateMillGeomBuilder=lambda obj:builder), CAMOperationCollection=NS())
         return trial,builder
 
@@ -1026,6 +1026,7 @@ class CamEditorTests(unittest.TestCase):
         for valid in (True, False):
             with self.subTest(valid=valid):
                 trial,builder = self.trial()
+                builder = type('CavityMillingBuilder', (), vars(builder))()
                 node = type('CavityMilling',(),{'Tag':3,'Name':'CAVITY_MILL'})()
                 trial.nodes = [node]
                 factory = Mock(return_value=builder)
@@ -1058,7 +1059,8 @@ class CamEditorTests(unittest.TestCase):
         trial,builder = self.trial()
         trial.check_cam_builders()
         trial.check_cam_builders()
-        self.assertEqual(trial.cam_builder_state,{1:{}})
+        self.assertEqual(trial.cam_builder_state[1]['PartGeometry.API'],('text','Geometry'))
+        self.assertEqual(trial.cam_builder_state[1]['BlankGeometry.API'],('text','нет свойства'))
         self.assertEqual(builder.Destroy.call_count,2)
         builder.Commit.assert_not_called()
 
@@ -1071,6 +1073,7 @@ class CamEditorTests(unittest.TestCase):
 
     def test_dependent_surface_operation_failure_identifies_the_operation(self):
         trial,builder = self.trial()
+        builder = type('VolumeBased25DMillingOperationBuilder', (), vars(builder))()
         trial.nodes = [type('VolumeBased25DMillingOperation',(),{'Tag':3,'Name':'PLSK_PREDV'})()]
         trial.setup.CAMOperationCollection.CreateVolumeBased25dMillingOperationBuilder = lambda obj:builder
         builder.Validate.side_effect = RuntimeError('bounding geometry is invalid')
@@ -1112,7 +1115,7 @@ class CamStateTests(unittest.TestCase):
         trial.nodes = [type(kind,(),{'Tag':tag,'Name':name})() for tag,kind,name in
                        ((10,'FeatureGeometry','WORKPIECE'),(20,'OrientGeometry','1'),
                         (30,'TpMultiAxisDeburring','FASKA_1_COPY'))]
-        trial.cam_builder_state, trial.cam_builder_labels = None, {}
+        trial.cam_builder_state, trial.cam_builder_labels, trial.lines = None, {}, []
         trial.nx = NS(CAM=NS(Geometry=Geometry,GeometryGroup=GeometryGroup,
             OrientGeomBuilder=NS(McsLocationModes=NS(Specify=EnumMember(0),OnBlank=EnumMember(1),OnPartBox=EnumMember(2)))))
         changes, builders = {}, []
@@ -1129,7 +1132,8 @@ class CamStateTests(unittest.TestCase):
             if type(node).__name__ == 'OrientGeometry':
                 fields.update(McsLocationMode=EnumMember(0),LinkRcsToMcs=True)
                 fields.update(changes.get(node.Tag,{}))
-            builder = NS(**fields)
+            builder = (type('MultiAxisDeburringBuilder', (), fields)()
+                       if type(node).__name__ == 'TpMultiAxisDeburring' else NS(**fields))
             builders.append(builder)
             return builder
         trial.setup = NS(CAMGroupCollection=NS(CreateMillGeomBuilder=create,CreateMillOrientGeomBuilder=create),

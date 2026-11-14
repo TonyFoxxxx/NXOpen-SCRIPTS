@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.18
-SCRIPT_VERSION = "V1.18"
+# SCRIPT_VERSION: V1.19
+SCRIPT_VERSION = "V1.19"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -38,7 +38,8 @@ BODY_HISTORY_TYPES = frozenset(("EXTRUDE", "BLEND", "BLOCK", "CYLINDER", "CONE",
                                 "SPHERE", "BREP", "IMPORTED_BODY", "IMPORT"))
 
 
-# Concrete milling/hole-making editors from the NXOpen operation collection.
+# Editor recognition only, not a complete operation-settings mirror adapter.
+# See docs/mirror-project.md for provenance and the DC 2606 verification limits.
 # Generic dispatch does not authorize turning, additive, probing or user-defined motion.
 OPERATION_BUILDERS = {
     'CavityMilling': 'CreateCavityMillingBuilder',
@@ -63,7 +64,24 @@ OPERATION_BUILDERS = {
     'TpMultiAxisWallFinishing': 'CreateMultiAxisWallFinishingBuilder',
     'MwBLDeburringOperation': 'CreateMwBldeburringOperationBuilder',
 }
-MILLING_HOLE_BUILDERS = frozenset(['CavityMillingBuilder', 'ChamferMillingBuilder', 'CylinderMillingBuilder', 'EdgeChamferBuilder', 'EngravingBuilder', 'FaceMillingBuilder', 'FacingBuilder', 'FacingZigZagBuilder', 'FeatureMillingBuilder', 'GenericFeatureOperationBuilder', 'GrooveMillingBuilder', 'HoleDrillingBuilder', 'HoleMakingBuilder', 'MultiAxisDeburringBuilder', 'MultiAxisRoughingBuilder', 'MultiAxisWallFinishingBuilder', 'MwBLDeburringOperationBuilder', 'PlanarMillingBuilder', 'PlanarRoughingBuilder', 'PlungeMillingBuilder', 'PointToPointBuilder', 'RadialGrooveMillingBuilder', 'RotaryRoughingBuilder', 'SurfaceContourBuilder', 'SwarfBuilder', 'ThreadMillingBuilder', 'VazlMillingBuilder', 'VolumeBased25DMillingOperationBuilder', 'WallProfilingBuilder', 'ZLevelMillingBuilder', 'ZlevelUndercutBuilder'])
+MILLING_HOLE_BUILDERS = frozenset((
+    'CavityMillingBuilder', 'ChamferMillingBuilder', 'CylinderMillingBuilder',
+    'EdgeChamferBuilder', 'EngravingBuilder', 'FaceMillingBuilder', 'FacingBuilder',
+    'FacingZigZagBuilder', 'FeatureMillingBuilder', 'GenericFeatureOperationBuilder',
+    'GrooveMillingBuilder', 'HoleDrillingBuilder', 'HoleMakingBuilder',
+    'MultiAxisDeburringBuilder', 'MultiAxisRoughingBuilder', 'MultiAxisWallFinishingBuilder',
+    'MwBLDeburringOperationBuilder', 'PlanarMillingBuilder', 'PlanarRoughingBuilder',
+    'PlungeMillingBuilder', 'PointToPointBuilder', 'RadialGrooveMillingBuilder',
+    'RotaryRoughingBuilder', 'SurfaceContourBuilder', 'SwarfBuilder', 'ThreadMillingBuilder',
+    'VazlMillingBuilder', 'VolumeBased25DMillingOperationBuilder', 'WallProfilingBuilder',
+    'ZLevelMillingBuilder', 'ZlevelUndercutBuilder',
+))
+FEATURE_DEFINITION_BUILDERS = frozenset((
+    'FeatureMillingBuilder', 'GenericFeatureOperationBuilder', 'HoleMakingBuilder',
+    'HoleDrillingBuilder', 'ThreadMillingBuilder', 'CylinderMillingBuilder',
+))
+CAM_GEOMETRY_FIELDS = ('PartGeometry', 'BlankGeometry', 'CheckGeometry',
+                       'CutAreaGeometry', 'WallGeometry', 'DriveGeometry', 'TrimGeometry')
 
 
 def cam_enum_snapshot(value, domain, label):
@@ -702,6 +720,15 @@ def cam_nodes(setup, nx):
             raise RuntimeError("Слишком большое дерево CAM для тестовой версии")
         if isinstance(node, nx.CAM.NCGroup):
             pending.extend(reversed(list(node.GetMembers())))
+    # The collection is authoritative for operation coverage. A detached or
+    # differently represented operation must not escape editor/UF checks just
+    # because it was absent from the traversed geometry branch.
+    for operation in setup.CAMOperationCollection:
+        if int(operation.Tag) not in seen:
+            nodes.append(operation)
+            seen.add(int(operation.Tag))
+            if len(nodes) > MAX_OBJECTS:
+                raise RuntimeError("Слишком большое дерево CAM для тестовой версии")
     return root, nodes
 
 
@@ -1437,18 +1464,25 @@ class Trial:
         kind = type(node).__name__
         factory = OPERATION_BUILDERS.get(kind)
         method = getattr(collection, factory, None) if factory else None
-        if callable(method):
-            return method(node)
-        generic = getattr(collection, "CreateBuilder", None)
-        if not callable(generic):
+        if not callable(method):
+            factory = "CreateBuilder"
+            method = getattr(collection, factory, None)
+        if not callable(method):
             raise RuntimeError("Нет доступного редактора фрезерной/сверлильной операции: " + str(node.Name) + " [" + kind + "]")
-        builder = generic(node)
+        self.stage = "Открытие редактора CAM: " + str(node.Name) + " [" + kind + "] / " + factory
+        # A factory error is a real failure; do not retry it with a different
+        # editor. Check the result of BOTH specialized and generic factories.
+        builder = method(node)
         if type(builder).__name__ not in MILLING_HOLE_BUILDERS:
             actual = type(builder).__name__
-            if builder is not None:
-                builder.Destroy()
-            raise RuntimeError("Редактор операции вне поддерживаемых фрезерных/сверлильных семейств: " +
-                               str(node.Name) + " [" + kind + "]; редактор " + actual)
+            try:
+                raise RuntimeError("Редактор операции вне поддерживаемых фрезерных/сверлильных семейств: " +
+                                   str(node.Name) + " [" + kind + "]; " + factory + " → " + actual)
+            finally:
+                if builder is not None:
+                    builder.Destroy()
+        self.lines.append("Распознан редактор: " + str(node.Name) + " [" + kind + "]; " +
+                          factory + " → " + type(builder).__name__ + ". Полнота настроек не подтверждена.")
         return builder
 
     def check_cam_builders(self):
@@ -1476,12 +1510,27 @@ class Trial:
                 # FBM/CI definitions are not represented completely by UF channels.
                 # Opening an editor is not proof that all hole/feature data moved.
                 if is_operation:
-                    if callable(getattr(builder, "GetFeatureGeometry", None)) or kind in ("HoleMaking", "FeatureMilling"):
+                    state["Operation.Class"] = ("text", kind)
+                    state["Operation.Builder"] = ("text", type(builder).__name__)
+                    if (type(builder).__name__ in FEATURE_DEFINITION_BUILDERS or
+                            callable(getattr(builder, "GetFeatureGeometry", None))):
                         self.cam_extra_unverified.add(label + " / полное определение отверстий/FBM")
-                for name in ("PartGeometry", "BlankGeometry", "CheckGeometry", "CutAreaGeometry", "WallGeometry", "DriveGeometry", "TrimGeometry"):
-                    geometry = getattr(builder, name, None)
+                geometry_fields = []
+                for name in CAM_GEOMETRY_FIELDS:
+                    self.stage = "Чтение CAM через редактор: " + label + " / " + name
+                    # Do not let getattr(..., None) swallow AttributeError from
+                    # an existing property getter. Missing, null and unreadable
+                    # fields are distinct; none proves an empty selection.
+                    try:
+                        geometry, present = getattr(builder, name), True
+                    except AttributeError:
+                        if name in dir(builder) or any(name in cls.__dict__ for cls in type(builder).__mro__):
+                            raise
+                        geometry, present = None, False
+                    access = type(geometry).__name__ if present else "нет свойства"
+                    state[name + ".API"] = ("text", access)
                     if isinstance(geometry, self.nx.CAM.Geometry):
-                        self.stage = "Чтение CAM через редактор: " + str(node.Name) + " / " + name
+                        geometry_fields.append(name)
                         geometry.InitializeData(True)
                         if name == "BlankGeometry" and isinstance(geometry, self.nx.CAM.GeometryGroup):
                             domains = (("BlankDefinitionType", "BlankDefinitionTypes"),
@@ -1502,6 +1551,8 @@ class Trial:
                                 key = name + "." + field
                                 self.stage = "Чтение параметра CAM: " + label + " / " + key
                                 state[key] = cam_length_snapshot(getattr(geometry, field), label + " / " + key)
+                    else:
+                        self.cam_extra_unverified.add(label + " / " + name + " через Builder: " + access)
                 if kind == "OrientGeometry":
                     self.stage = "Чтение параметра CAM: " + label + " / MCS.McsLocationMode"
                     state["MCS.McsLocationMode"] = cam_enum_snapshot(builder.McsLocationMode,
@@ -1511,6 +1562,9 @@ class Trial:
                 self.stage = "Проверка редактора CAM: " + str(node.Name)
                 if not builder.Validate():
                     raise RuntimeError("Редактор CAM не прошёл проверку: " + str(node.Name))
+                if is_operation:
+                    self.lines.append("  Прочитаны поля Geometry: " + (", ".join(geometry_fields) or "нет") +
+                                      "; Validate пройден. UF-ссылки проверяются отдельно.")
                 result[tag] = state
             finally:
                 # Validation only: no CAM Commit, generation, or parameter edits.
@@ -1993,7 +2047,7 @@ class Trial:
         self.lines.append("Сохранены определения Three Planes: " + str(sum(bool(p) for _, p in self.mcs_definitions.values())))
         self.lines.append("Распознаны CSYS с числовым Xform: " + str(len(self.mcs_fixed_xforms)))
         if getattr(self, "cam_extra_unverified", None):
-            self.lines.append("\nНЕ ПРОВЕРЕНЫ полностью определения отверстий/FBM (не ошибка UF):")
+            self.lines.append("\nНЕ ПРОВЕРЕНЫ полностью дополнительные данные CAM / недоступные поля Builder:")
             self.lines.extend(sorted(self.cam_extra_unverified))
         if self.unavailable:
             self.lines.append("\nНЕ ПРОВЕРЕНЫ через UF (код 1345005): " + str(len(self.unavailable)) + " разделов.")
@@ -2058,8 +2112,16 @@ def execute(session, nx, uf, plane, native=None):
         lines.append("после проверки сохраните открытую копию штатной командой NX.")
         lines.append("Затем рассчитайте операции заново. Исходный проект скрипт не сохранял.")
     except Exception as exc:
+        failure_traceback = traceback.format_exc()
         lines.append("\nТЕСТ НЕ ПРОЙДЕН. Этап: " + (trial.stage if trial else stage))
         lines.append(type(exc).__name__ + ": " + str(exc))
+        for attribute in ("ErrorCode", "code"):
+            try:
+                code = getattr(exc, attribute, None)
+            except Exception:
+                continue
+            if isinstance(code, int) and not isinstance(code, bool):
+                lines.append("Код NX/API (" + attribute + "): " + str(code))
         if mark is not None:
             rolled_back = False
             try:
@@ -2086,9 +2148,28 @@ def execute(session, nx, uf, plane, native=None):
                 except Exception as restore:
                     lines.append("Не удалось вернуть исходный проект на экран: " + str(restore))
         lines.append("Новая копия на диске не перезаписывалась; исходник не сохранялся.")
-        if digest(source) != source_hash:
-            lines.append("ВНИМАНИЕ: контрольная сумма исходника изменилась во время теста.")
-        lines.append("\n" + traceback.format_exc())
+        # A failed diagnostic must not replace the original error/traceback or
+        # imply that the source is unchanged. Check disk AND in-session state.
+        try:
+            if digest(source) != source_hash:
+                lines.append("ВНИМАНИЕ: контрольная сумма исходника изменилась во время теста.")
+            else:
+                lines.append("Исходный файл на диске: контрольная сумма не изменилась.")
+        except Exception as source_error:
+            lines.append("Не удалось проверить контрольную сумму исходника: " + str(source_error))
+        try:
+            if source_part.IsModified:
+                lines.append("ВНИМАНИЕ: NX выставил исходной детали признак изменения; исходник не сохранялся.")
+            else:
+                lines.append("Исходная деталь в NX: признак изменения не установлен.")
+        except Exception as source_error:
+            lines.append("Не удалось проверить признак изменения исходной детали: " + str(source_error))
+        for attribute in ("cam_extra_unverified", "unavailable"):
+            unverified = getattr(trial, attribute, ())
+            if unverified:
+                lines.append("Данные CAM, оставшиеся непроверенными до остановки:")
+                lines.extend(sorted(unverified))
+        lines.append("\n" + failure_traceback)
     lines.append("\nНажмите «Копировать всё» и пришлите результат теста.")
     return "\r\n".join(lines)
 

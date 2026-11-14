@@ -605,7 +605,8 @@ class TransactionTests(unittest.TestCase):
             self.assertEqual(len(list(Path(folder).iterdir())), 1)
 
     def run_with_trial(self, fails, rollback_fails=False, display_fails=False, delete_mark_fails=False,
-                       close_supported=True, close_fails=False, close_noop=False):
+                       close_supported=True, close_fails=False, close_noop=False,
+                       source_modified=False, source_check_error=False, unverified=()):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.prt"
             source.write_bytes(b"prt-binary")
@@ -657,8 +658,11 @@ class TransactionTests(unittest.TestCase):
                 stage = "reflection"
                 def __init__(self, *args):
                     self.part = args[3]
+                    self.cam_extra_unverified = set(unverified)
                 def run(self):
                     self.assert_copy()
+                    events.append('run')
+                    original.IsModified = source_modified
                     if isinstance(fails, Exception):
                         raise fails
                     if fails:
@@ -666,7 +670,12 @@ class TransactionTests(unittest.TestCase):
                 def assert_copy(self):
                     if self.part.Tag != 2:
                         raise AssertionError("source mutated")
-            with patch.object(M, "Trial", Trial):
+            original_digest = M.digest
+            def diagnostic_digest(path):
+                if source_check_error and 'run' in events:
+                    raise OSError('source checksum cannot be read')
+                return original_digest(path)
+            with patch.object(M, "Trial", Trial), patch.object(M, 'digest', diagnostic_digest):
                 report = M.execute(session, nx, None, axis_plane())
             events.append(('active',session.Parts.Display.Tag,session.Parts.Work.Tag))
             self.assertEqual(source.read_bytes(), b"prt-binary")
@@ -682,6 +691,34 @@ class TransactionTests(unittest.TestCase):
         self.assertIn(('active',1,1),events)
         self.assertIn('display-status-dispose',events)
         self.assertIn('Снова активен исходный проект',report)
+
+    def test_failure_reports_native_code_independent_of_exception_message(self):
+        class NxError(RuntimeError):
+            ErrorCode = 98765
+        _, report = self.run_with_trial(NxError('builder initialization failed'))
+        self.assertIn('Код NX/API (ErrorCode): 98765', report)
+        self.assertIn('Traceback (most recent call last)', report)
+        self.assertIn('builder initialization failed', report)
+
+    def test_source_modification_flag_is_checked_even_after_operation_failure(self):
+        _, report = self.run_with_trial(True, source_modified=True)
+        self.assertIn('контрольная сумма не изменилась', report)
+        self.assertIn('NX выставил исходной детали признак изменения', report)
+        self.assertNotIn('признак изменения не установлен', report)
+
+    def test_failed_source_checksum_diagnostic_does_not_replace_primary_failure(self):
+        _, report = self.run_with_trial(True, source_check_error=True)
+        self.assertIn('Не удалось проверить контрольную сумму исходника', report)
+        self.assertIn('source checksum cannot be read', report)
+        self.assertIn('Traceback (most recent call last)', report)
+        self.assertIn('RuntimeError: kernel rejected reflection', report)
+        self.assertNotIn('контрольная сумма не изменилась', report)
+        self.assertIn('признак изменения не установлен', report)
+
+    def test_failure_keeps_previously_discovered_unverified_cam_data_in_report(self):
+        _, report = self.run_with_trial(True, unverified=('DRILL / полное определение отверстий/FBM',))
+        self.assertIn('Данные CAM, оставшиеся непроверенными до остановки', report)
+        self.assertIn('DRILL / полное определение отверстий/FBM', report)
 
     def test_boundary_access_violation_is_reported_and_rolls_back(self):
         events, report = self.run_with_trial(OSError('exception: access violation reading boundary'))

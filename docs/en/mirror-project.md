@@ -2,9 +2,13 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.18**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.19**.
 
 ## Latest release
+
+**V1.19 · 2026-11-15** — Check Builder classes for specialized factories as well, including CavityMilling. Changed editors, lost fields and read errors stop the trial. Include operations missing from the Geometry traversal. Distinguish editor recognition, accessible geometry reads and unverified definitions in the report. Flag complete hole/FBM data regardless of dispatch route. Preserve NX/API codes, tracebacks and source-integrity diagnostics on failure. All 228 checks outside NX passed; retain the 31-Builder catalog. [Family coverage, sources and separate SDK 2606 verification list](mirror-operations.md).
+
+### V1.18
 
 **V1.18 · 15.11.2026** — Expand NXOpen milling and hole-making families. Use specialized editors for known classes, otherwise OperationCollection.CreateBuilder with an explicit concrete-editor catalog. Do not automatically accept turning, WEDM, additive, inspection or user-defined motion. Check available geometry, Validate and custom points; report complete hole/FBM definitions separately as unverified. Retain the V1.17 axis convention. All 210 checks outside NX passed; actual projects still require verification and regenerated toolpaths.
 
@@ -30,13 +34,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. Y/Z are reflected and X completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.18 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.18 from a healthy original project. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.19 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.19 from a healthy original project. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.18**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.19**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. Read and share the report using **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -70,7 +74,7 @@ MCS transfer retains the existing CSYS. Recognized Three Planes definitions reta
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-All 210 checks outside NX passed, including 32 with a separately compiled C library. Five new checks cover catalog-based editor dispatch, rejection of unsupported families, generic fallback when a specialized factory is unavailable, CavityMilling geometry reads and Validate, and both custom-point channels for newly accepted families. MCS/RCS orientation, face selection, object lifetime, stock, BREP, CAM, boundary and rollback checks remain. These checks emulate API behavior; V1.18 still requires an NX test and toolpath regeneration.
+All 228 checks outside NX passed, including 32 using a separately compiled test C library. The 18 new scenarios cover both editor dispatch routes, retained field availability, read/cleanup errors, operation coverage and failure diagnostics. Preserve MCS/RCS orientation, face selection, support lifetime, stock, BREP, CAM, boundary and rollback checks. These are API simulations, not the Siemens SDK or kernel; V1.19 execution, saving/reopening and toolpath regeneration still require an NX test.
 
 ## Later stages — not implemented yet
 
@@ -85,3 +89,5 @@ These are API classes, not operation-template names in the NX menu. This catalog
 `CavityMillingBuilder`, `ChamferMillingBuilder`, `CylinderMillingBuilder`, `EdgeChamferBuilder`, `EngravingBuilder`, `FaceMillingBuilder`, `FacingBuilder`, `FacingZigZagBuilder`, `FeatureMillingBuilder`, `GenericFeatureOperationBuilder`, `GrooveMillingBuilder`, `HoleDrillingBuilder`, `HoleMakingBuilder`, `MultiAxisDeburringBuilder`, `MultiAxisRoughingBuilder`, `MultiAxisWallFinishingBuilder`, `MwBLDeburringOperationBuilder`, `PlanarMillingBuilder`, `PlanarRoughingBuilder`, `PlungeMillingBuilder`, `PointToPointBuilder`, `RadialGrooveMillingBuilder`, `RotaryRoughingBuilder`, `SurfaceContourBuilder`, `SwarfBuilder`, `ThreadMillingBuilder`, `VazlMillingBuilder`, `VolumeBased25DMillingOperationBuilder`, `WallProfilingBuilder`, `ZLevelMillingBuilder`, `ZlevelUndercutBuilder`.
 
 [NXOpen OperationCollection reference (Siemens reference reproduced by Tech PLM)](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a50101.html).
+
+Detailed [coverage table and methods requiring SDK 2606](mirror-operations.md). No family is claimed to have all its settings fully transferred.

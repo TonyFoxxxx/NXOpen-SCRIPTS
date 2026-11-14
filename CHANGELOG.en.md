@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Mirrored CAM project trial V1.19
+
+Close V1.18's specialized-factory catalog bypass: check returned Builders for both CavityMilling and generic CreateBuilder. Do not hide factory exceptions by retrying with another editor. Compare operation/Builder classes and availability of seven geometry fields; losing a field fails even when Validate passes. Getter errors are not absent properties, and incomplete dir output does not prevent reading an accessible field. Report absent, null and unhandled fields separately from empty geometry. Also check collection operations absent from the Geometry traversal. Flag complete hole/FBM definitions for generic dispatch without GetFeatureGeometry as well.
+
+Report objects, actual classes, factories, read fields and limitations. On failure, retain available NX/API codes, the original traceback and previously discovered unverified data. Check source checksum and modification flag after failure; unavailable diagnostics do not hide the original error. Retain geometry, MCS/RCS, face-selection, stock, boundary and rollback algorithms; no automatic save or extra files.
+
+All 228 mirror checks outside NX passed, including 32 using a test C library. Add 18 editor-admission, traversal-coverage, data-loss and failure-diagnostic scenarios. The [coverage audit](docs/en/mirror-operations.md) distinguishes 21 dispatch routes/31 recognized Builders from complete settings transfer and lists methods/definitions requiring SDK 2606 verification. Do not expand the catalog without evidence; SDK 2606 compatibility, real PRT execution, saving/reopening and toolpath regeneration remain untested.
+
 ## 2026-11-15 — Mirrored CAM project trial V1.18
 
 Expand NXOpen milling and hole-making families. Use specialized editors for known classes, otherwise OperationCollection.CreateBuilder with an explicit concrete-editor catalog. Do not automatically accept turning, WEDM, additive, inspection or user-defined motion. Check available geometry, Validate and custom points; report complete hole/FBM definitions separately as unverified. Retain the V1.17 axis convention. All 210 checks outside NX passed; actual projects still require verification and regenerated toolpaths.
