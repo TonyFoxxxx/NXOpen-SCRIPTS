@@ -122,6 +122,8 @@ class SmartWorld:
         trial.mcs_definitions, trial.mcs_verified_definitions = {}, {}
         trial.mcs_fixed_xforms = {}
         trial.mcs_rebuilt = {}
+        trial.mcs_supports = {}
+        trial.stock_features = {}
         def set_fixed_xform(tag, origin, axes):
             if self.parents[tag] is not None:
                 raise AssertionError('Only a numerical Xform may be edited')
@@ -284,7 +286,7 @@ class ThreePlanesOrientationTests(unittest.TestCase):
             xf.values = wrong
             return xf
         trial.part.Xforms.CreateXform = create
-        with self.assertRaisesRegex(RuntimeError,'не должно менять начало'):
+        with self.assertRaisesRegex(RuntimeError,'не совпадает с пересечением'):
             trial.transfer_mcs()
         self.assertIs(world.csys.xform,old)
         trial.native.set_fixed_xform.assert_not_called()
@@ -387,6 +389,151 @@ class ThreePlanesOrientationTests(unittest.TestCase):
         world.xform_signs = (-1,1)
         with self.assertRaisesRegex(RuntimeError,'не совпадают начало или оси'):
             trial.verify_mcs(replacement)
+
+
+class SupportDependencyTests(unittest.TestCase):
+    def linked_world(self, depth=1):
+        world = SmartWorld()
+        for face, origin in zip(world.faces,([60,0,0],[0,-25,0],[0,0,16])):
+            face.Origin = xyz(*origin)
+        planes = list(world.faces)
+        for _ in range(depth):
+            linked = []
+            for parent in planes:
+                plane = world.Plane(parent.Origin,parent.Normal,2)
+                plane.SetGeometry([parent])
+                plane.Evaluate()
+                linked.append(plane)
+            planes = linked
+        world.xform = world.Xform(*planes)
+        world.csys = world.Csys(world.xform)
+        trial = world.trial(M.MirrorPlane([0,-25,8],[-1,0,0]))
+        trial.checkpoint_model_history = Mock()
+        return world,trial,planes
+
+    def add_stock(self, trial, tag=200, body=300, csys=0, bounded=(), parents=()):
+        feature = NS(Tag=tag,Name='Blank '+str(tag),GetParents=lambda:[NS(Tag=p) for p in parents])
+        state = {'BoundedObject':tuple(bounded),'Csys':csys}
+        trial.stock_features[tag] = (feature,(body,),state,(0,0,0))
+
+    def test_reported_old_origin_is_resolved_after_stock_then_original_planes_update(self):
+        world,trial,planes = self.linked_world()
+        self.add_stock(trial)
+        topology = {300:((10,11,12),())}
+        order = trial.mcs_stock_order(topology)
+        self.assertEqual(order,[('stock',200),('mcs',world.csys.Tag)])
+        trial.update_stock = Mock(side_effect=lambda tags:world.reflect_faces(trial.plane))
+        old_graph = dict(trial.mcs_definitions[world.csys.Tag][0])
+        replacement = trial.transfer_mcs_and_stock(order)
+        trial.verify_mcs(replacement)
+        origin,axes = trial.csys_frame(world.csys.Tag)
+        self.assertEqual(origin,[-60,-25,16])
+        self.assertEqual(axes,[-1,0,0,0,-1,0,0,0,1])
+        for plane in planes:
+            self.assertEqual(trial.smart_graph(plane.Tag),M.graph_branch(old_graph,plane.Tag))
+        trial.native.set_fixed_xform.assert_not_called()
+        trial.uf.Param.SetTagValue.assert_not_called()
+        trial.update_stock.assert_called_once_with((200,))
+
+    def test_nested_cached_supports_are_evaluated_parent_first(self):
+        world,trial,planes = self.linked_world(depth=2)
+        world.reflect_faces(trial.plane)
+        world.events.clear()
+        trial.verify_mcs(trial.transfer_mcs())
+        for plane in planes:
+            parent = plane.sources[0]
+            self.assertLess(world.events.index(('plane',parent.Tag)),world.events.index(('plane',plane.Tag)))
+
+    def test_unmoved_support_fails_before_creating_any_candidate(self):
+        world,trial,_ = self.linked_world()
+        create = Mock(side_effect=AssertionError('must not construct on old supports'))
+        trial.part.Planes.CreatePlane = create
+        original = world.csys.xform
+        with self.assertRaisesRegex(RuntimeError,'Опорная плоскость MCS ещё') as caught:
+            trial.transfer_mcs()
+        self.assertIn('-60.0',str(caught.exception))
+        self.assertIn('60.0',str(caught.exception))
+        self.assertIn('Расстояние до ожидаемой плоскости',str(caught.exception))
+        self.assertIs(world.csys.xform,original)
+        create.assert_not_called()
+
+    def test_support_geometry_is_compared_as_a_plane_not_its_arbitrary_origin(self):
+        world,trial,_ = self.linked_world()
+        world.reflect_faces(trial.plane)
+        world.faces[0].Origin = xyz(-60,123,456)
+        world.faces[0].Normal = xyz(1,0,0)
+        trial.verify_mcs(trial.transfer_mcs())
+
+    def test_wrong_support_normal_is_rejected_before_candidate(self):
+        world,trial,_ = self.linked_world()
+        world.reflect_faces(trial.plane)
+        world.faces[0].Normal = xyz(0,1,0)
+        trial.part.Planes.CreatePlane = Mock()
+        with self.assertRaisesRegex(RuntimeError,'Опорная плоскость MCS ещё'):
+            trial.transfer_mcs()
+        trial.part.Planes.CreatePlane.assert_not_called()
+
+    def test_late_support_drift_fails_final_check_without_repair(self):
+        world,trial,planes = self.linked_world()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        planes[0].Origin = xyz(60,0,0)
+        with self.assertRaisesRegex(RuntimeError,'Опорная плоскость MCS ещё'):
+            trial.verify_mcs(replacement)
+        self.assertEqual(M.xyz(planes[0].Origin),[60,0,0])
+
+    def test_numerical_mcs_precedes_its_stock_and_stock_precedes_three_planes(self):
+        world,trial,_ = self.linked_world()
+        root = world.Csys(world.Xform())
+        world.add_csys(trial,root,2,'ROOT')
+        self.add_stock(trial,csys=root.Tag)
+        order = trial.mcs_stock_order({300:((10,11,12),())})
+        self.assertEqual(order,[('mcs',root.Tag),('stock',200),('mcs',world.csys.Tag)])
+        expected = trial.plane.point(trial.frames[root.Tag][0])
+        def update(tags):
+            self.assertEqual(trial.csys_frame(root.Tag)[0],expected)
+            world.reflect_faces(trial.plane)
+        trial.update_stock = Mock(side_effect=update)
+        trial.verify_mcs(trial.transfer_mcs_and_stock(order))
+
+    def test_stock_based_on_model_mcs_is_updated_after_that_mcs(self):
+        world,trial,_ = self.linked_world()
+        self.add_stock(trial,csys=world.csys.Tag)
+        order = trial.mcs_stock_order({300:((40,41,42),())})
+        self.assertEqual(order,[('mcs',world.csys.Tag),('stock',200)])
+        world.reflect_faces(trial.plane)
+        def update(tags):
+            self.assertEqual(trial.csys_frame(world.csys.Tag)[0],[-60,-25,16])
+        trial.update_stock = Mock(side_effect=update)
+        trial.verify_mcs(trial.transfer_mcs_and_stock(order))
+
+    def test_stock_dependencies_include_bodies_faces_edges_and_feature_parents(self):
+        for bounded,parents in (((400,),()),((20,),()),((30,),()),((),(201,))):
+            with self.subTest(bounded=bounded,parents=parents):
+                world,trial,_ = self.linked_world()
+                self.add_stock(trial,bounded=bounded,parents=parents)
+                self.add_stock(trial,tag=201,body=400)
+                order = trial.mcs_stock_order({300:((10,11,12),()),400:((20,),(30,))})
+                self.assertEqual(order,[('stock',201),('stock',200),('mcs',world.csys.Tag)])
+
+    def test_circular_stock_mcs_dependency_stops_full_workflow_before_reflection(self):
+        world,trial,_ = self.linked_world()
+        self.add_stock(trial,csys=world.csys.Tag)
+        trial.check_cam_builders = Mock()
+        trial.capture_stock,trial.capture_parameters = Mock(),Mock()
+        trial.geometry_snapshot = Mock(return_value={})
+        trial.capture_topology = Mock(return_value={300:((10,11,12),())})
+        trial.capture_body_history = Mock()
+        trial.native.transform_entities = Mock()
+        with self.assertRaisesRegex(RuntimeError,'Цикл зависимостей'):
+            trial.run_in_absolute_wcs()
+        trial.native.transform_entities.assert_not_called()
+
+    def test_missing_or_cyclic_parent_graph_is_rejected(self):
+        for graph in ({1:(2,)},{1:(2,),2:(1,)}):
+            with self.subTest(graph=graph):
+                with self.assertRaises(RuntimeError):
+                    M.parent_order(graph)
 
 
 class FixedXformTests(unittest.TestCase):
@@ -906,7 +1053,9 @@ class HistoryTests(unittest.TestCase):
         trial.native = NS(reflection_matrix=lambda plane:[0]*16,transform_entities=Mock(),update_model=Mock())
         trial.plane = M.MirrorPlane([0,0,0],[1,0,0])
         trial.transfer_mcs = Mock(return_value={})
-        trial.update_stock = lambda:stock.expressions.append(Expression(200,'new_offset','0'))
+        trial.mcs_stock_order = Mock(return_value=[('stock',20)])
+        trial.stock_features = {20:(stock,(),{},(0,0,0))}
+        trial.update_stock = lambda *args:stock.expressions.append(Expression(200,'new_offset','0'))
         trial.setup = NS(DeleteToolPath=Mock())
         trial.transfer_boundary_planes = Mock()
         with self.assertRaisesRegex(RuntimeError,'200: new_offset'):
@@ -936,6 +1085,8 @@ class StockTests(unittest.TestCase):
         trial.native = NS(reflection_matrix=lambda plane:[0]*16,transform_entities=Mock())
         trial.plane = M.MirrorPlane([0,0,0],[1,0,0])
         trial.transfer_mcs, trial.update_stock = Mock(return_value={}), Mock()
+        trial.mcs_stock_order = Mock(return_value=[('stock',20)])
+        trial.stock_features = {20:(NS(Name='Blank'),(),{},(0,0,0))}
         trial.setup = NS(DeleteToolPath=Mock(side_effect=RuntimeError('reached path deletion')))
         with self.assertRaisesRegex(RuntimeError,'reached path deletion'):
             trial.run_in_absolute_wcs()

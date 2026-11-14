@@ -2,6 +2,16 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.14
+
+In the user's V1.13 run, candidate MCS axes matched expectations but its origin stayed at X = +60 instead of −60; Undo returned Internal error. Correct premature MCS transfer before protected-stock updates. Before reflection, derive an order from actual references to CSYS, bodies, faces, edges and stock features. Handle both MCS depending on stock and stock depending on CSYS. A cycle stops the trial before transformation.
+
+Before Three Planes transfer, evaluate original linked supports in parent order. Verify each as a geometric plane against its expected reflection: normal sign may be reversed and the representation point may move within the same plane. Wrong placement stops before candidate construction and reports expected/actual data. Final support, axis, associativity, CAM and stock checks remain. Do not move supports by substituting numerical coordinates.
+
+After Undo failure, attempt to restore the original and close without saving exclusively the copy created by this invocation, using CloseRetainUndoMarks. Verify separate identity, path, absence of components, actual closure and the original's active state. Failed closure or unavailable API leaves an explicit instruction to close the copy manually. Other parts, files and undo marks are not closed or deleted.
+
+All 177 checks outside NX passed, including 31 with a C library. Cases cover dependency order, nested supports, the stale-origin scenario, cycles before reflection, late support drift and Undo/close failures. These emulate API behavior, not the NX kernel. A complete V1.14 run, Workpiece/operation dialogs and toolpath generation on the user's PRT remain unconfirmed.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.13
 
 V1.12 passed model-history conversion to BREP, geometry and CAM editor checks. Final MCS validation found the correct origin (-60, -25, 16) but reversed X and Z directions. Previously, immediate Three Planes rebuilding checked the dependency graph without checking the actual frame; the old report does not locate the stage where orientation changed.

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.13
-SCRIPT_VERSION = "V1.13"
+# SCRIPT_VERSION: V1.14
+SCRIPT_VERSION = "V1.14"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -616,6 +616,21 @@ def graph_branch(graph, root):
     return result
 
 
+def parent_order(graph):
+    """Order a captured dependency graph without recursive NX Evaluate calls."""
+    pending, result = set(graph), []
+    while pending:
+        ready = sorted(tag for tag in pending if not (set(graph[tag] or ()) & pending))
+        if not ready:
+            raise RuntimeError("Цикл зависимостей: " + str(sorted(pending)))
+        for tag in ready:
+            if any(parent not in graph for parent in (graph[tag] or ())):
+                raise RuntimeError("Неполный граф зависимостей: " + str(tag))
+        result.extend(ready)
+        pending.difference_update(ready)
+    return result
+
+
 def counted(value):
     count, items = value
     items = [] if items is None else list(items)
@@ -676,6 +691,7 @@ class Trial:
         self.mcs_definitions, self.mcs_verified_definitions = {}, {}
         self.mcs_fixed_xforms = {}
         self.mcs_rebuilt = {}
+        self.mcs_supports = {}
         self.stock_features, self.protected_bodies = {}, set()
         self.cam_builder_state, self.cam_builder_labels = None, {}
         self.history_baseline, self.history_previous = None, None
@@ -774,6 +790,8 @@ class Trial:
                             ordered.append(int(matching[0].Tag))
                         if len(set(ordered)) == 3:
                             planes = tuple(ordered)
+                            for obj, plane in data:
+                                self.mcs_supports[int(obj.Tag)] = plane
         self.mcs_definitions[tag] = (graph, planes)
         self.mcs_verified_definitions[tag] = graph
         fixed = self.mcs_fixed_xforms.get(tag)
@@ -805,6 +823,42 @@ class Trial:
         matrix, origin = self.uf.Csys.AskCsysInfo(tag)
         return list(origin), list(self.uf.Csys.AskMatrixValues(matrix))
 
+    def verify_support_plane(self, source):
+        old = self.mcs_supports[source]
+        expected = MirrorPlane(self.plane.point(old.origin), self.plane.vector(old.normal))
+        actual = self.plane_data(self.refs[source])
+        distance = dot(expected.normal, [a-b for a,b in zip(actual.origin, expected.origin)])
+        if abs(dot(expected.normal, actual.normal)) < 1.0 - 1e-7 or abs(distance) > 1e-5:
+            details = ["Опорная плоскость MCS ещё не соответствует отражённой геометрии: " + str(source),
+                "Исходная точка: " + str(list(old.origin)),
+                "Ожидаемая точка: " + str(list(expected.origin)) + "; нормаль: " + str(list(expected.normal)),
+                "Фактическая точка: " + str(list(actual.origin)) + "; нормаль: " + str(list(actual.normal)),
+                "Расстояние до ожидаемой плоскости: " + str(distance)]
+            details.extend(self.csys_definition_details(source, self.smart_graph(source)))
+            raise RuntimeError("\n".join(details))
+
+    def refresh_mcs_supports(self, tag, graph, planes):
+        self.stage = "Обновление опорных плоскостей MCS: " + str(tag)
+        branches = {}
+        for source in planes:
+            branch = graph_branch(graph, source)
+            if self.smart_graph(source) != branch:
+                raise RuntimeError("Повреждено определение опорной плоскости MCS " + str(source))
+            branches.update(branch)
+        # Original support planes can themselves be smart objects. Evaluating
+        # just the new coincident wrappers leaves those original parents stale.
+        for source in parent_order(branches):
+            obj = self.refs[source]
+            evaluate = getattr(obj, "Evaluate", None)
+            if branches[source] is not None and callable(evaluate):
+                evaluate()
+        for source in planes:
+            if self.smart_graph(source) != graph_branch(graph, source):
+                raise RuntimeError("Изменилось определение опоры при обновлении MCS: " + str(source))
+            self.stage = "Проверка положения опоры MCS " + str(tag) + " / " + str(source)
+            self.verify_support_plane(source)
+        self.lines.append("MCS " + str(tag) + ": проверено отражение трёх опор до построения СК.")
+
     def require_csys_frame(self, tag, origin, axes, context):
         self.stage = "Проверка Three Planes: " + str(tag) + " / " + context
         actual_origin, actual_axes = self.csys_frame(tag)
@@ -818,6 +872,7 @@ class Trial:
         # before their Xform, and the Xform before the CSYS which consumes it.
         for plane, source in zip(data["planes"], data["sources"]):
             plane.Evaluate()
+            self.verify_support_plane(source)
             if tuple(int(o.Tag) for o in plane.GetGeometry()) != (source,):
                 raise RuntimeError("Изменилась выбранная плоскость Three Planes: " + str(source))
             support = self.plane_data(self.refs[source])
@@ -847,7 +902,7 @@ class Trial:
             origin, axes = self.csys_frame(csys.Tag)
             attempts.append("  Flip=" + str(flips) + "; начало=" + str(origin) + "; оси=" + str(axes))
             if not close_values(origin, data["origin"]):
-                raise RuntimeError("Переключение нормалей не должно менять начало Three Planes.\n" +
+                raise RuntimeError("Начало кандидата Three Planes не совпадает с пересечением отражённых опор.\n" +
                     "Ожидалось: " + str(list(data["origin"])) + "\n" + attempts[-1])
             if close_values(axes, data["axes"]):
                 self.lines.append("Three Planes: ориентация проверена / " + context +
@@ -1124,6 +1179,53 @@ class Trial:
     def tooling_builder(self, feature):
         return self.part.Features.ToolingFeatureCollection.CreateToolingBoxBuilder(feature)
 
+    def mcs_stock_order(self, topology):
+        """Use the pre-transform references, including faces of protected stock."""
+        self.stage = "Проверка порядка зависимостей заготовок и MCS"
+        owners = {}
+        for tag, (_, bodies, _, _) in self.stock_features.items():
+            task = ("stock", tag)
+            owners[tag] = task
+            for body in bodies:
+                faces, edges = topology[body]
+                for entity in (body,) + tuple(faces) + tuple(edges):
+                    if entity in owners and owners[entity] != task:
+                        raise RuntimeError("Общая геометрия у нескольких параметрических заготовок")
+                    owners[entity] = task
+        owners.update({tag: ("mcs", tag) for tag in self.frames})
+        dependencies = {}
+        for tag in self.frames:
+            graph, _ = self.mcs_definitions[tag]
+            parent_order(graph)  # Detect cycles even inside an individual CSYS.
+            dependencies[("mcs", tag)] = {owners[p] for p in graph if p != tag and p in owners}
+        for tag, (feature, _, state, _) in self.stock_features.items():
+            parents = set(int(p.Tag) for p in feature.GetParents()) | set(state["BoundedObject"])
+            for key in ("Csys", "AxisPoint", "AxisVector"):
+                source = state.get(key, 0)
+                if source:
+                    graph = self.smart_graph(source)
+                    parent_order(graph)
+                    parents.update(graph)
+            dependencies[("stock", tag)] = {owners[p] for p in parents if p in owners}
+        # No model object is changed before this plan is known to be acyclic.
+        order = parent_order(dependencies)
+        labels = [("Заготовка " + str(self.stock_features[tag][0].Name)) if kind == "stock"
+                  else "MCS/RCS " + str(tag) for kind, tag in order]
+        self.lines.append("Порядок обновления опор: " + " → ".join(labels))
+        return order
+
+    def transfer_mcs_and_stock(self, order):
+        replacement = {}
+        for kind, tag in order:
+            if kind == "stock":
+                self.update_stock((tag,))
+                label = "Обновление параметрических заготовок: " + str(self.stock_features[tag][0].Name)
+            else:
+                replacement.update(self.transfer_mcs((tag,)))
+                label = "Перенос определений MCS/RCS: " + str(tag)
+            self.checkpoint_model_history(label)
+        return replacement
+
     def stock_state(self, builder):
         flags = ("Type", "ReferenceCsysType", "CsysAssociative", "NonAlignedMinimumBox", "SingleOffset")
         offsets = ("Clearance", "OffsetNegativeX", "OffsetNegativeY", "OffsetNegativeZ",
@@ -1167,8 +1269,10 @@ class Trial:
             finally:
                 builder.Destroy()
 
-    def update_stock(self):
-        for feature, bodies, state, position in self.stock_features.values():
+    def update_stock(self, tags=None):
+        for tag, (feature, bodies, state, position) in self.stock_features.items():
+            if tags is not None and tag not in tags:
+                continue
             self.stage = "Обновление параметрической заготовки: " + str(feature.Name)
             builder = self.tooling_builder(feature)
             try:
@@ -1468,13 +1572,17 @@ class Trial:
                 seen.add(key)
                 key = (self.mcs_sources[key][1], key[1])
 
-    def transfer_mcs(self):
+    def transfer_mcs(self, tags=None):
         replacement = {}
         for tag, (old_origin, axes) in self.frames.items():
+            if tags is not None and tag not in tags:
+                continue
             origin = self.plane.point(old_origin)
             axes = reflected_frame(axes, self.plane)
             self.stage = "Перенос определения MCS/RCS: " + str(tag)
             graph, planes = self.mcs_definitions[tag]
+            if planes is not None:
+                self.refresh_mcs_supports(tag, graph, planes)
             is_default = any(old == tag and self.mcs_sources[(int(node.Tag), index)][0] == PARAM_DEFAULT
                              for node, index, old in self.mcs_bindings)
             if is_default:
@@ -1522,12 +1630,15 @@ class Trial:
                 self.uf.Csys.SetOrigin(tag, origin)
                 self.uf.Csys.EditMatrixOfObject(tag, matrix_tag)
         for node, index, old_tag in self.mcs_bindings:
-            if replacement[old_tag] != old_tag:
+            if old_tag in replacement and replacement[old_tag] != old_tag:
                 self.stage = "Перенос систем координат: " + str(node.Name) + " / параметр " + str(index)
                 self.uf.Param.SetTagValue(node.Tag, index, replacement[old_tag])
         return replacement
 
     def verify_mcs(self, replacement):
+        for source in self.mcs_supports:
+            self.stage = "Итоговая проверка опоры MCS: " + str(source)
+            self.verify_support_plane(source)
         for (tag, index), old_tag in self.mcs_expected.items():
             old_state, old_definer, label = self.mcs_sources[(tag, index)]
             self.stage = "Проверка MCS/RCS: " + label + " / параметр " + str(index)
@@ -1625,6 +1736,7 @@ class Trial:
         self.stage = "Чтение топологии тел"
         topology = self.capture_topology()
         self.capture_body_history(topology)
+        transfer_order = self.mcs_stock_order(topology)
         operations = self.operation_snapshot()
         targets = {int(body.Tag): body for body in self.bodies if int(body.Tag) not in self.protected_bodies}
         transformable = tuple(getattr(self.nx, name) for name in
@@ -1647,12 +1759,8 @@ class Trial:
         self.stage = "Отражение геометрии и её модельных родителей"
         self.native.transform_entities(list(targets), matrix)
         self.checkpoint_model_history("Отражение геометрии и её модельных родителей")
-        self.stage = "Перенос систем координат"
-        replacement = self.transfer_mcs()
-        self.checkpoint_model_history("Перенос определений MCS/RCS")
-        self.stage = "Обновление параметрических заготовок"
-        self.update_stock()
-        self.checkpoint_model_history("Обновление параметрических заготовок")
+        self.stage = "Обновление заготовок и MCS по зависимостям"
+        replacement = self.transfer_mcs_and_stock(transfer_order)
         self.stage = "Удаление рассчитанных траекторий в копии"
         self.setup.DeleteToolPath(self.operations)
         self.stage = "Обновление и проверка результата"
@@ -1739,7 +1847,7 @@ def execute(session, nx, uf, plane, native=None):
     target, source_hash = copy_exclusive(source, [str(part.FullPath) for part in session.Parts])
     lines.append("Исходный проект: " + source)
     lines.append("Файл тестовой копии: " + target)
-    trial, mark, stage = None, None, "Открытие копии"
+    part, trial, mark, stage = None, None, None, "Открытие копии"
     try:
         part, status = session.Parts.OpenBaseDisplay(target)
         try:
@@ -1779,7 +1887,14 @@ def execute(session, nx, uf, plane, native=None):
                 if rolled_back:
                     lines.append("Изменения отменены; не удалось удалить метку Undo: " + str(rollback))
                 else:
-                    lines.append("Откат не выполнен: " + str(rollback) + ". Закройте тестовую копию без сохранения.")
+                    lines.append("Откат через Undo не выполнен: " + str(rollback))
+                    try:
+                        discard_failed_copy(session, nx, part, source_part, target)
+                        lines.append("Созданная тестовая копия закрыта без сохранения; это не успешный Undo.")
+                        lines.append("Снова активен исходный проект: " + source)
+                    except Exception as discard:
+                        lines.append("Не удалось подтвердить закрытие тестовой копии: " + str(discard))
+                        lines.append("Закройте тестовую копию без сохранения: " + target)
             if rolled_back:
                 try:
                     restore_source_display(session, source_part)
@@ -1792,6 +1907,29 @@ def execute(session, nx, uf, plane, native=None):
         lines.append("\n" + traceback.format_exc())
     lines.append("\nНажмите «Копировать всё» и пришлите результат теста.")
     return "\r\n".join(lines)
+
+
+def discard_failed_copy(session, nx, part, source_part, target):
+    # This fallback may discard ONLY the new standalone copy created by this
+    # invocation. Preserve the user's other open parts and their undo marks.
+    if part is None or int(part.Tag) == int(source_part.Tag):
+        raise RuntimeError("Не подтверждена отдельная тестовая копия")
+    if os.path.normcase(os.path.abspath(str(part.FullPath))) != os.path.normcase(os.path.abspath(target)):
+        raise RuntimeError("Путь открытой детали не совпадает с созданной копией")
+    root = part.ComponentAssembly.RootComponent
+    if root is not None and list(root.GetChildren()):
+        raise RuntimeError("Тестовая копия содержит компоненты")
+    close = getattr(part, "CloseRetainUndoMarks", None)
+    if not callable(close):
+        raise RuntimeError("В этом NX недоступно закрытие с сохранением остальных меток Undo")
+    tag = int(part.Tag)
+    restore_source_display(session, source_part)
+    close(nx.BasePart.CloseWholeTree.False_, nx.BasePart.CloseModified.CloseModified, None)
+    if any(int(open_part.Tag) == tag for open_part in session.Parts):
+        raise RuntimeError("NX всё ещё считает тестовую копию открытой")
+    if (int(session.Parts.Work.Tag) != int(source_part.Tag) or
+            int(session.Parts.Display.Tag) != int(source_part.Tag)):
+        raise RuntimeError("После закрытия NX не подтвердил активный исходный проект")
 
 
 def restore_source_display(session, source_part):

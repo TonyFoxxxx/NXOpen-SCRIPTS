@@ -581,7 +581,8 @@ class TransactionTests(unittest.TestCase):
                     M.execute(session, None, None, axis_plane())
             self.assertEqual(len(list(Path(folder).iterdir())), 1)
 
-    def run_with_trial(self, fails, rollback_fails=False, display_fails=False, delete_mark_fails=False):
+    def run_with_trial(self, fails, rollback_fails=False, display_fails=False, delete_mark_fails=False,
+                       close_supported=True, close_fails=False, close_noop=False):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.prt"
             source.write_bytes(b"prt-binary")
@@ -591,8 +592,9 @@ class TransactionTests(unittest.TestCase):
             class Parts:
                 Display = original
                 Work = original
+                copy = None
                 def __iter__(self):
-                    return iter([original])
+                    return iter([original]+([self.copy] if self.copy else []))
                 def SetDisplay(self, part, maintain_work, entire):
                     if display_fails:
                         raise RuntimeError('cannot restore display')
@@ -600,7 +602,16 @@ class TransactionTests(unittest.TestCase):
                     events.append(('display',part.Tag))
                     return object(), types.SimpleNamespace(Dispose=lambda: events.append('display-status-dispose'))
                 def OpenBaseDisplay(self, path):
-                    self.Display = types.SimpleNamespace(Tag=2, FullPath=path)
+                    def close(whole, modified, responses):
+                        events.append(('close',2,whole,modified,responses))
+                        if close_fails:
+                            raise RuntimeError('close failed')
+                        if not close_noop:
+                            self.copy = None
+                    self.copy = self.Display = types.SimpleNamespace(Tag=2, FullPath=path,
+                        ComponentAssembly=types.SimpleNamespace(RootComponent=None))
+                    if close_supported:
+                        self.copy.CloseRetainUndoMarks = close
                     status = types.SimpleNamespace(NumberUnloadedParts=0, Dispose=lambda: events.append("dispose"))
                     return self.Display, status
                 def SetWork(self, part):
@@ -616,7 +627,9 @@ class TransactionTests(unittest.TestCase):
             session = types.SimpleNamespace(Parts=Parts(),
                 SetUndoMark=lambda *a: 55,
                 UndoToMark=undo, DeleteUndoMark=delete_mark)
-            nx = types.SimpleNamespace(Session=types.SimpleNamespace(MarkVisibility=types.SimpleNamespace(Visible=1)))
+            nx = types.SimpleNamespace(Session=types.SimpleNamespace(MarkVisibility=types.SimpleNamespace(Visible=1)),
+                BasePart=types.SimpleNamespace(CloseWholeTree=types.SimpleNamespace(False_=0),
+                    CloseModified=types.SimpleNamespace(CloseModified=1)))
             class Trial:
                 stage = "reflection"
                 def __init__(self, *args):
@@ -653,12 +666,48 @@ class TransactionTests(unittest.TestCase):
         self.assertIn('ТЕСТ НЕ ПРОЙДЕН', report)
         self.assertIn('access violation reading boundary', report)
 
-    def test_failed_undo_keeps_failed_copy_visible_and_reports_it(self):
-        events,report = self.run_with_trial(True,rollback_fails=True)
+    def test_failed_undo_without_safe_close_keeps_copy_visible_and_reports_it(self):
+        events,report = self.run_with_trial(True,rollback_fails=True,close_supported=False)
         self.assertIn(('active',2,2),events)
         self.assertNotIn(('display',1),events)
-        self.assertIn('Откат не выполнен',report)
+        self.assertIn('Откат через Undo не выполнен',report)
         self.assertNotIn('Снова активен исходный проект',report)
+
+    def test_failed_undo_discards_only_new_copy_without_saving(self):
+        events,report = self.run_with_trial(True,rollback_fails=True)
+        self.assertIn(('active',1,1),events)
+        self.assertIn(('close',2,0,1,None),events)
+        self.assertLess(events.index(('display',1)),events.index(('close',2,0,1,None)))
+        self.assertNotIn(('delete-mark',55),events)
+        self.assertIn('копия закрыта без сохранения',report)
+        self.assertIn('это не успешный Undo',report)
+        self.assertIn('ТЕСТ НЕ ПРОЙДЕН',report)
+
+    def test_failed_undo_and_failed_close_keep_manual_discard_instruction(self):
+        for kwargs in ({'close_fails':True},{'close_noop':True}):
+            with self.subTest(kwargs=kwargs):
+                events,report = self.run_with_trial(True,rollback_fails=True,**kwargs)
+                self.assertIn('Не удалось подтвердить закрытие',report)
+                self.assertIn('Закройте тестовую копию без сохранения',report)
+                self.assertNotIn('копия закрыта без сохранения',report)
+
+    def test_failed_restore_does_not_close_the_active_failed_copy(self):
+        events,report = self.run_with_trial(True,rollback_fails=True,display_fails=True)
+        self.assertFalse(any(isinstance(e,tuple) and e[0]=='close' for e in events))
+        self.assertIn(('active',2,2),events)
+        self.assertIn('Закройте тестовую копию без сохранения',report)
+
+    def test_discard_rejects_source_wrong_path_and_assembly(self):
+        source = types.SimpleNamespace(Tag=1)
+        cases = [source,types.SimpleNamespace(Tag=2,FullPath='/different.prt'),
+            types.SimpleNamespace(Tag=2,FullPath='/copy.prt',
+                ComponentAssembly=types.SimpleNamespace(RootComponent=types.SimpleNamespace(GetChildren=lambda:[object()])))]
+        session = types.SimpleNamespace(Parts=types.SimpleNamespace(SetDisplay=Mock()))
+        for part in cases:
+            with self.subTest(part=part):
+                with self.assertRaises(RuntimeError):
+                    M.discard_failed_copy(session,None,part,source,'/copy.prt')
+        session.Parts.SetDisplay.assert_not_called()
 
     def test_display_failure_does_not_misreport_successful_undo(self):
         events,report = self.run_with_trial(True,display_fails=True)

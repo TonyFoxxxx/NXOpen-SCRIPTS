@@ -109,6 +109,7 @@ class Fixture:
         t.native = NS(reflection_matrix=lambda plane:[0]*16,transform_entities=Mock(side_effect=self.convert),update_model=Mock())
         t.plane = M.MirrorPlane([0,0,0],[1,0,0])
         t.transfer_mcs, t.update_stock = Mock(return_value={}),Mock()
+        t.mcs_stock_order = Mock(return_value=[])
         t.setup = NS(DeleteToolPath=Mock())
         t.transfer_boundary_planes, t.verify_boundary_planes, t.verify_mcs = Mock(),Mock(),Mock()
         t.uf = NS(Obj=NS(DeleteObject=Mock()))

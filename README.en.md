@@ -32,16 +32,16 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.13 | Trial geometry reflection and MCS transfer; body history may become BREP. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.14 | Trial geometry reflection and MCS transfer; body history may become BREP. No components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.13 · 2026-11-14
+### Latest update — Mirrored CAM project trial V1.14 · 2026-11-14
 
-Refine Three Planes MCS orientation transfer: evaluate linked planes, Xform and CSYS in dependency order, and check the actual origin/axes through UF before and after installing the definition. If needed, try only normal-sign combinations of the same three supports. A correction after model update must survive one more update. No conversion to Dynamic is used.
+Update stock and MCS in dependency order. Evaluate and verify original support planes before constructing Three Planes so that MCS does not use stale stock placement. After Undo failure, attempt to close only the newly created trial copy without saving and restore the original.
 
-Update **«Зеркальная копия CAM-проекта — тест» to V1.13** in the updater. V1.12 transferred the MCS origin correctly but reversed X and Z relative to their expected directions. All 162 checks outside NX passed; a complete V1.13 run and real PRT toolpath generation remain unconfirmed. Geometry and CAM mode still permits verified conversion of the copy's model-body history to BREP. [Test workflow and limitations](docs/en/mirror-project.md).
+Update **«Зеркальная копия CAM-проекта — тест» to V1.14** in the updater. All 177 checks outside NX passed; a complete run and real PRT toolpath generation remain unconfirmed. Retest from a healthy original project. Geometry and CAM mode still permits verified conversion of the copy's body history to BREP. [Test workflow and limitations](docs/en/mirror-project.md).
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 
