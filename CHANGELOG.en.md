@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.09
+
+The V1.08 test recognized two protected stock features and two Three Planes CSYS definitions, but stopped while transferring a third associative CSYS. Its exact definition was absent from the old report; Workpiece editability and Three Planes transfer after reflection remain unconfirmed.
+
+Support a CSYS with one numerical Xform that has no parametric parents, unit scale and matching initial origin/axes. Update origin and directions inside the existing Xform through UF; retain the CSYS, Xform and CAM references. Recheck coordinates, axes and the dependency graph. Do not reflect shared or already transferred Xforms twice. Reject numerical setters for parameterized Xforms even if their parent list is empty. Report CAM nodes, parameter status/provider and object types in unrecognized definitions.
+
+All 98 checks outside NX passed, including 31 with a C library. New coverage includes a numerical root CSYS together with two Three Planes definitions, shared and inherited references, avoiding double reflection, retaining objects, rejecting unknown definitions and errors from both UF setters. V1.09 on the user's PRT and toolpath generation require validation in NX.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.08
 
 The V1.07 test retained selected faces, but bounding-geometry errors blocked Workpiece and dependent operations, and Three Planes MCS definitions changed to Dynamic. Exclude Tooling Box solids from direct transformation and update their existing parametric features. Check type, offsets, references, bounds and model-history preservation.

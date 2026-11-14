@@ -48,6 +48,12 @@ class BoundaryAbiTests(unittest.TestCase):
         self.native.so_test = self.native.bind('UF_SO_is_so', (u,ctypes.POINTER(ctypes.c_ubyte)))
         self.native.so_parents = self.native.bind('UF_SO_ask_parents', (u,i,ip,pp))
         self.native.so_error = self.native.bind('UF_SO_ask_update_error_code', (u,ip))
+        dp = ctypes.POINTER(ctypes.c_double)
+        self.native.xform_point = self.native.bind('UF_SO_set_point_of_xform', (u,dp))
+        self.native.xform_axes = self.native.bind('UF_SO_set_xy_direction_of_xform', (u,dp,dp))
+        self.xform_read = self.native.bind('fixture_xform_read', (dp,), None)
+        self.xform_calls = self.native.bind('fixture_xform_calls', (i,))
+        self.xform_failure = self.native.bind('fixture_xform_failure', (i,i), None)
         self.parameter = self.native.bind('fixture_param_status', (u,i,i,i), None)
         self.definer = self.native.bind('fixture_param_definer', (u,i,u,i), None)
         self.native.members = self.native.bind('UF_CAMBND_ask_boundary_items', (p,ip,pp))
@@ -80,6 +86,35 @@ class BoundaryAbiTests(unittest.TestCase):
         with self.assertRaises(M.NativeApiError):
             self.native.smart_parents(5)
         self.assertEqual(self.stat(0),1)
+
+    def test_numeric_xform_writes_unsigned_tag_and_double_point_and_axes(self):
+        plane = M.MirrorPlane([4,-3,2],[1,2,3])
+        origin = plane.point([7,8,9])
+        axes = M.reflected_frame([1,0,0,0,1,0,0,0,1],plane)
+        self.native.set_fixed_xform(0xf0000050,origin,axes)
+        values = (ctypes.c_double * 9)()
+        self.xform_read(values)
+        self.assertEqual(list(values),origin + axes[:6])
+        self.assertEqual([self.xform_calls(i) for i in (0,1)],[1,1])
+
+    def test_numeric_xform_setter_rejects_smart_or_invalid_frames_before_writing(self):
+        identity = [1,0,0,0,1,0,0,0,1]
+        for tag,origin,axes in ((3,[0,0,0],identity),(0xf0000050,[float('nan'),0,0],identity),
+                               (0xf0000050,[0,0,0],[1,0,0,0,1,0,0,0,-1])):
+            with self.subTest(tag=tag,origin=origin,axes=axes), self.assertRaises((RuntimeError,ValueError)):
+                self.native.set_fixed_xform(tag,origin,axes)
+        self.assertEqual([self.xform_calls(i) for i in (0,1)],[0,0])
+
+    def test_either_xform_setter_error_propagates_for_transaction_rollback(self):
+        for step,context in ((0,'UF_SO_set_point_of_xform'),(1,'UF_SO_set_xy_direction_of_xform')):
+            with self.subTest(step=step):
+                self.reset(1,0)
+                self.xform_failure(step,12345)
+                with self.assertRaises(M.NativeApiError) as caught:
+                    self.native.set_fixed_xform(0xf0000050,[1,2,3],[1,0,0,0,1,0,0,0,1])
+                self.assertEqual(caught.exception.context,context)
+                self.assertEqual(caught.exception.code,12345)
+                self.assertEqual([self.xform_calls(i) for i in (0,1)],[1,step])
 
     def trial(self):
         class Operation:
@@ -218,6 +253,7 @@ class BoundaryAbiTests(unittest.TestCase):
         trial.mcs_sources = {}
         trial.mcs_links = {}
         trial.mcs_definitions, trial.mcs_verified_definitions = {}, {}
+        trial.mcs_fixed_xforms = {}
         trial.check_cam_builders = lambda: None
         trial.model_history = lambda: {}
         trial.capture_stock = lambda: None

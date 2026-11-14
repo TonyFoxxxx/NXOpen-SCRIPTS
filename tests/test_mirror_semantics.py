@@ -61,10 +61,19 @@ class SmartWorld:
 
         class Xform(Object):
             Scale = 1.0
-            def __init__(self, a, b, c, update=2, scale=1.0):
-                super().__init__(parents=(a.Tag,b.Tag,c.Tag))
-                self.inputs, self.Scale = [a,b,c], scale
+            def __init__(self, a=None, b=None, c=None, update=2, scale=1.0):
+                super().__init__(parents=(a.Tag,b.Tag,c.Tag) if a else None)
+                self.inputs, self.Scale = [a,b,c] if a else [], scale
+                self.fixed = None if a else ([7,8,9],[1,0,0,0,1,0,0,0,1])
+            @property
+            def Origin(self):
+                return xyz(*self.values()[0])
+            @property
+            def Orientation(self):
+                return NS(**dict(zip(M.MATRIX_FIELDS,self.values()[1])))
             def values(self):
+                if self.fixed is not None:
+                    return tuple(list(row) for row in self.fixed)
                 normals = [M.xyz(p.Normal) for p in self.inputs]
                 distances = [M.dot(n,M.xyz(p.Origin)) for n,p in zip(normals,self.inputs)]
                 cross = [M.cross(normals[1],normals[2]), M.cross(normals[2],normals[0]), M.cross(normals[0],normals[1])]
@@ -101,21 +110,33 @@ class SmartWorld:
         trial.plane = mirror or M.MirrorPlane([0,0,0],[1,0,0])
         trial.refs, trial.lines = {}, []
         trial.mcs_definitions, trial.mcs_verified_definitions = {}, {}
+        trial.mcs_fixed_xforms = {}
+        def set_fixed_xform(tag, origin, axes):
+            if self.parents[tag] is not None:
+                raise AssertionError('Only a numerical Xform may be edited')
+            self.objects[tag].fixed = (list(origin),list(axes))
         trial.native = NS(smart_parents=lambda tag:self.parents[tag],
             face_plane=lambda tag:M.MirrorPlane(M.xyz(self.objects[tag].Origin),M.xyz(self.objects[tag].Normal)),
-            parameter_status=lambda tag,index:M.PARAM_OVERRIDDEN)
-        tag = self.csys.Tag
-        origin, axes = self.xform.values()
-        trial.frames = {tag: (origin,axes)}
-        trial.mcs_bindings = [(NS(Tag=1,Name='MCS'),59,tag)]
-        trial.mcs_expected = {(1,59):tag}
-        trial.mcs_sources = {(1,59):(M.PARAM_OVERRIDDEN,1,'MCS / MCS')}
+            parameter_status=lambda tag,index:trial.mcs_sources[(tag,index)][0],
+            parameter_definer=lambda tag,index:trial.mcs_sources[(tag,index)][1],
+            set_fixed_xform=Mock(side_effect=set_fixed_xform))
+        trial.frames, trial.mcs_expected, trial.mcs_sources = {}, {}, {}
+        trial.mcs_bindings = []
         trial.mcs_links = {}
-        trial.uf = NS(Param=NS(AskTagValue=lambda *args:tag, SetTagValue=Mock()),
+        trial.uf = NS(Param=NS(AskTagValue=lambda tag,index:trial.mcs_expected[(tag,index)], SetTagValue=Mock()),
             Csys=NS(AskCsysInfo=lambda t:(t,self.objects[t].xform.values()[0]),
                     AskMatrixValues=lambda t:self.objects[t].xform.values()[1]))
-        trial.capture_csys_definition(tag,origin,axes)
+        self.add_csys(trial,self.csys,1,'MCS')
         return trial
+
+    def add_csys(self, trial, csys, node_tag, label):
+        tag = csys.Tag
+        origin, axes = csys.xform.values()
+        trial.frames[tag] = (origin,axes)
+        trial.mcs_bindings.append((NS(Tag=node_tag,Name=label),59,tag))
+        trial.mcs_expected[(node_tag,59)] = tag
+        trial.mcs_sources[(node_tag,59)] = (M.PARAM_OVERRIDDEN,node_tag,label + ' / MCS')
+        trial.capture_csys_definition(tag,origin,axes)
 
     def reflect_faces(self, mirror):
         for face in self.faces:
@@ -175,6 +196,100 @@ class AssociativityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'plane update failed'):
             trial.transfer_mcs()
         self.assertIs(world.csys.xform,before)
+
+
+class FixedXformTests(unittest.TestCase):
+    def world(self):
+        world = SmartWorld()
+        world.xform = world.Xform()
+        world.csys = world.Csys(world.xform)
+        return world
+
+    def test_smart_csys_with_numeric_xform_retains_both_objects_and_definition(self):
+        for mirror in (M.MirrorPlane([0,0,0],[1,0,0]),M.MirrorPlane([4,-3,2],[1,2,3])):
+            with self.subTest(normal=mirror.normal):
+                world = self.world()
+                trial = world.trial(mirror)
+                original_graph = dict(world.parents)
+                self.assertEqual(trial.mcs_fixed_xforms,{world.csys.Tag:world.xform.Tag})
+                replacement = trial.transfer_mcs()
+                trial.verify_mcs(replacement)
+                self.assertEqual(world.parents,original_graph)
+                self.assertIs(world.csys.xform,world.xform)
+                trial.native.set_fixed_xform.assert_called_once()
+                trial.uf.Param.SetTagValue.assert_not_called()
+
+    def test_numeric_root_and_two_three_plane_setups_transfer_together(self):
+        world = self.world()
+        trial = world.trial()
+        for node_tag in (2,3):
+            world.add_csys(trial,world.Csys(world.Xform(*world.faces)),node_tag,'MCS_' + str(node_tag))
+        world.reflect_faces(trial.plane)
+        trial.verify_mcs(trial.transfer_mcs())
+        self.assertEqual(len(trial.frames),3)
+        self.assertEqual(sum(bool(planes) for _,planes in trial.mcs_definitions.values()),2)
+        trial.native.set_fixed_xform.assert_called_once()
+        trial.uf.Param.SetTagValue.assert_not_called()
+
+    def test_already_moved_xform_is_not_reflected_again(self):
+        world = self.world()
+        trial = world.trial()
+        origin,axes = world.xform.values()
+        world.xform.fixed = (trial.plane.point(origin),M.reflected_frame(axes,trial.plane))
+        trial.verify_mcs(trial.transfer_mcs())
+        trial.native.set_fixed_xform.assert_not_called()
+
+    def test_shared_xform_and_inherited_operation_are_moved_once(self):
+        world = self.world()
+        trial = world.trial()
+        world.add_csys(trial,world.Csys(world.xform),2,'SECOND')
+        trial.mcs_expected[(3,59)] = world.csys.Tag
+        trial.mcs_sources[(3,59)] = (M.PARAM_INHERITED,1,'OPERATION / MCS')
+        trial.verify_mcs(trial.transfer_mcs())
+        trial.native.set_fixed_xform.assert_called_once()
+        trial.uf.Param.SetTagValue.assert_not_called()
+
+    def test_parameterized_xform_with_zero_parents_is_not_treated_as_numeric(self):
+        world = self.world()
+        world.parents[world.xform.Tag] = ()
+        trial = world.trial()
+        self.assertFalse(trial.mcs_fixed_xforms)
+        with self.assertRaisesRegex(RuntimeError,'замена на Dynamic запрещена'):
+            trial.transfer_mcs()
+        trial.native.set_fixed_xform.assert_not_called()
+        self.assertIn('MCS / MCS','\n'.join(trial.lines))
+        self.assertIn('Xform ' + str(world.xform.Tag) + ': родители ()','\n'.join(trial.lines))
+
+    def test_scaled_xform_is_not_silently_normalized(self):
+        world = self.world()
+        world.xform.Scale = 2.0
+        trial = world.trial()
+        self.assertFalse(trial.mcs_fixed_xforms)
+        with self.assertRaisesRegex(RuntimeError,'замена на Dynamic запрещена'):
+            trial.transfer_mcs()
+        trial.native.set_fixed_xform.assert_not_called()
+
+    def test_changed_dependencies_stop_before_numeric_write(self):
+        world = self.world()
+        trial = world.trial()
+        world.parents[world.xform.Tag] = (10,)
+        with self.assertRaisesRegex(RuntimeError,'Изменилось определение'):
+            trial.transfer_mcs()
+        trial.native.set_fixed_xform.assert_not_called()
+
+    def test_failed_native_write_is_fatal(self):
+        world = self.world()
+        trial = world.trial()
+        trial.native.set_fixed_xform.side_effect = RuntimeError('native setter failed')
+        with self.assertRaisesRegex(RuntimeError,'native setter failed'):
+            trial.transfer_mcs()
+
+    def test_successful_native_call_must_really_update_the_csys(self):
+        world = self.world()
+        trial = world.trial()
+        trial.native.set_fixed_xform.side_effect = None
+        with self.assertRaisesRegex(RuntimeError,'Не подтверждён перенос CSYS'):
+            trial.transfer_mcs()
 
 
 class CamEditorTests(unittest.TestCase):

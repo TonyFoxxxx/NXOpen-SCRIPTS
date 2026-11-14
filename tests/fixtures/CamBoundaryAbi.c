@@ -87,6 +87,8 @@ static void *allocations[8];
 static int plane_mode = 1, error_code, free_count, invalid_frees, data_calls;
 static int write_error, write_calls;
 static double plane_origin[3], plane_matrix[9];
+static double xform_values[9]; /* origin, X direction, Y direction */
+static int xform_calls[2], xform_error_step, xform_error;
 
 void fixture_reset(int mode, int error) {
     parameter_count = 0;
@@ -94,6 +96,9 @@ void fixture_reset(int mode, int error) {
     error_code = error;
     free_count = invalid_frees = data_calls = 0;
     write_error = write_calls = 0;
+    memset(xform_values, 0, sizeof(xform_values));
+    memset(xform_calls, 0, sizeof(xform_calls));
+    xform_error_step = xform_error = 0;
     for (int i = 0; i < 3; ++i) plane_origin[i] = 100.0 + i;
     for (int i = 0; i < 9; ++i) plane_matrix[i] = mode == 0 ? (i % 4 == 0 ? 1.0 : 0.0) : 200.0 + i;
 }
@@ -154,7 +159,7 @@ void UF_free(void *array) {
 /* uf_defs.h: C logical is unsigned char, C++ logical is bool (one byte).
  * uf_so.h also returns an allocated array of 32-bit tags. */
 int UF_SO_is_so(uint32_t tag, unsigned char *is_so) {
-    *is_so = tag == 1 ? 0 : 1;
+    *is_so = tag == 1 || tag == UINT32_C(0xf0000050) ? 0 : 1;
     return 0;
 }
 
@@ -182,6 +187,27 @@ int UF_SO_ask_parents(uint32_t tag, int options, int *count, uint32_t **parents)
         }
     }
     return 90002;
+}
+
+void fixture_xform_read(double values[9]) { memcpy(values, xform_values, sizeof(xform_values)); }
+int fixture_xform_calls(int step) { return xform_calls[step]; }
+void fixture_xform_failure(int step, int error) { xform_error_step = step; xform_error = error; }
+
+int UF_SO_set_point_of_xform(uint32_t tag, const double point[3]) {
+    if (tag != UINT32_C(0xf0000050)) return 90008;
+    ++xform_calls[0];
+    if (xform_error_step == 0 && xform_error) return xform_error;
+    memcpy(xform_values, point, 3 * sizeof(double));
+    return 0;
+}
+
+int UF_SO_set_xy_direction_of_xform(uint32_t tag, const double x[3], const double y[3]) {
+    if (tag != UINT32_C(0xf0000050)) return 90008;
+    ++xform_calls[1];
+    if (xform_error_step == 1 && xform_error) return xform_error;
+    memcpy(xform_values + 3, x, 3 * sizeof(double));
+    memcpy(xform_values + 6, y, 3 * sizeof(double));
+    return 0;
 }
 
 int UF_CAMBND_ask_boundaries(uint32_t object_tag, int kind, int *count, UF_CAMBND_boundary_t **out) {

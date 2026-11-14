@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.08
-SCRIPT_VERSION = "V1.08"
+# SCRIPT_VERSION: V1.09
+SCRIPT_VERSION = "V1.09"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -268,6 +268,8 @@ class NativeCam:
         self.so_parents = self.bind("UF_SO_ask_parents", (u, i, ip, pp))
         self.so_error = self.bind("UF_SO_ask_update_error_code", (u, ip))
         dp = ctypes.POINTER(ctypes.c_double)
+        self.xform_point = self.bind("UF_SO_set_point_of_xform", (u, dp))
+        self.xform_axes = self.bind("UF_SO_set_xy_direction_of_xform", (u, dp, dp))
         self.set_boundary = self.bind("UF_CAMBND_set_boundary_plane", (p, dp, dp))
         self.mirror_matrix = self.bind("UF_MTX4_mirror", (dp, dp, dp))
         self.map_point = self.bind("UF_MTX4_vec3_multiply", (dp, dp, dp), None)
@@ -340,6 +342,20 @@ class NativeCam:
         self.check(self.exact_box(int(tag), int(csys), corner, directions, distances),
                    "UF_MODL_ask_bounding_box_exact")
         return list(corner), [list(row) for row in directions], list(distances)
+
+    def set_fixed_xform(self, tag, origin, axes):
+        # uf_so.h setters accept only a dumb transform. A smart CSYS wrapper
+        # referencing it remains smart: neither object is replaced or detached.
+        if not 0 < int(tag) <= 0xffffffff:
+            raise RuntimeError("Некорректный идентификатор Xform")
+        if self.smart_parents(tag) is not None:
+            raise RuntimeError("Числовое редактирование ассоциативного Xform запрещено")
+        if len(origin) != 3 or not all(math.isfinite(v) for v in origin):
+            raise RuntimeError("Некорректное начало Xform")
+        x, y, _ = frame_axes(axes, "Xform")
+        values = ctypes.c_double * 3
+        self.check(self.xform_point(int(tag), values(*origin)), "UF_SO_set_point_of_xform")
+        self.check(self.xform_axes(int(tag), values(*x), values(*y)), "UF_SO_set_xy_direction_of_xform")
 
     def transform_entities(self, tags, matrix):
         tags = [int(tag) for tag in tags]
@@ -562,6 +578,7 @@ class Trial:
         self.mcs_sources = {}
         self.mcs_links = {}
         self.mcs_definitions, self.mcs_verified_definitions = {}, {}
+        self.mcs_fixed_xforms = {}
         self.stock_features, self.protected_bodies = {}, set()
         self.cam_builder_state = None
         self.boundary_planes, self.current_boundaries = {}, {}
@@ -631,7 +648,16 @@ class Trial:
         if parents is not None:
             xforms = [self.refs[p] for p in parents if isinstance(self.refs[p], self.nx.Xform)]
             if len(xforms) == 1 and len(parents) == 1:
-                inputs = graph[int(xforms[0].Tag)]
+                xform = xforms[0]
+                xform_tag = int(xform.Tag)
+                inputs = graph[xform_tag]
+                if inputs is None and close_values([float(xform.Scale)], [1.0]):
+                    # UF_SO_is_so refers to the CSYS itself, not its transform.
+                    # A CSYS -> fixed Xform chain has a numerical definition,
+                    # even though UF calls the CSYS wrapper parameterized.
+                    xform_axes = [float(getattr(xform.Orientation, field)) for field in MATRIX_FIELDS]
+                    if close_values(xyz(xform.Origin), origin) and close_values(xform_axes, axes):
+                        self.mcs_fixed_xforms[tag] = xform_tag
                 if inputs is not None:
                     planar = [self.refs[p] for p in inputs
                               if isinstance(self.refs[p], (self.nx.Face, self.nx.Plane, self.nx.DatumPlane))]
@@ -651,9 +677,30 @@ class Trial:
                             planes = tuple(ordered)
         self.mcs_definitions[tag] = (graph, planes)
         self.mcs_verified_definitions[tag] = graph
-        description = "Three Planes" if planes else "ассоциативная СК" if parents is not None else "числовая СК"
+        fixed = self.mcs_fixed_xforms.get(tag)
+        description = ("Three Planes" if planes else "CSYS с числовым Xform " + str(fixed) if fixed
+                       else "ассоциативная СК: способ задания не распознан" if parents is not None else "числовая СК")
         self.lines.append("Определение СК " + str(tag) + ": " + description +
                           ("; плоскости " + str(planes) if planes else ""))
+        uses = [(self.mcs_sources[key], key) for key, value in self.mcs_expected.items() if value == tag]
+        inherited = sum(state == PARAM_INHERITED for (state, _, _), _ in uses)
+        for (state, definer, label), key in uses:
+            if state != PARAM_INHERITED:
+                self.lines.append("  Источник: " + label + "; узел " + str(key[0]) +
+                                  "; статус " + PARAM_STATUS_NAMES[state] + "; источник параметра " + str(definer))
+        self.lines.append("  Наследующих параметров: " + str(inherited) + "; начало ABS: " + str(origin))
+        if parents is not None and not planes and not fixed:
+            self.lines.extend(self.csys_definition_details(tag, graph))
+
+    def csys_definition_details(self, tag, graph):
+        lines = ["  Структура определения СК " + str(tag) + ":"]
+        for number, (obj_tag, parents) in enumerate(graph.items()):
+            if number >= 32:
+                lines.append("    Показаны первые 32 объекта из " + str(len(graph)))
+                break
+            label = type(self.refs[obj_tag]).__name__ + " " + str(obj_tag)
+            lines.append("    " + label + (": числовой объект" if parents is None else ": родители " + str(parents)))
+        return lines
 
     def rebuild_three_planes(self, tag, planes, expected_axes):
         nx = self.nx
@@ -1031,9 +1078,24 @@ class Trial:
                 matrix_tag, actual_origin = self.uf.Csys.AskCsysInfo(tag)
                 actual_axes = self.uf.Csys.AskMatrixValues(matrix_tag)
                 if not (close_values(actual_origin, origin) and close_values(actual_axes, axes)):
+                    fixed_xform = self.mcs_fixed_xforms.get(tag)
+                    if fixed_xform is not None:
+                        if self.smart_graph(tag) != graph:
+                            raise RuntimeError("Изменилось определение числового Xform системы " + str(tag))
+                        self.native.set_fixed_xform(fixed_xform, origin, axes)
+                        obj.Evaluate()
+                        matrix_tag, actual_origin = self.uf.Csys.AskCsysInfo(tag)
+                        actual_axes = self.uf.Csys.AskMatrixValues(matrix_tag)
+                        if (self.smart_graph(tag) != graph or not close_values(actual_origin, origin)
+                                or not close_values(actual_axes, axes)):
+                            raise RuntimeError("Не подтверждён перенос CSYS с числовым Xform " + str(tag))
+                        continue
                     if planes is None:
+                        labels = [self.mcs_sources[key][2] for key, value in self.mcs_expected.items()
+                                  if value == tag and self.mcs_sources[key][0] != PARAM_INHERITED]
                         raise RuntimeError("Нельзя сохранить способ задания ассоциативной СК " + str(tag) +
-                                           ". Требуется поддержка её определения; замена на Dynamic запрещена.")
+                                           " (" + "; ".join(labels) + "). Требуется поддержка её определения; замена на Dynamic запрещена.\n" +
+                                           "\n".join(self.csys_definition_details(tag, graph)))
                     # Preserve every original support-plane definition. Only the
                     # CSYS/xform construction is replaced, retaining the CSYS tag.
                     for source in planes:
@@ -1210,6 +1272,7 @@ class Trial:
         self.lines.append("Проверены данные редакторов Workpiece/MCS/операций: " + str(len(self.cam_builder_state)))
         self.lines.append("Параметрические заготовки сохранены: " + str(len(self.stock_features)))
         self.lines.append("Сохранены определения Three Planes: " + str(sum(bool(p) for _, p in self.mcs_definitions.values())))
+        self.lines.append("Распознаны CSYS с числовым Xform: " + str(len(self.mcs_fixed_xforms)))
         if self.unavailable:
             self.lines.append("\nНЕ ПРОВЕРЕНЫ через UF (код 1345005): " + str(len(self.unavailable)) + " разделов.")
             self.lines.extend(sorted(self.unavailable))
