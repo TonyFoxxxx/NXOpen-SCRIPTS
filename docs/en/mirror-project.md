@@ -2,15 +2,13 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.04**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.05**.
 
 ## Latest release
 
-**V1.04 · 2026-11-14** — transfer boundaries with user-defined planes. In the copy, reflect the plane origin and X/Y axes, then reconstruct Z to keep a right-handed frame. This preserves in-plane contour coordinates and the meaning of material side. Plane position, boundary type, material side, flags and geometry references are checked after transfer. A boundary shared by several operations is written once.
+**V1.05 · 2026-11-14** — fix conversion of `NXOpen.UF.ParamStatusMemberType` to an integer when reading MCS/RCS. Fix the same call when reading local 3D operation parameters.
 
-Replace single-object selection with its name entry field by the standard geometry picker: **click one planar face or datum plane → click OK**. Empty or multiple selection explains that exactly one object is required. No copy is created before confirmation.
-
-For plane reads and writes, only the copy's WCS is temporarily aligned with ABS, then restored even on exceptions. Boundary handles are reacquired after model update. Transfer uses the original data, so an associative plane that has already moved is not reflected twice.
+Read status through `UF_PARAM_ask_param_status` with the types declared in `uf_param.h`. Explicitly distinguish default, inherited and locally overridden values. Inherited MCS/RCS definitions are not added to the local replacement list; the root-frame rule is retained. An invalid index, unknown status or API error stops the trial before geometry transformation. The report identifies the CAM node and parameter index.
 
 **This remains a trial. A complete successful run in NX / Designcenter 2606 is not yet confirmed. Other numerical directions and coordinates inside operation settings are not transformed yet.**
 
@@ -18,7 +16,7 @@ For plane reads and writes, only the copy's WCS is temporarily aligned with ABS,
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.04**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.05**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files are never replaced.
 6. Read and share the report using **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. Then save the open test copy using the normal NX command and regenerate operations.
@@ -49,4 +47,4 @@ For plane reads and writes, only the copy's WCS is temporarily aligned with ABS,
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-Forty-seven checks passed outside NX, including ten with a separately compiled C library. Coverage includes plane reads/writes, boundary settings and references, one write per inherited boundary, avoiding double reflection, detecting failed writes, restoring a translated/rotated WCS, exactly-one-object selection and cancellation. Mathematics checks preserve in-plane contour coordinates and material side under oblique reflection. A user confirmed V1.03 reading of a user-defined boundary plane and rollback. A complete V1.04 run and the new dialog appearance still require validation in NX.
+Fifty-three checks passed outside NX, including 16 with a separately compiled C library. New checks cover parameter statuses, local and inherited MCS/RCS, local nonzero 3D parameters, invalid/unknown statuses and API errors. Geometry, boundary, plane selection, WCS restoration and rollback checks are retained. The V1.04 report reached MCS capture after reading geometry references, then failed while converting the MCS status. A complete V1.05 run still requires validation in NX.

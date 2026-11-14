@@ -1,9 +1,47 @@
-/* Independent C ABI probe for the declarations in Siemens uf_cambnd.h.
+/* Independent C ABI probe for Siemens uf_cambnd.h and uf_param.h.
  * This is a test library, not an NX runtime or a shipped journal dependency. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+typedef enum {
+    UF_PARAM_DEFAULT, UF_PARAM_INHERITED, UF_PARAM_OVERRIDDEN, UF_PARAM_INVALID_INDEX
+} UF_PARAM_status_t;
+_Static_assert(sizeof(UF_PARAM_status_t) == sizeof(int), "UF parameter status uses C int storage");
+static struct {
+    uint32_t tag;
+    int index, state, error;
+} parameter_statuses[32];
+static int parameter_count;
+
+void fixture_param_status(uint32_t tag, int index, int state, int error) {
+    for (int n = 0; n < parameter_count; ++n) {
+        if (parameter_statuses[n].tag == tag && parameter_statuses[n].index == index) {
+            parameter_statuses[n].state = state;
+            parameter_statuses[n].error = error;
+            return;
+        }
+    }
+    if (parameter_count >= 32) abort();
+    parameter_statuses[parameter_count].tag = tag;
+    parameter_statuses[parameter_count].index = index;
+    parameter_statuses[parameter_count].state = state;
+    parameter_statuses[parameter_count++].error = error;
+}
+
+int UF_PARAM_ask_param_status(uint32_t tag, int index, UF_PARAM_status_t *status) {
+    for (int n = 0; n < parameter_count; ++n) {
+        if (parameter_statuses[n].tag == tag && parameter_statuses[n].index == index) {
+            if (parameter_statuses[n].error) return parameter_statuses[n].error;
+            /* -1 simulates a faulty successful call that left output unwritten. */
+            if (parameter_statuses[n].state != -1)
+                *status = (UF_PARAM_status_t)parameter_statuses[n].state;
+            return 0;
+        }
+    }
+    return 90005;
+}
 
 typedef enum { boundary_closed, boundary_open } UF_CAM_boundary_type_t;
 typedef enum { material_undefined, material_in_left, material_out_right } UF_CAM_material_side_t;
@@ -27,6 +65,7 @@ static int write_error, write_calls;
 static double plane_origin[3], plane_matrix[9];
 
 void fixture_reset(int mode, int error) {
+    parameter_count = 0;
     plane_mode = mode;
     error_code = error;
     free_count = invalid_frees = data_calls = 0;

@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.05
+
+Fix `int(NXOpen.UF.ParamStatusMemberType)` when reading MCS/RCS and local spatial parameters. Read status through `UF_PARAM_ask_param_status` using its documented C type. Preserve the distinction between local and inherited coordinate systems, including root handling; invalid/unknown statuses and API errors stop the trial. The report identifies the CAM node and parameter index.
+
+Fifty-three checks passed outside NX, including 16 with a separately compiled C library. Add status, MCS/RCS inheritance, local 3D parameter filtering and stop-before-transform error checks. A complete V1.05 run in NX remains unconfirmed.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.04
 
 Transfer user-defined boundary planes: reflect origin and X/Y, reconstruct Z to preserve a right-handed frame and material-side meaning. Check parameters and references; update a shared boundary once from its original coordinates. Temporarily align the copy's WCS with ABS and restore it on completion or failure.

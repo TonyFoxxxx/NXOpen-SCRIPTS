@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.04
-SCRIPT_VERSION = "V1.04"
+# SCRIPT_VERSION: V1.05
+SCRIPT_VERSION = "V1.05"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -26,6 +26,8 @@ _CREDIT = bytes((98, 121, 32, 64, 84, 111, 110, 121, 95, 70, 111, 120, 120, 120,
 TITLE = SCRIPT_NAME + " — " + SCRIPT_VERSION + " | " + _CREDIT
 GEOMETRY_KINDS = ("Part", "Blank", "Check", "Trim", "Cut Area", "Wall", "Drive")
 MAX_OBJECTS = 20000
+# UF_PARAM_status_t, documented in Siemens uf_param.h.
+PARAM_DEFAULT, PARAM_INHERITED, PARAM_OVERRIDDEN, PARAM_INVALID_INDEX = range(4)
 
 
 def reflect(values, axis, offset=0.0):
@@ -216,7 +218,7 @@ class NativeCam:
     """Documented UF C calls, including methods absent from Python UF.Modl.
 
     Signatures: Siemens uf_cam.h, uf_camgeom.h, uf_cambnd.h, uf.h,
-    uf_modl.h, uf_modl_utilities.h and uf_trns.h.
+    uf_modl.h, uf_modl_utilities.h, uf_trns.h and uf_param.h.
     UF_CAM_geom_type_t is Part=0, Blank=1, Check=2, Trim=3,
     CutArea=4, Wall=5, Drive=6. tag_t is unsigned 32-bit on Windows.
     Opaque item handles are pointers, never tags; only the returned arrays
@@ -252,6 +254,7 @@ class NativeCam:
         self.members = self.bind("UF_CAMBND_ask_boundary_items", (p, ip, pp))
         self.member_entity = self.bind("UF_CAMBND_ask_item_entity", (p, ctypes.POINTER(u)))
         self.custom = self.bind("UF_CAMGEOM_ask_custom_points", (u, i, ip, pp))
+        self.param_status = self.bind("UF_PARAM_ask_param_status", (u, i, ip))
         dp = ctypes.POINTER(ctypes.c_double)
         self.set_boundary = self.bind("UF_CAMBND_set_boundary_plane", (p, dp, dp))
         self.mirror_matrix = self.bind("UF_MTX4_mirror", (dp, dp, dp))
@@ -310,6 +313,18 @@ class NativeCam:
 
     def update_model(self):
         self.check(self.model_update(), "UF_MODL_update")
+
+    def parameter_status(self, tag, index):
+        # Python returns ParamStatusMemberType, which need not support int().
+        # Read the documented C enum into caller-owned int storage instead.
+        state = ctypes.c_int(-1)
+        self.check(self.param_status(int(tag), index, ctypes.byref(state)), "UF_PARAM_ask_param_status")
+        if state.value == PARAM_INVALID_INDEX:
+            raise RuntimeError("Параметр " + str(index) + " недопустим для объекта " + str(tag))
+        if state.value not in (PARAM_DEFAULT, PARAM_INHERITED, PARAM_OVERRIDDEN):
+            raise RuntimeError("Неизвестный статус параметра " + str(index) +
+                               " объекта " + str(tag) + ": " + str(state.value))
+        return state.value
 
     def read_boundary(self, handle):
         # Keep the opaque handle pointer-sized from ask_boundaries to this call;
@@ -622,8 +637,11 @@ class Trial:
 
     def capture_parameters(self):
         for node in self.nodes:
+            context = "Чтение MCS и параметров: " + str(node.Name) + " [" + type(node).__name__ + "]"
+            self.stage = context
             indices = sorted(set(counted(self.uf.Param.AskRequiredParams(node.Tag))))
             for index in indices:
+                self.stage = context + " / параметр " + str(index)
                 attrs = self.uf.Param.AskParamAttributes(index)
                 kind = parameter_type(field(attrs, "type"), self.nx)
                 if kind == "tag":
@@ -631,20 +649,20 @@ class Trial:
                     if tag:
                         self.reference(tag)
                     if index in (59, 60) and tag:
-                        state = int(self.uf.Param.AskParamStatus(node.Tag, index))
+                        state = self.native.parameter_status(node.Tag, index)
                         self.mcs_expected[(int(node.Tag), index)] = tag
                         if tag not in self.frames:
                             matrix, origin = self.uf.Csys.AskCsysInfo(tag)
                             axes = list(self.uf.Csys.AskMatrixValues(matrix))
                             reflected_frame(axes, self.plane)
                             self.frames[tag] = (list(origin), axes)
-                        if state == 2 or int(node.Tag) == int(self.root.Tag):
+                        if state == PARAM_OVERRIDDEN or int(node.Tag) == int(self.root.Tag):
                             self.mcs_bindings.append((node, index, tag))
                 elif kind == "vlatag":
                     for tag in counted(self.uf.Param.AskTagVla(node.Tag, index)):
                         self.reference(tag)
                 elif kind in ("3d", "3dlength"):
-                    if int(self.uf.Param.AskParamStatus(node.Tag, index)) == 2:
+                    if self.native.parameter_status(node.Tag, index) == PARAM_OVERRIDDEN:
                         value = list(self.uf.Param.Ask3dValue(node.Tag, index))
                         if any(abs(x) > 1e-10 for x in value):
                             self.raw_spatial.append(str(node.Name) + ": " + str(field(attrs, "name")) + " = " + str(value))
