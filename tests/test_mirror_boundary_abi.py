@@ -139,6 +139,17 @@ class BoundaryAbiTests(unittest.TestCase):
             AskBoundaryData=Mock(side_effect=AssertionError('Never mix native handles with the Python wrapper'))))
         return trial
 
+    def test_cavity_geometry_checks_both_custom_point_kinds(self):
+        trial = self.trial()
+        operation = trial.nx.CAM.Operation
+        trial.nodes = [type('CavityMilling',(operation,),{'Tag':100,'Name':'CAVITY_MILL'})()]
+        trial.native.custom_count = Mock(return_value=0)
+        trial.geometry_snapshot(collect=True)
+        self.assertEqual([c.args for c in trial.native.custom_count.call_args_list],[(100,0),(100,1)])
+        trial.native.custom_count = Mock(side_effect=[0,1])
+        with self.assertRaisesRegex(RuntimeError,'точки пока не поддерживаются'):
+            trial.geometry_snapshot(collect=False)
+
     def test_structure_size_offsets_and_outputs_match_compiled_c(self):
         self.assertEqual(ctypes.sizeof(M._BoundaryData), self.layout(0))
         self.assertEqual(self.layout(0), 128)

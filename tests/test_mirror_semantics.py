@@ -980,6 +980,71 @@ class CamEditorTests(unittest.TestCase):
         trial.setup = NS(CAMGroupCollection=NS(CreateMillGeomBuilder=lambda obj:builder), CAMOperationCollection=NS())
         return trial,builder
 
+    def test_generic_dispatch_accepts_each_documented_milling_hole_editor(self):
+        for name in M.MILLING_HOLE_BUILDERS:
+            with self.subTest(editor=name):
+                trial,_ = self.trial()
+                base = type('Operation',(),{})
+                trial.nx.CAM.Operation = base
+                node = type('NewOperation',(base,),{'Tag':3,'Name':'NEW_MILL'})()
+                builder = type(name,(),{})()
+                builder.Validate = Mock(return_value=True)
+                builder.Destroy, builder.Commit = Mock(), Mock()
+                trial.nodes = [node]
+                trial.setup.CAMOperationCollection.CreateBuilder = Mock(return_value=builder)
+                trial.check_cam_builders()
+                builder.Validate.assert_called_once()
+                builder.Destroy.assert_called_once()
+                builder.Commit.assert_not_called()
+                self.assertIn(3,trial.cam_builder_state)
+
+    def test_generic_dispatch_rejects_non_milling_editors_and_destroys_them(self):
+        for name in ('RoughTurningBuilder','PlanarAdditiveBuilder','ScannerBuilder',
+                     'OnMachineProbingBuilder','MillUserDefinedBuilder','OperationBuilder'):
+            with self.subTest(editor=name):
+                trial,_ = self.trial()
+                node = type('OtherOperation',(),{'Tag':3,'Name':'OTHER'})()
+                builder = type(name,(),{})()
+                builder.Destroy = Mock()
+                trial.setup.CAMOperationCollection.CreateBuilder = Mock(return_value=builder)
+                with self.assertRaisesRegex(RuntimeError,'вне поддерживаемых'):
+                    trial.operation_editor(node)
+                builder.Destroy.assert_called_once()
+
+    def test_missing_specific_factory_uses_checked_generic_editor(self):
+        trial,_ = self.trial()
+        node = type('HoleDrilling',(),{'Tag':3,'Name':'DRILL'})()
+        builder = type('HoleDrillingBuilder',(),{})()
+        trial.setup.CAMOperationCollection.CreateBuilder = Mock(return_value=builder)
+        self.assertIs(trial.operation_editor(node),builder)
+        trial.setup.CAMOperationCollection.CreateBuilder.assert_called_once_with(node)
+        del trial.setup.CAMOperationCollection.CreateBuilder
+        with self.assertRaisesRegex(RuntimeError,'Нет доступного редактора'):
+            trial.operation_editor(node)
+
+    def test_cavity_editor_reloads_geometry_and_validates_without_commit(self):
+        for valid in (True, False):
+            with self.subTest(valid=valid):
+                trial,builder = self.trial()
+                node = type('CavityMilling',(),{'Tag':3,'Name':'CAVITY_MILL'})()
+                trial.nodes = [node]
+                factory = Mock(return_value=builder)
+                trial.setup.CAMOperationCollection.CreateCavityMillingBuilder = factory
+                builder.PartGeometry.InitializeData = Mock()
+                builder.Validate.return_value = valid
+                if valid:
+                    trial.check_cam_builders()
+                    trial.check_cam_builders()
+                    self.assertEqual(builder.Destroy.call_count,2)
+                else:
+                    with self.assertRaisesRegex(RuntimeError,'не прошёл проверку'):
+                        trial.check_cam_builders()
+                    builder.Destroy.assert_called_once()
+                factory.assert_called_with(node)
+                builder.PartGeometry.InitializeData.assert_called_with(True)
+                builder.Validate.assert_called()
+                builder.Commit.assert_not_called()
+
     def test_selected_geometry_does_not_hide_invalid_bounding_feature(self):
         trial,builder = self.trial('The bounding geometry is invalid because the feature parameters have been removed in Modeling.')
         with self.assertRaisesRegex(RuntimeError,'bounding geometry is invalid'):

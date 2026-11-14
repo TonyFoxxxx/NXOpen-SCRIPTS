@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.17
-SCRIPT_VERSION = "V1.17"
+# SCRIPT_VERSION: V1.18
+SCRIPT_VERSION = "V1.18"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -36,6 +36,34 @@ CAM_LENGTH_TOLERANCE = 1e-8
 # not extend to stock, datum/MCS definitions, sketches or CAM objects.
 BODY_HISTORY_TYPES = frozenset(("EXTRUDE", "BLEND", "BLOCK", "CYLINDER", "CONE",
                                 "SPHERE", "BREP", "IMPORTED_BODY", "IMPORT"))
+
+
+# Concrete milling/hole-making editors from the NXOpen operation collection.
+# Generic dispatch does not authorize turning, additive, probing or user-defined motion.
+OPERATION_BUILDERS = {
+    'CavityMilling': 'CreateCavityMillingBuilder',
+    'FaceMilling': 'CreateFaceMillingBuilder',
+    'PlanarMilling': 'CreatePlanarMillingBuilder',
+    'Engraving': 'CreateEngravingBuilder',
+    'ZLevelMilling': 'CreateZlevelMillingBuilder',
+    'VariableZLevelMilling': 'CreateVazlMillingBuilder',
+    'FeatureMilling': 'CreateFeatureMillingBuilder',
+    'PlungeMilling': 'CreatePlungeMillingBuilder',
+    'HoleMaking': 'CreateHoleMakingBuilder',
+    'HoleDrilling': 'CreateHoleDrillingBuilder',
+    'ThreadMilling': 'CreateThreadMillingBuilder',
+    'CylinderMilling': 'CreateCylinderMillingBuilder',
+    'VolumeBased25DMillingOperation': 'CreateVolumeBased25dMillingOperationBuilder',
+    'GrooveMilling': 'CreateGrooveMillingBuilder',
+    'ChamferMilling': 'CreateChamferMillingBuilder',
+    'RadialGrooveMilling': 'CreateRadialGrooveMillingBuilder',
+    'GenericFeatureOperation': 'CreateGenericFeatureOperationBuilder',
+    'SurfaceContour': 'CreateSurfaceContourBuilder',
+    'TpMultiAxisDeburring': 'CreateMultiAxisDeburringBuilder',
+    'TpMultiAxisWallFinishing': 'CreateMultiAxisWallFinishingBuilder',
+    'MwBLDeburringOperation': 'CreateMwBldeburringOperationBuilder',
+}
+MILLING_HOLE_BUILDERS = frozenset(['CavityMillingBuilder', 'ChamferMillingBuilder', 'CylinderMillingBuilder', 'EdgeChamferBuilder', 'EngravingBuilder', 'FaceMillingBuilder', 'FacingBuilder', 'FacingZigZagBuilder', 'FeatureMillingBuilder', 'GenericFeatureOperationBuilder', 'GrooveMillingBuilder', 'HoleDrillingBuilder', 'HoleMakingBuilder', 'MultiAxisDeburringBuilder', 'MultiAxisRoughingBuilder', 'MultiAxisWallFinishingBuilder', 'MwBLDeburringOperationBuilder', 'PlanarMillingBuilder', 'PlanarRoughingBuilder', 'PlungeMillingBuilder', 'PointToPointBuilder', 'RadialGrooveMillingBuilder', 'RotaryRoughingBuilder', 'SurfaceContourBuilder', 'SwarfBuilder', 'ThreadMillingBuilder', 'VazlMillingBuilder', 'VolumeBased25DMillingOperationBuilder', 'WallProfilingBuilder', 'ZLevelMillingBuilder', 'ZlevelUndercutBuilder'])
 
 
 def cam_enum_snapshot(value, domain, label):
@@ -709,10 +737,6 @@ class Trial:
             raise RuntimeError("В копии должны быть тела и CAM-операции")
         if any(op.IsMirror() for op in self.operations):
             raise RuntimeError("В этой версии нужны обычные операции, без существующих зеркальных операций")
-        allowed_operations = {"VolumeBased25DMillingOperation", "SurfaceContour", "PlanarMilling", "TpMultiAxisDeburring"}
-        for op in self.operations:
-            if type(op).__name__ not in allowed_operations:
-                raise RuntimeError("В первом тесте пока не поддержан тип операции " + type(op).__name__)
         # UF_MODL_transform_entities also transforms model parents. This trial is
         # deliberately restricted to simple, local model histories.
         allowed = {"DATUM_CSYS", "DATUM_PLANE", "DATUM_AXIS", "SKETCH", "EXTRUDE",
@@ -1408,27 +1432,53 @@ class Trial:
                 builder.Destroy()
         self.native.update_model()
 
+    def operation_editor(self, node):
+        collection = self.setup.CAMOperationCollection
+        kind = type(node).__name__
+        factory = OPERATION_BUILDERS.get(kind)
+        method = getattr(collection, factory, None) if factory else None
+        if callable(method):
+            return method(node)
+        generic = getattr(collection, "CreateBuilder", None)
+        if not callable(generic):
+            raise RuntimeError("Нет доступного редактора фрезерной/сверлильной операции: " + str(node.Name) + " [" + kind + "]")
+        builder = generic(node)
+        if type(builder).__name__ not in MILLING_HOLE_BUILDERS:
+            actual = type(builder).__name__
+            if builder is not None:
+                builder.Destroy()
+            raise RuntimeError("Редактор операции вне поддерживаемых фрезерных/сверлильных семейств: " +
+                               str(node.Name) + " [" + kind + "]; редактор " + actual)
+        return builder
+
     def check_cam_builders(self):
+        if not hasattr(self, "cam_extra_unverified"):
+            self.cam_extra_unverified = set()
         factories = {"FeatureGeometry": (self.setup.CAMGroupCollection, "CreateMillGeomBuilder"),
-                     "OrientGeometry": (self.setup.CAMGroupCollection, "CreateMillOrientGeomBuilder"),
-                     "VolumeBased25DMillingOperation": (self.setup.CAMOperationCollection, "CreateVolumeBased25dMillingOperationBuilder"),
-                     "SurfaceContour": (self.setup.CAMOperationCollection, "CreateSurfaceContourBuilder"),
-                     "PlanarMilling": (self.setup.CAMOperationCollection, "CreatePlanarMillingBuilder"),
-                     "TpMultiAxisDeburring": (self.setup.CAMOperationCollection, "CreateMultiAxisDeburringBuilder")}
+                     "OrientGeometry": (self.setup.CAMGroupCollection, "CreateMillOrientGeomBuilder")}
         result, labels = {}, {}
         for node in self.nodes:
             kind = type(node).__name__
-            if kind not in factories:
+            is_operation = kind in OPERATION_BUILDERS or isinstance(node, getattr(self.nx.CAM, "Operation", ()))
+            if kind not in factories and not is_operation:
                 continue
             tag = int(node.Tag)
             label = str(node.Name) + " [" + kind + "]"
             labels[tag] = label
             self.stage = "Проверка открытия CAM: " + label
-            collection, factory = factories[kind]
-            builder = getattr(collection, factory)(node)
+            if is_operation:
+                builder = self.operation_editor(node)
+            else:
+                collection, factory = factories[kind]
+                builder = getattr(collection, factory)(node)
             try:
                 state = {}
-                for name in ("PartGeometry", "BlankGeometry", "CheckGeometry", "CutAreaGeometry"):
+                # FBM/CI definitions are not represented completely by UF channels.
+                # Opening an editor is not proof that all hole/feature data moved.
+                if is_operation:
+                    if callable(getattr(builder, "GetFeatureGeometry", None)) or kind in ("HoleMaking", "FeatureMilling"):
+                        self.cam_extra_unverified.add(label + " / полное определение отверстий/FBM")
+                for name in ("PartGeometry", "BlankGeometry", "CheckGeometry", "CutAreaGeometry", "WallGeometry", "DriveGeometry", "TrimGeometry"):
                     geometry = getattr(builder, name, None)
                     if isinstance(geometry, self.nx.CAM.Geometry):
                         self.stage = "Чтение CAM через редактор: " + str(node.Name) + " / " + name
@@ -1548,8 +1598,9 @@ class Trial:
                     for tag in tags:
                         self.reference(tag)
             if isinstance(node, self.nx.CAM.Operation):
-                kinds = {"PlanarMilling": (0, 1), "VolumeBased25DMillingOperation": (0, 1),
-                         "SurfaceContour": (1,), "TpMultiAxisDeburring": ()}[type(node).__name__]
+                # Query both channels for newly accepted families; an unsupported
+                # UF channel is recorded as unverified, never assumed empty.
+                kinds = {"SurfaceContour": (1,), "TpMultiAxisDeburring": ()}.get(type(node).__name__, (0, 1))
                 for kind in kinds:
                     self.stage = "Чтение пользовательских точек: " + str(node.Name) + " / " + str(kind)
                     try:
@@ -1941,6 +1992,9 @@ class Trial:
             self.lines.append("В этой копии эти тела редактируются без исходных Extrude/Blend; история исходного проекта не изменялась.")
         self.lines.append("Сохранены определения Three Planes: " + str(sum(bool(p) for _, p in self.mcs_definitions.values())))
         self.lines.append("Распознаны CSYS с числовым Xform: " + str(len(self.mcs_fixed_xforms)))
+        if getattr(self, "cam_extra_unverified", None):
+            self.lines.append("\nНЕ ПРОВЕРЕНЫ полностью определения отверстий/FBM (не ошибка UF):")
+            self.lines.extend(sorted(self.cam_extra_unverified))
         if self.unavailable:
             self.lines.append("\nНЕ ПРОВЕРЕНЫ через UF (код 1345005): " + str(len(self.unavailable)) + " разделов.")
             self.lines.extend(sorted(self.unavailable))

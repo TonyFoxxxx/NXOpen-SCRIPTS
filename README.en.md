@@ -32,16 +32,16 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.17 | Trial geometry reflection and MCS transfer; body history may become BREP. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.18 | Trial geometry reflection and MCS transfer; body history may become BREP. No components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.17 · 2026-11-14
+### Latest update — Mirrored CAM project trial V1.18 · 2026-11-15
 
-Remove the extra Y reversal: Y and Z follow the reflection, and X completes a right-handed frame. For an X=0 mirror and ABS-aligned setups, axis directions remain unchanged while the origin moves to the mirrored part. Retain face selections and active-Plane checks; report original and final axes.
+Expand NXOpen milling and hole-making families. Use specialized editors for known classes, otherwise OperationCollection.CreateBuilder with an explicit concrete-editor catalog. Do not automatically accept turning, WEDM, additive, inspection or user-defined motion. Check available geometry, Validate and custom points; report complete hole/FBM definitions separately as unverified. Retain the V1.17 axis convention. All 210 checks outside NX passed; actual projects still require verification and regenerated toolpaths.
 
-Update **«Зеркальная копия CAM-проекта — тест» to V1.17** in the updater. All 205 checks outside NX passed. Retest from a healthy original project and check the axes in NX before regenerating operations. [Test workflow and limitations](docs/en/mirror-project.md).
+Update **«Зеркальная копия CAM-проекта — тест» to V1.18** in the updater. [Test workflow, supported editors and limitations](docs/en/mirror-project.md).
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 
