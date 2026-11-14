@@ -2,6 +2,10 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.18
+
+Add support for `CavityMilling`: open `CreateCavityMillingBuilder`, reload geometry and Validate before/after reflection. Check both custom-point kinds; populated custom points still stop the trial. Retain the V1.17 axis convention. All 207 checks outside NX passed. Actual project execution, saving/reopening and regenerated toolpaths still require NX testing.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.17
 
 After confirming retained face selections in V1.16, the user reported an unwanted Y reversal. Change MCS/RCS transfer: Y and Z follow the reflection, and X = Y × Z ensures a right-handed frame. This replaces the previous reflected X/Z convention with its extra Y inversion. For X=0 reflection and ABS-aligned setups, all original axis directions remain unchanged while the origin is reflected. With an oblique mirror, Y/Z follow the selected plane.

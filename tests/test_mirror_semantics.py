@@ -980,6 +980,29 @@ class CamEditorTests(unittest.TestCase):
         trial.setup = NS(CAMGroupCollection=NS(CreateMillGeomBuilder=lambda obj:builder), CAMOperationCollection=NS())
         return trial,builder
 
+    def test_cavity_editor_reloads_geometry_and_validates_without_commit(self):
+        for valid in (True, False):
+            with self.subTest(valid=valid):
+                trial,builder = self.trial()
+                node = type('CavityMilling',(),{'Tag':3,'Name':'CAVITY_MILL'})()
+                trial.nodes = [node]
+                factory = Mock(return_value=builder)
+                trial.setup.CAMOperationCollection.CreateCavityMillingBuilder = factory
+                builder.PartGeometry.InitializeData = Mock()
+                builder.Validate.return_value = valid
+                if valid:
+                    trial.check_cam_builders()
+                    trial.check_cam_builders()
+                    self.assertEqual(builder.Destroy.call_count,2)
+                else:
+                    with self.assertRaisesRegex(RuntimeError,'не прошёл проверку'):
+                        trial.check_cam_builders()
+                    builder.Destroy.assert_called_once()
+                factory.assert_called_with(node)
+                builder.PartGeometry.InitializeData.assert_called_with(True)
+                builder.Validate.assert_called()
+                builder.Commit.assert_not_called()
+
     def test_selected_geometry_does_not_hide_invalid_bounding_feature(self):
         trial,builder = self.trial('The bounding geometry is invalid because the feature parameters have been removed in Modeling.')
         with self.assertRaisesRegex(RuntimeError,'bounding geometry is invalid'):
