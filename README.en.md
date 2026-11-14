@@ -32,16 +32,16 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.15 | Trial geometry reflection and MCS transfer; body history may become BREP. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.16 | Trial geometry reflection and MCS transfer; body history may become BREP. No components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.15 · 2026-11-14
+### Latest update — Mirrored CAM project trial V1.16 · 2026-11-14
 
-Three Planes retains direct original face selections and plane construction methods. Remove an additional Plane layer that preserved a transitive face dependency but changed the dialog's direct selection. Add separate selection checks before and after model update, plus X/Y/Z selection lines in the report.
+After model update, verify the active MCS planes against frozen original selections and placement. Fix accesses to deleted Plane objects from the retired definition. Losing an active support or selection still stops the trial.
 
-Update **«Зеркальная копия CAM-проекта — тест» to V1.15** in the updater. All 189 checks outside NX passed. Face selection in the actual NX dialog and toolpath generation still need validation. Retest from a healthy original project. [Test workflow and limitations](docs/en/mirror-project.md).
+Update **«Зеркальная копия CAM-проекта — тест» to V1.16** in the updater. All 201 checks outside NX passed; a complete run and actual Three Planes face selections still need validation. Retest from a healthy original project. [Test workflow and limitations](docs/en/mirror-project.md).
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 

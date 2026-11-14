@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.15
-SCRIPT_VERSION = "V1.15"
+# SCRIPT_VERSION: V1.16
+SCRIPT_VERSION = "V1.16"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -852,17 +852,52 @@ class Trial:
         _, sources = self.mcs_definitions[tag]
         if sources is None:
             return
-        for source in sources:
-            self.require_source_plane_selection(source)
         data = self.mcs_rebuilt.get(tag)
+        # After ReplaceParameters, NX may delete the old, now unreferenced
+        # Plane objects during update. Only the installed CSYS graph is live;
+        # the original selection/support snapshots remain immutable evidence.
+        graph = self.smart_graph(tag)
+        if graph != self.mcs_verified_definitions[tag]:
+            raise RuntimeError("Изменилось определение Three Planes: " + str(tag) +
+                               "; переход на Dynamic не разрешён")
+        active_tags = data["plane_tags"] if data is not None else sources
+        active = []
+        for axis, source, current in zip("XYZ", sources, active_tags):
+            obj = self.current_mcs_object(current, (self.nx.Plane, self.nx.Face, self.nx.DatumPlane),
+                                          "СК " + str(tag) + " / " + axis)
+            expected = (data["selections"][len(active)] if data is not None
+                        else self.mcs_plane_selections.get(source))
+            if expected is not None:
+                if not isinstance(obj, self.nx.Plane):
+                    raise RuntimeError("Изменился тип действующей плоскости Three Planes: " + str(current))
+                context = ("СК " + str(tag) + " / " + axis if data is not None
+                           else "исходная опора " + str(source))
+                self.require_plane_selection(obj, expected, context)
+            self.verify_support_plane(source, obj)
+            active.append(obj)
         if data is not None:
-            for axis, plane, expected in zip("XYZ", data["planes"], data["selections"]):
-                self.require_plane_selection(plane, expected, "СК " + str(tag) + " / " + axis)
+            data["planes"] = tuple(active)
+            data["xform"] = self.current_mcs_object(data["xform_tag"], (self.nx.Xform,), "СК " + str(tag))
+        self.current_mcs_object(tag, (self.nx.CartesianCoordinateSystem,), "Three Planes")
 
-    def verify_support_plane(self, source):
+    def current_mcs_object(self, tag, types, context):
+        try:
+            obj = self.nx.TaggedObjectManager.GetTaggedObject(int(tag))
+            if (not isinstance(obj, types) or int(obj.Tag) != int(tag)
+                    or obj.OwningPart is None or int(obj.OwningPart.Tag) != int(self.part.Tag)
+                    or bool(getattr(obj, "IsOccurrence", False))):
+                raise RuntimeError("Неверный тип, идентификатор или владелец объекта")
+        except Exception as exc:
+            raise RuntimeError("Недоступен действующий объект Three Planes " + str(tag) +
+                               " / " + context + ": " + str(exc)) from exc
+        self.refs[int(tag)] = obj
+        return obj
+
+    def verify_support_plane(self, source, current=None):
         old = self.mcs_supports[source]
         expected = MirrorPlane(self.plane.point(old.origin), self.plane.vector(old.normal))
-        actual = self.plane_data(self.refs[source])
+        obj = self.refs[source] if current is None else current
+        actual = self.plane_data(obj)
         distance = dot(expected.normal, [a-b for a,b in zip(actual.origin, expected.origin)])
         if abs(dot(expected.normal, actual.normal)) < 1.0 - 1e-7 or abs(distance) > 1e-5:
             details = ["Опорная плоскость MCS ещё не соответствует отражённой геометрии: " + str(source),
@@ -870,7 +905,8 @@ class Trial:
                 "Ожидаемая точка: " + str(list(expected.origin)) + "; нормаль: " + str(list(expected.normal)),
                 "Фактическая точка: " + str(list(actual.origin)) + "; нормаль: " + str(list(actual.normal)),
                 "Расстояние до ожидаемой плоскости: " + str(distance)]
-            details.extend(self.csys_definition_details(source, self.smart_graph(source)))
+            details.append("Проверяемая действующая опора: " + str(obj.Tag))
+            details.extend(self.csys_definition_details(int(obj.Tag), self.smart_graph(int(obj.Tag))))
             raise RuntimeError("\n".join(details))
 
     def refresh_mcs_supports(self, tag, graph, planes):
@@ -910,17 +946,11 @@ class Trial:
         # before their Xform, and the Xform before the CSYS which consumes it.
         for plane, source, selection in zip(data["planes"], data["sources"], data["selections"]):
             plane.Evaluate()
-            self.verify_support_plane(source)
-            self.require_source_plane_selection(source)
+            self.verify_support_plane(source, plane)
             self.require_plane_selection(plane, selection, "опора " + str(source))
-            support = self.plane_data(self.refs[source])
-            normal = MirrorPlane(xyz(plane.Origin), xyz(plane.Normal)).normal
-            distance = dot(support.normal, [a-b for a,b in zip(xyz(plane.Origin), support.origin)])
-            if abs(dot(normal, support.normal)) < 1.0 - 1e-7 or abs(distance) > 1e-5:
-                raise RuntimeError("Плоскость Three Planes не совпадает с исходной опорой: " + str(source))
         data["xform"].Evaluate()
         csys.Evaluate()
-        for source, graph in data["source_graphs"].items():
+        for source, graph in data["selection_graphs"].items():
             if self.smart_graph(source) != graph:
                 raise RuntimeError("Изменилось определение исходной опоры Three Planes: " + str(source))
 
@@ -990,13 +1020,26 @@ class Trial:
         xform = self.part.Xforms.CreateXform(oriented[0], oriented[1], oriented[2],
                                             nx.SmartObject.UpdateOption.AfterModeling, 1.0)
         replacement = self.part.CoordinateSystems.CreateCoordinateSystem(xform, nx.SmartObject.UpdateOption.AfterModeling)
-        data = {"planes": tuple(oriented), "sources": tuple(planes), "xform": xform,
+        original_graph = self.mcs_definitions[tag][0]
+        selection_graphs = {}
+        for _, selected in selections:
+            for selected_tag in selected:
+                if selected_tag not in original_graph:
+                    raise RuntimeError("Нет исходного определения выбранного объекта Three Planes " + str(selected_tag))
+                selection_graphs[selected_tag] = graph_branch(original_graph, selected_tag)
+        data = {"planes": tuple(oriented), "plane_tags": tuple(int(p.Tag) for p in oriented),
+                "sources": tuple(planes), "xform": xform, "xform_tag": int(xform.Tag),
                 "selections": tuple(selections),
                 "origin": tuple(expected_origin), "axes": tuple(expected_axes),
-                "source_graphs": {source: graph_branch(self.mcs_definitions[tag][0], source) for source in planes}}
+                "selection_graphs": selection_graphs}
         # A candidate must have the requested frame before touching the existing
         # CSYS. ReplaceParameters destroys the temporary candidate afterwards.
         self.orient_three_planes(replacement, data, "кандидат для СК " + str(tag))
+        for source in planes:
+            self.require_source_plane_selection(source)
+            self.verify_support_plane(source)
+            if self.smart_graph(source) != graph_branch(original_graph, source):
+                raise RuntimeError("Изменилось определение исходной опоры Three Planes: " + str(source))
         self.refs[tag].ReplaceParameters(replacement)
         self.stage = "Проверка Three Planes: " + str(tag) + " / после ReplaceParameters"
         self.evaluate_three_planes(self.refs[tag], data)
@@ -1015,6 +1058,9 @@ class Trial:
         self.mcs_verified_definitions[tag] = graph
         self.mcs_rebuilt[tag] = data
         self.verify_three_plane_selections(tag)
+        self.lines.append("Three Planes " + str(tag) + ": проверяются плоскости действующего определения " +
+                          str(data["plane_tags"]) + "; исходные опоры " + str(tuple(planes)) +
+                          " проверяются по сохранённым данным выбора и положения.")
 
     def stabilize_three_planes_after_update(self):
         repaired = False
@@ -1697,9 +1743,6 @@ class Trial:
         for tag in self.mcs_definitions:
             self.stage = "Итоговая проверка прямого выбора Three Planes: " + str(tag)
             self.verify_three_plane_selections(tag)
-        for source in self.mcs_supports:
-            self.stage = "Итоговая проверка опоры MCS: " + str(source)
-            self.verify_support_plane(source)
         for (tag, index), old_tag in self.mcs_expected.items():
             old_state, old_definer, label = self.mcs_sources[(tag, index)]
             self.stage = "Проверка MCS/RCS: " + label + " / параметр " + str(index)
