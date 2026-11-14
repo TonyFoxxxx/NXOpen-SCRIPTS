@@ -2,11 +2,15 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.15**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.16**.
 
 ## Latest release
 
-**V1.15 · 2026-11-14** — remove an extra plane layer introduced when transferring Three Planes. V1.14 passed automated checks on the user's PRT and Workpiece selection was correct, but the Three Planes dialog did not show the selected faces. The code created a Coincident plane referencing the original Plane, which in turn referenced a face; checking the full parent chain did not detect the changed direct selection.
+**V1.16 · 2026-11-14** — fix verification of stale Plane objects after replacing an MCS definition. In the V1.15 report, post-update verification accessed an original support that no longer existed and failed with `Invalid self parameter passed., Object no longer exists`.
+
+After installing a new definition, verify the planes linked to the active CSYS. Reacquire objects by their identifiers after checking that the dependency graph is unchanged; verify their types, ownership and membership in the current part. Compare construction methods, direct selections and geometric placement with snapshots taken before reflection. Do not read unused Plane objects from the retired definition.
+
+Losing an active plane, selected face or intentionally selected intermediate support remains an error. An original Plane still used by another MCS is checked through that active definition. Post-update orientation correction uses current planes and must survive a control update. The report adds the original and currently checked support identifiers.
 
 An existing Plane now uses `CopyPlane()` to copy its definition with the same construction method and directly selected geometry. No additional new-plane-to-old-plane link is introduced. When the original input is directly a Face or DatumPlane, one coincident plane references that object directly. Intentionally selected intermediate planes are not flattened to their underlying faces.
 
@@ -22,13 +26,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. X/Z are reflected and Y completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.15 has been checked outside NX; displaying the selected faces in the actual Three Planes dialog still requires another NX / Designcenter 2606 test. V1.14's successful report and correct Workpiece did not establish that the dialog retained its selections. Run V1.15 from a healthy original project. The copy's body history may become BREP; the original part is neither saved nor modified. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.16 has been checked outside NX; a complete run, actual Three Planes face selections, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.16 from a healthy original project. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.15**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.16**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. Read and share the report using **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Then save the open test copy using the normal NX command and regenerate operations.
@@ -63,7 +67,7 @@ MCS transfer retains the existing CSYS. Recognized Three Planes definitions reta
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-All 189 checks outside NX passed, including 31 with a separately compiled C library. New cases cover direct face selections, intentionally nested planes, preserving an offset construction method, CopyPlane failure, a copy incorrectly returning the original object, missing/substituted selections, method changes and late selection loss despite unchanged coordinates and UF graph. Axis, support, stock, BREP, CAM and rollback checks remain. These do not validate the NX kernel, actual dialog highlighting or toolpath generation on the user's PRT.
+All 201 checks outside NX passed, including 31 with a separately compiled C library. Add 12 object-lifetime cases: old Plane removal during ReplaceParameters and update, orientation correction after removal, a stale Python wrapper, nested/shared supports, and loss of an active plane, selection, method or placement. Axis, stock, BREP, CAM and rollback checks remain. These emulate API behavior; they do not validate the NX kernel, actual dialog highlighting or toolpath generation on the user's PRT.
 
 ## Later stages — not implemented yet
 

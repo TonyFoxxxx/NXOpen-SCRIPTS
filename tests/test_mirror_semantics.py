@@ -28,6 +28,12 @@ class SmartWorld:
         world = self
 
         class Object:
+            def __getattribute__(self, name):
+                if name not in ('__class__', '__dict__', '_deleted'):
+                    if object.__getattribute__(self, '__dict__').get('_deleted', False):
+                        raise RuntimeError('Invalid self parameter passed., Object no longer exists')
+                return object.__getattribute__(self, name)
+
             def __init__(self, tag=None, parents=None):
                 self.Tag = tag or world.next_tag
                 world.next_tag += 1
@@ -115,10 +121,18 @@ class SmartWorld:
         self.xform = Xform(*self.faces)
         self.csys = Csys(self.xform)
         self.nx = NS(Face=Face, Plane=Plane, DatumPlane=type('DatumPlane',(),{}), Xform=Xform,
+                     CartesianCoordinateSystem=Csys,
                      Scalar=type('Scalar',(),{}), Point3d=xyz, Vector3d=xyz,
                      SmartObject=NS(UpdateOption=NS(AfterModeling=2), VisibilityOption=NS(Invisible=0)),
                      PlaneTypes=NS(MethodType=NS(Coincident=1,Distance=2)),
                      TaggedObjectManager=NS(GetTaggedObject=lambda tag:self.objects[tag]))
+
+    def retire(self, objects):
+        for obj in objects:
+            tag = obj.Tag
+            obj._deleted = True
+            del self.objects[tag]
+            del self.parents[tag]
 
     def trial(self, mirror=None):
         trial = object.__new__(M.Trial)
@@ -485,10 +499,11 @@ class SupportDependencyTests(unittest.TestCase):
         world,trial,planes = self.linked_world()
         world.reflect_faces(trial.plane)
         replacement = trial.transfer_mcs()
-        planes[0].Origin = xyz(60,0,0)
+        current = world.csys.xform.inputs[0]
+        current.Origin = xyz(60,0,0)
         with self.assertRaisesRegex(RuntimeError,'Опорная плоскость MCS ещё'):
             trial.verify_mcs(replacement)
-        self.assertEqual(M.xyz(planes[0].Origin),[60,0,0])
+        self.assertEqual(M.xyz(current.Origin),[60,0,0])
 
     def test_numerical_mcs_precedes_its_stock_and_stock_precedes_three_planes(self):
         world,trial,_ = self.linked_world()
@@ -689,6 +704,139 @@ class DirectPlaneSelectionTests(unittest.TestCase):
         self.assertFalse(trial.mcs_rebuilt)
         planes[0].sources = []
         with self.assertRaisesRegex(RuntimeError,'исходная опора'):
+            trial.verify_mcs(replacement)
+
+
+class ThreePlanesLifetimeTests(unittest.TestCase):
+    def linked_world(self, depth=1):
+        return SupportDependencyTests().linked_world(depth)
+
+    def test_reported_update_cleanup_of_old_planes_keeps_current_selections_and_frames(self):
+        world,trial,old_planes = self.linked_world()
+        old_xform = world.csys.xform
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        world.retire(old_planes + [old_xform])
+        trial.stabilize_three_planes_after_update()
+        trial.verify_mcs(replacement)
+        self.assertEqual(trial.csys_frame(world.csys.Tag)[0],[-60,-25,16])
+        self.assertEqual([p.GetGeometry() for p in world.csys.xform.inputs],[[f] for f in world.faces])
+        trial.native.update_model.assert_not_called()
+
+    def test_old_planes_may_be_retired_inside_replace_parameters(self):
+        world,trial,old_planes = self.linked_world()
+        old_xform,replace = world.csys.xform,world.csys.ReplaceParameters
+        def replace_and_retire(other):
+            replace(other)
+            world.retire(old_planes + [old_xform])
+        world.csys.ReplaceParameters = replace_and_retire
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        trial.stabilize_three_planes_after_update()
+        trial.verify_mcs(replacement)
+
+    def test_orientation_correction_after_retirement_uses_only_current_planes(self):
+        world,trial,old_planes = self.linked_world()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        world.retire(old_planes)
+        world.xform_signs = (-1,1)
+        trial.stabilize_three_planes_after_update()
+        trial.verify_mcs(replacement)
+        trial.native.update_model.assert_called_once()
+        self.assertEqual(trial.csys_frame(world.csys.Tag)[1],[-1,0,0,0,-1,0,0,0,1])
+
+    def test_unused_old_plane_drift_is_not_confused_with_current_support_drift(self):
+        world,trial,old_planes = self.linked_world()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        old_planes[0].Origin,old_planes[0].sources = xyz(999,0,0),[]
+        trial.verify_mcs(replacement)
+
+    def test_current_plane_loss_is_not_ignored_as_cleanup(self):
+        world,trial,old_planes = self.linked_world()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        current = world.csys.xform.inputs[0]
+        world.retire(old_planes + [current])
+        with self.assertRaises((RuntimeError,KeyError)):
+            trial.verify_mcs(replacement)
+
+    def test_current_selection_loss_still_fails_with_dead_original_wrappers(self):
+        world,trial,old_planes = self.linked_world()
+        world.reflect_faces(trial.plane)
+        trial.transfer_mcs()
+        world.retire(old_planes)
+        world.csys.xform.inputs[0].sources = []
+        with self.assertRaisesRegex(RuntimeError,'прямой выбор'):
+            trial.stabilize_three_planes_after_update()
+
+    def test_current_method_change_still_fails_after_cleanup(self):
+        world,trial,old_planes = self.linked_world()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        world.retire(old_planes)
+        world.csys.xform.inputs[0].Method = 2
+        with self.assertRaisesRegex(RuntimeError,'Способ ожидался'):
+            trial.verify_mcs(replacement)
+
+    def test_dead_originals_do_not_hide_current_support_position_error(self):
+        world,trial,old_planes = self.linked_world()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        world.retire(old_planes)
+        world.csys.xform.inputs[0].Origin = xyz(60,0,0)
+        with self.assertRaisesRegex(RuntimeError,'Опорная плоскость MCS ещё'):
+            trial.verify_mcs(replacement)
+
+    def test_intentionally_selected_nested_planes_remain_live_dependencies(self):
+        world,trial,old_planes = self.linked_world(depth=2)
+        selected = [p.GetGeometry()[0] for p in old_planes]
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        world.retire(old_planes)
+        trial.stabilize_three_planes_after_update()
+        trial.verify_mcs(replacement)
+        self.assertEqual([p.GetGeometry()[0] for p in world.csys.xform.inputs],selected)
+        world.retire([selected[0]])
+        with self.assertRaises((RuntimeError,KeyError)):
+            trial.verify_mcs(replacement)
+
+    def test_original_plane_still_used_by_another_csys_is_not_exempted(self):
+        world,trial,old_planes = self.linked_world()
+        other_xform = world.Xform(*old_planes)
+        other = world.Csys(other_xform)
+        world.add_csys(trial,other,2,'MCS2')
+        world.reflect_faces(trial.plane)
+        origin,axes = trial.frames[other.Tag]
+        other_xform.fixed = (trial.plane.point(origin),M.reflected_frame(axes,trial.plane))
+        replacement = trial.transfer_mcs()
+        self.assertNotIn(other.Tag,trial.mcs_rebuilt)
+        old_planes[0].sources = []
+        with self.assertRaisesRegex(RuntimeError,'исходная опора'):
+            trial.verify_mcs(replacement)
+
+    def test_stale_cached_plane_wrapper_is_reacquired_from_current_csys(self):
+        world,trial,_ = self.linked_world()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        stale = world.csys.xform.inputs[0]
+        tag = stale.Tag
+        current = object.__new__(world.Plane)
+        current.__dict__.update(stale.__dict__)
+        world.objects[tag] = current
+        world.csys.xform.inputs[0] = current
+        stale._deleted = True
+        trial.stabilize_three_planes_after_update()
+        trial.verify_mcs(replacement)
+        self.assertIs(trial.mcs_rebuilt[world.csys.Tag]['planes'][0],current)
+
+    def test_wrong_owner_of_current_plane_is_rejected(self):
+        world,trial,_ = self.linked_world()
+        world.reflect_faces(trial.plane)
+        replacement = trial.transfer_mcs()
+        world.csys.xform.inputs[0].OwningPart = NS(Tag=999)
+        with self.assertRaisesRegex(RuntimeError,'Недоступен действующий объект'):
             trial.verify_mcs(replacement)
 
 

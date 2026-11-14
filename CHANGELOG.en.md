@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.16
+
+Fix `Object no longer exists` during post-update Three Planes verification: V1.15 read original Plane objects after replacing the definition even though NX had already removed an unused support. Verification and bounded orientation correction use the active CSYS planes, reacquired by identifier, and frozen original selection/placement data.
+
+Retain strict checks of the current dependency graph, object type/ownership, method, ordered selections, placement and axes. Do not retain or read unused old Plane objects. Shared and intentionally selected intermediate supports remain checked dependencies. Report original and current support identifiers.
+
+All 201 checks outside NX passed, including 31 with a separately compiled C library. Add 12 object-lifetime cases: old Plane removal during ReplaceParameters and update, orientation correction after removal, a stale Python wrapper, nested/shared supports, and loss of an active plane, selection, method or placement. Axis, stock, BREP, CAM and rollback checks remain. These emulate API behavior; they do not validate the NX kernel, actual dialog highlighting or toolpath generation on the user's PRT.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.15
 
 V1.14 passed automated checks and the user confirmed correct Workpiece selection, but reported missing selected faces in Three Planes. An extra Coincident → original Plane → face layer was identified. Replace that wrapper with CopyPlane of the original definition, retaining its method and direct geometry. Original Face/DatumPlane inputs still use one coincident plane with a direct reference. Intentional intermediate supports are not flattened to faces.
