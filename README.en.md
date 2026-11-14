@@ -32,22 +32,22 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.09 | Trial reflection of one part and MCS transfer; no components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.10 | Trial reflection of one part and MCS transfer; no components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
+### Latest update — Mirrored CAM project trial V1.10 · 2026-11-14
+
+Refine CAM settings comparison: modes and flags match exactly; lengths use an absolute tolerance of 1e-8 part units. Errors list the actual nodes, fields and before/after values instead of the last inspected operation. Changed settings still trigger rollback.
+
+Update **«Зеркальная копия CAM-проекта — тест» to V1.10** in the updater. All 110 checks outside NX passed. V1.09 read and validated the CAM editors, but its settings comparison stopped the trial without identifying the changed field. The specific discrepancy and a complete V1.10 result still need confirmation in NX. [Test workflow and limitations](docs/en/mirror-project.md).
+
+### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 
 Closed chains and dot circles now use Boundary Type = Closed in Part Boundaries; open strokes and chains with junction gaps use Open. Set the type before and after appending curves, then verify the exact type after committing the operation.
 
 Update **«Оси гравировки для PLANAR_MILL»** to **V1.13** in the updater. [Workflow, limits and validation](docs/en/planar-mill-curves.md).
-
-### Also released — Mirrored CAM project trial V1.09 · 2026-11-14
-
-Add transfer of a CSYS backed by a numerical Xform while retaining both objects and their dependencies. The report now identifies MCS/RCS parameter owners and the dependency structure of unrecognized definitions. Unknown associative definitions are still not replaced by Dynamic.
-
-Update **«Зеркальная копия CAM-проекта — тест» to V1.09** in the updater. All 98 checks outside NX passed. V1.08 stopped at a third CSYS before transferring the two Three Planes definitions; its exact type was absent from the old report. Retest V1.09 from a healthy original project. [Test workflow and limitations](docs/en/mirror-project.md).
 
 ## Installation
 

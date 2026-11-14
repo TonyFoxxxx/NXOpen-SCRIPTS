@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.10
+
+The V1.09 report identified the GEOMETRY root CSYS as backed by a numerical Xform and the two MCS definitions as Three Planes. Execution reached the second read and Validate of Workpiece/MCS/operation editors, then stopped at the aggregate settings comparison. The last inspected operation's name did not identify the source of the difference, and the changed field was not reported.
+
+Snapshots now store individual named values. Freeze enum members as integer codes and names, without int(enum) or dependence on Python wrapper instances. Compare modes and flags exactly; only lengths use an absolute tolerance of 1e-8 part units, with no relative tolerance. Keep the original baseline across repeated checks. Reject nonfinite numbers. On mismatch, list all affected nodes/fields, before/after values and numerical deltas; the stage identifies the first affected node. Validation neither overwrites changed settings nor drops previously checked fields.
+
+All 110 checks outside NX passed, including 31 with a C library. New coverage includes fresh enum wrappers, floating-point roundoff, real allowance/MCS changes, multiple affected nodes, missing fields/editors, invalid/nonfinite values and accumulated drift. The specific V1.09 discrepancy cannot be established from the old report; a complete V1.10 run and actual NX dialogs/toolpaths still require validation.
+
 ## 2026-11-14 — Engraving centerlines for PLANAR_MILL V1.13
 
 Closed chains and dot circles now use Boundary Type = Closed in Part Boundaries; open strokes and chains with junction gaps use Open. Set the type before and after appending curves, then verify the exact type after committing the operation.

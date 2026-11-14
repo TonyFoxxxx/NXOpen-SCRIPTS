@@ -344,6 +344,184 @@ class CamEditorTests(unittest.TestCase):
         builder.Commit.assert_not_called()
 
 
+class CamStateTests(unittest.TestCase):
+    """Reopen editors with new enum wrappers and independent floating values."""
+    def trial(self):
+        class EnumMember:
+            def __init__(self, value):
+                self.value = value
+            def __int__(self):
+                raise TypeError('NX enum is not an integer')
+        class Geometry:
+            def InitializeData(self, reload):
+                pass
+        class GeometryGroup(Geometry):
+            BlankDefinitionTypes = NS(FromGeometry=EnumMember(0),AutoBlock=EnumMember(2))
+            BlankCreationTypes = NS(Body=EnumMember(0),Component=EnumMember(1))
+            OrientationTypes = NS(Mcs=EnumMember(0),Specify=EnumMember(1))
+            DirectionTypes = NS(Zm=EnumMember(0),Specify=EnumMember(1))
+            def __init__(self):
+                self.BlankDefinitionType = EnumMember(2)
+                self.BlankCreationType = EnumMember(0)
+                self.OrientationType = EnumMember(0)
+                self.DirectionType = EnumMember(0)
+                self.BlankToggleValue = True
+                self.OffsetFromPart = 1.0
+                self.OffsetNegativeZ = self.OffsetPositiveZ = 0.0
+                self.AutoBlockOffsetNegativeX = self.AutoBlockOffsetPositiveX = 2.5
+                self.AutoBlockOffsetNegativeY = self.AutoBlockOffsetPositiveY = 3.0
+                self.AutoBlockOffsetNegativeZ = self.AutoBlockOffsetPositiveZ = 4.0
+        trial = object.__new__(M.Trial)
+        trial.nodes = [type(kind,(),{'Tag':tag,'Name':name})() for tag,kind,name in
+                       ((10,'FeatureGeometry','WORKPIECE'),(20,'OrientGeometry','1'),
+                        (30,'TpMultiAxisDeburring','FASKA_1_COPY'))]
+        trial.cam_builder_state, trial.cam_builder_labels = None, {}
+        trial.nx = NS(CAM=NS(Geometry=Geometry,GeometryGroup=GeometryGroup,
+            OrientGeomBuilder=NS(McsLocationModes=NS(Specify=EnumMember(0),OnBlank=EnumMember(1),OnPartBox=EnumMember(2)))))
+        changes, builders = {}, []
+        def create(node):
+            fields = {'PartGeometry':Geometry(),'Validate':Mock(return_value=True),
+                      'Destroy':Mock(),'Commit':Mock()}
+            if type(node).__name__ == 'FeatureGeometry':
+                fields['BlankGeometry'] = GeometryGroup()
+                for key,value in changes.get(node.Tag,{}).items():
+                    if value is None:
+                        fields['BlankGeometry'] = None
+                    else:
+                        setattr(fields['BlankGeometry'],key,value)
+            if type(node).__name__ == 'OrientGeometry':
+                fields.update(McsLocationMode=EnumMember(0),LinkRcsToMcs=True)
+                fields.update(changes.get(node.Tag,{}))
+            builder = NS(**fields)
+            builders.append(builder)
+            return builder
+        trial.setup = NS(CAMGroupCollection=NS(CreateMillGeomBuilder=create,CreateMillOrientGeomBuilder=create),
+                         CAMOperationCollection=NS(CreateMultiAxisDeburringBuilder=create))
+        return trial,changes,builders,EnumMember
+
+    def test_reopened_enum_wrappers_are_compared_by_value_without_int_conversion(self):
+        trial,_,builders,_ = self.trial()
+        trial.check_cam_builders()
+        trial.check_cam_builders()
+        state = trial.cam_builder_state
+        self.assertEqual(state[10]['BlankGeometry.BlankDefinitionType'],('enum',2,'AutoBlock'))
+        self.assertEqual(state[20]['MCS.McsLocationMode'],('enum',0,'Specify'))
+        self.assertEqual(len(builders),6)
+        for builder in builders:
+            builder.Destroy.assert_called_once()
+            builder.Commit.assert_not_called()
+
+    def test_float_roundoff_does_not_fail_or_replace_the_baseline(self):
+        trial,changes,_,_ = self.trial()
+        trial.check_cam_builders()
+        baseline = trial.cam_builder_state
+        changes[10] = {'AutoBlockOffsetPositiveZ':4.0000000000000036}
+        trial.check_cam_builders()
+        self.assertIs(trial.cam_builder_state,baseline)
+        self.assertEqual(baseline[10]['BlankGeometry.AutoBlockOffsetPositiveZ'],('length',4.0))
+
+    def test_real_offset_change_reports_workpiece_and_field_not_last_operation(self):
+        trial,changes,builders,_ = self.trial()
+        trial.check_cam_builders()
+        changes[10] = {'AutoBlockOffsetPositiveZ':4.125}
+        with self.assertRaises(RuntimeError) as caught:
+            trial.check_cam_builders()
+        report = str(caught.exception)
+        self.assertIn('WORKPIECE [FeatureGeometry] (узел 10) / BlankGeometry.AutoBlockOffsetPositiveZ',report)
+        self.assertIn('до = 4; после = 4.125; разница = 0.125',report)
+        self.assertIn('WORKPIECE',trial.stage)
+        self.assertNotIn('FASKA_1_COPY',report + trial.stage)
+        for builder in builders:
+            builder.Destroy.assert_called_once()
+            builder.Commit.assert_not_called()
+
+    def test_mcs_mode_and_link_changes_are_both_reported_and_not_repaired(self):
+        trial,changes,builders,Member = self.trial()
+        trial.check_cam_builders()
+        changes[20] = {'McsLocationMode':Member(1),'LinkRcsToMcs':False}
+        with self.assertRaises(RuntimeError) as caught:
+            trial.check_cam_builders()
+        report = str(caught.exception)
+        self.assertIn('различий: 2',report)
+        self.assertIn('MCS.McsLocationMode: до = Specify (код 0); после = OnBlank (код 1)',report)
+        self.assertIn('MCS.LinkRcsToMcs: до = True; после = False',report)
+        self.assertIn('1 [OrientGeometry]',trial.stage)
+        for builder in builders:
+            builder.Commit.assert_not_called()
+
+    def test_blank_type_creation_and_orientation_changes_remain_fatal(self):
+        for field,number in (('BlankDefinitionType',0),('BlankCreationType',1),
+                             ('OrientationType',1),('DirectionType',1)):
+            with self.subTest(field=field):
+                trial,changes,_,Member = self.trial()
+                trial.check_cam_builders()
+                changes[10] = {field:Member(number)}
+                with self.assertRaisesRegex(RuntimeError,'BlankGeometry.' + field):
+                    trial.check_cam_builders()
+
+    def test_all_affected_nodes_are_reported_in_one_failure(self):
+        trial,changes,_,_ = self.trial()
+        trial.check_cam_builders()
+        changes[10] = {'BlankToggleValue':False,'OffsetFromPart':1.01}
+        changes[20] = {'LinkRcsToMcs':False}
+        with self.assertRaises(RuntimeError) as caught:
+            trial.check_cam_builders()
+        report = str(caught.exception)
+        self.assertIn('различий: 3',report)
+        self.assertIn('WORKPIECE [FeatureGeometry]',report)
+        self.assertIn('1 [OrientGeometry]',report)
+
+    def test_disappearing_geometry_fields_are_not_silently_skipped(self):
+        trial,changes,_,_ = self.trial()
+        trial.check_cam_builders()
+        changes[10] = {'BlankGeometry':None}
+        with self.assertRaisesRegex(RuntimeError,'после = <отсутствует>'):
+            trial.check_cam_builders()
+
+    def test_disappearing_editor_reports_its_original_name(self):
+        trial,_,_,_ = self.trial()
+        trial.check_cam_builders()
+        trial.nodes = trial.nodes[1:]
+        with self.assertRaisesRegex(RuntimeError,'WORKPIECE.*Редактор CAM'):
+            trial.check_cam_builders()
+
+    def test_nonfinite_offset_stops_before_a_baseline_is_accepted(self):
+        for value in (float('nan'),float('inf'),-float('inf')):
+            with self.subTest(value=value):
+                trial,changes,builders,_ = self.trial()
+                changes[10] = {'OffsetFromPart':value}
+                with self.assertRaisesRegex(RuntimeError,'OffsetFromPart.*некорректное числовое'):
+                    trial.check_cam_builders()
+                self.assertIsNone(trial.cam_builder_state)
+                self.assertIn('WORKPIECE',trial.stage)
+                builders[0].Destroy.assert_called_once()
+
+    def test_unknown_enum_object_does_not_become_zero_or_a_string_identity(self):
+        trial,changes,builders,_ = self.trial()
+        changes[10] = {'BlankDefinitionType':object()}
+        with self.assertRaisesRegex(RuntimeError,'BlankDefinitionType.*код перечисления'):
+            trial.check_cam_builders()
+        self.assertIsNone(trial.cam_builder_state)
+        builders[0].Destroy.assert_called_once()
+
+    def test_length_tolerance_is_absolute_and_does_not_hide_large_scale_changes(self):
+        trial,changes,_,_ = self.trial()
+        changes[10] = {'OffsetFromPart':1000000.0}
+        trial.check_cam_builders()
+        changes[10] = {'OffsetFromPart':1000000.000001}
+        with self.assertRaisesRegex(RuntimeError,'OffsetFromPart'):
+            trial.check_cam_builders()
+
+    def test_tolerated_reads_do_not_accumulate_drift(self):
+        trial,changes,_,_ = self.trial()
+        trial.check_cam_builders()
+        changes[10] = {'OffsetFromPart':1.0 + 0.75*M.CAM_LENGTH_TOLERANCE}
+        trial.check_cam_builders()
+        changes[10] = {'OffsetFromPart':1.0 + 1.5*M.CAM_LENGTH_TOLERANCE}
+        with self.assertRaisesRegex(RuntimeError,'OffsetFromPart'):
+            trial.check_cam_builders()
+
+
 class StockTests(unittest.TestCase):
     def test_protected_stock_is_excluded_from_raw_transform(self):
         trial = object.__new__(M.Trial)

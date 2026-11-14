@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.09
-SCRIPT_VERSION = "V1.09"
+# SCRIPT_VERSION: V1.10
+SCRIPT_VERSION = "V1.10"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -29,6 +29,57 @@ MAX_OBJECTS = 20000
 # UF_PARAM_status_t, documented in Siemens uf_param.h.
 PARAM_DEFAULT, PARAM_INHERITED, PARAM_OVERRIDDEN, PARAM_INVALID_INDEX = range(4)
 PARAM_STATUS_NAMES = ("по умолчанию NX", "наследуется", "собственное значение")
+# Only length-valued CAM editor fields use this absolute tolerance, in part
+# units. Modes, flags and identifiers must match exactly; no relative tolerance.
+CAM_LENGTH_TOLERANCE = 1e-8
+
+
+def cam_enum_snapshot(value, domain, label):
+    # NX Python enum members need not support int(member). Freeze their integer
+    # value while the builder is alive, not the Python wrapper's identity.
+    number = getattr(value, "value", value)
+    if not isinstance(number, int) or isinstance(number, bool):
+        raise RuntimeError(label + ": не удалось прочитать код перечисления (" + type(value).__name__ + ")")
+    names = []
+    for name in dir(domain):
+        if name.startswith("_"):
+            continue
+        member = getattr(domain, name)
+        candidate = getattr(member, "value", member)
+        if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate == number:
+            names.append(name)
+    return ("enum", int(number), "/".join(sorted(names)))
+
+
+def cam_bool_snapshot(value, label):
+    if not isinstance(value, bool):
+        raise RuntimeError(label + ": ожидалось логическое значение")
+    return ("bool", value)
+
+
+def cam_length_snapshot(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise RuntimeError(label + ": некорректное числовое значение " + repr(value))
+    return ("length", float(value))
+
+
+def cam_values_equal(before, after):
+    if before is None or after is None or before[0] != after[0]:
+        return False
+    if before[0] == "length":
+        return (math.isfinite(before[1]) and math.isfinite(after[1])
+                and math.isclose(before[1], after[1], rel_tol=0.0, abs_tol=CAM_LENGTH_TOLERANCE))
+    return before[1] == after[1]
+
+
+def cam_value_text(value):
+    if value is None:
+        return "<отсутствует>"
+    if value[0] == "length":
+        return format(value[1], ".17g")
+    if value[0] == "enum":
+        return (value[2] + " " if value[2] else "") + "(код " + str(value[1]) + ")"
+    return str(value[1])
 
 
 def reflect(values, axis, offset=0.0):
@@ -580,7 +631,7 @@ class Trial:
         self.mcs_definitions, self.mcs_verified_definitions = {}, {}
         self.mcs_fixed_xforms = {}
         self.stock_features, self.protected_bodies = {}, set()
-        self.cam_builder_state = None
+        self.cam_builder_state, self.cam_builder_labels = None, {}
         self.boundary_planes, self.current_boundaries = {}, {}
         self.moved_boundary_count = 0
         if not self.bodies or not self.operations:
@@ -834,12 +885,15 @@ class Trial:
                      "SurfaceContour": (self.setup.CAMOperationCollection, "CreateSurfaceContourBuilder"),
                      "PlanarMilling": (self.setup.CAMOperationCollection, "CreatePlanarMillingBuilder"),
                      "TpMultiAxisDeburring": (self.setup.CAMOperationCollection, "CreateMultiAxisDeburringBuilder")}
-        result = {}
+        result, labels = {}, {}
         for node in self.nodes:
             kind = type(node).__name__
             if kind not in factories:
                 continue
-            self.stage = "Проверка открытия CAM: " + str(node.Name) + " [" + kind + "]"
+            tag = int(node.Tag)
+            label = str(node.Name) + " [" + kind + "]"
+            labels[tag] = label
+            self.stage = "Проверка открытия CAM: " + label
             collection, factory = factories[kind]
             builder = getattr(collection, factory)(node)
             try:
@@ -850,23 +904,69 @@ class Trial:
                         self.stage = "Чтение CAM через редактор: " + str(node.Name) + " / " + name
                         geometry.InitializeData(True)
                         if name == "BlankGeometry" and isinstance(geometry, self.nx.CAM.GeometryGroup):
-                            fields = ("BlankDefinitionType", "BlankCreationType", "BlankToggleValue",
-                                      "OrientationType", "DirectionType", "OffsetFromPart", "OffsetNegativeZ", "OffsetPositiveZ",
+                            domains = (("BlankDefinitionType", "BlankDefinitionTypes"),
+                                       ("BlankCreationType", "BlankCreationTypes"),
+                                       ("OrientationType", "OrientationTypes"), ("DirectionType", "DirectionTypes"))
+                            for field, domain in domains:
+                                key = name + "." + field
+                                self.stage = "Чтение параметра CAM: " + label + " / " + key
+                                state[key] = cam_enum_snapshot(getattr(geometry, field),
+                                    getattr(self.nx.CAM.GeometryGroup, domain), label + " / " + key)
+                            key = name + ".BlankToggleValue"
+                            self.stage = "Чтение параметра CAM: " + label + " / " + key
+                            state[key] = cam_bool_snapshot(geometry.BlankToggleValue, label + " / " + key)
+                            fields = ("OffsetFromPart", "OffsetNegativeZ", "OffsetPositiveZ",
                                       "AutoBlockOffsetNegativeX", "AutoBlockOffsetPositiveX", "AutoBlockOffsetNegativeY",
                                       "AutoBlockOffsetPositiveY", "AutoBlockOffsetNegativeZ", "AutoBlockOffsetPositiveZ")
-                            state[name] = tuple(getattr(geometry, f) for f in fields)
+                            for field in fields:
+                                key = name + "." + field
+                                self.stage = "Чтение параметра CAM: " + label + " / " + key
+                                state[key] = cam_length_snapshot(getattr(geometry, field), label + " / " + key)
                 if kind == "OrientGeometry":
-                    state["MCS"] = (builder.McsLocationMode, builder.LinkRcsToMcs)
+                    self.stage = "Чтение параметра CAM: " + label + " / MCS.McsLocationMode"
+                    state["MCS.McsLocationMode"] = cam_enum_snapshot(builder.McsLocationMode,
+                        self.nx.CAM.OrientGeomBuilder.McsLocationModes, label + " / MCS.McsLocationMode")
+                    self.stage = "Чтение параметра CAM: " + label + " / MCS.LinkRcsToMcs"
+                    state["MCS.LinkRcsToMcs"] = cam_bool_snapshot(builder.LinkRcsToMcs, label + " / MCS.LinkRcsToMcs")
                 self.stage = "Проверка редактора CAM: " + str(node.Name)
                 if not builder.Validate():
                     raise RuntimeError("Редактор CAM не прошёл проверку: " + str(node.Name))
-                result[int(node.Tag)] = state
+                result[tag] = state
             finally:
                 # Validation only: no CAM Commit, generation, or parameter edits.
                 builder.Destroy()
-        if self.cam_builder_state is not None and result != self.cam_builder_state:
-            raise RuntimeError("Изменились параметры заготовки или режим размещения MCS в редакторе CAM")
-        self.cam_builder_state = result
+        self.compare_cam_builder_states(result, labels)
+
+    def compare_cam_builder_states(self, result, labels):
+        if self.cam_builder_state is None:
+            self.cam_builder_state, self.cam_builder_labels = result, labels
+            return
+        differences = []
+        for tag in sorted(set(self.cam_builder_state) | set(result)):
+            before, after = self.cam_builder_state.get(tag), result.get(tag)
+            if before is None or after is None:
+                differences.append((tag, "Редактор CAM", None if before is None else ("bool", True),
+                                    None if after is None else ("bool", True)))
+                continue
+            for field in sorted(set(before) | set(after)):
+                old, new = before.get(field), after.get(field)
+                if not cam_values_equal(old, new):
+                    differences.append((tag, field, old, new))
+        if not differences:
+            return  # Keep the original baseline; do not accumulate tolerated drift.
+        def node_label(tag):
+            return labels.get(tag, self.cam_builder_labels.get(tag, "Узел " + str(tag)))
+        self.stage = "Сравнение параметров CAM: " + node_label(differences[0][0])
+        lines = ["Изменились параметры редакторов CAM; различий: " + str(len(differences))]
+        for tag, field, before, after in differences:
+            detail = (node_label(tag) + " (узел " + str(tag) + ") / " + field +
+                      ": до = " + cam_value_text(before) + "; после = " + cam_value_text(after))
+            if before is not None and after is not None and before[0] == after[0] == "length":
+                detail += "; разница = " + format(after[1] - before[1], ".17g")
+            lines.append(detail)
+        lines.append("Режимы и флаги сравниваются точно; абсолютный допуск размеров: " +
+                     str(CAM_LENGTH_TOLERANCE) + " единиц детали.")
+        raise RuntimeError("\n".join(lines))
 
     def geometry_snapshot(self, collect=False):
         result = {}
