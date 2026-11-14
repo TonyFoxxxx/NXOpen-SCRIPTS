@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-14 — Mirrored CAM project trial V1.12
+
+V1.11 identified the cause: transformation replaced EXTRUDE and two BLEND features with one BREP and remapped Part Box parents. The user chose to preserve geometry and CAM without requiring editable model construction history in the copy. V1.12 retains the existing reflection mechanism and permits only a verified complete replacement of one model body's history with one new BREP. It does not restore Extrude/Blend: they are absent from the converted body in the copy; the original project remains unchanged.
+
+Capture feature/body ownership and expression users before reflection. An accepted conversion must retain the body and all face/edge identifiers; source features must belong exclusively to that body, and the new BREP must have no parents or expressions. A removed parameter with users outside the replaced history stops the trial. A protected Tooling Box may only remap its parents exactly to the same body's BREP while retaining its type and expression membership. Arbitrary changes to stock, MCS, sketches and other features are not allowed. Stock settings, CAM editors/references, reflected positions, MCS definitions and rollback checks remain in place. The report states the mode and actual conversions explicitly.
+
+All 149 checks outside NX passed, including 31 with a C library. New cases reproduce the observed conversion and reject changed body/face/edge identities, partial history removal, external parameter dependencies and changes to stock/MCS/CAM. A complete V1.12 run on the user's PRT, actual dialogs and NX toolpath generation remain unconfirmed.
+
 ## 2026-11-14 — Mirrored CAM project trial V1.11
 
 V1.10 passed CAM settings validation but stopped at the final model-history comparison. CAM_WORKPIECE was the last read stage, not an established source of the discrepancy. Report specific added, deleted and changed features, types, parents and expression membership before/after. Freeze names and available formulas in memory before objects can be deleted; read units only for numeric expressions. Explicitly mark unavailable optional descriptions while retaining the identifier in validation.

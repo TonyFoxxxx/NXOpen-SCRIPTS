@@ -706,6 +706,7 @@ class HistoryTests(unittest.TestCase):
         trial.check_cam_builders, trial.capture_stock = Mock(),Mock()
         trial.geometry_snapshot = lambda **kw:{}
         trial.capture_parameters, trial.capture_topology = Mock(),Mock(return_value={})
+        trial.capture_body_history = Mock()
         trial.operation_snapshot = lambda:[]
         trial.frames, trial.refs, trial.bounds = {},{},{}
         trial.bodies, trial.protected_bodies, trial.operations = [NS(Tag=1)],set(),[]
@@ -734,6 +735,7 @@ class StockTests(unittest.TestCase):
         trial.model_history = lambda *args:{}
         trial.geometry_snapshot = lambda **kw:{}
         trial.capture_parameters, trial.capture_topology = Mock(), Mock(return_value={})
+        trial.capture_body_history = Mock()
         trial.operation_snapshot = lambda:[]
         trial.frames, trial.refs, trial.bounds, trial.lines = {}, {}, {}, []
         trial.bodies = [NS(Tag=1),NS(Tag=2)]

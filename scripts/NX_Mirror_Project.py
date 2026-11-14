@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.11
-SCRIPT_VERSION = "V1.11"
+# SCRIPT_VERSION: V1.12
+SCRIPT_VERSION = "V1.12"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -32,6 +32,10 @@ PARAM_STATUS_NAMES = ("по умолчанию NX", "наследуется", "�
 # Only length-valued CAM editor fields use this absolute tolerance, in part
 # units. Modes, flags and identifiers must match exactly; no relative tolerance.
 CAM_LENGTH_TOLERANCE = 1e-8
+# The mirrored copy may have non-parametric model solids. This permission does
+# not extend to stock, datum/MCS definitions, sketches or CAM objects.
+BODY_HISTORY_TYPES = frozenset(("EXTRUDE", "BLEND", "BLOCK", "CYLINDER", "CONE",
+                                "SPHERE", "BREP", "IMPORTED_BODY", "IMPORT"))
 
 
 def cam_enum_snapshot(value, domain, label):
@@ -674,6 +678,7 @@ class Trial:
         self.stock_features, self.protected_bodies = {}, set()
         self.cam_builder_state, self.cam_builder_labels = None, {}
         self.history_baseline, self.history_previous = None, None
+        self.body_history, self.body_conversions = {}, []
         self.boundary_planes, self.current_boundaries = {}, {}
         self.moved_boundary_count = 0
         if not self.bodies or not self.operations:
@@ -889,14 +894,129 @@ class Trial:
         changes = model_history_changes(self.history_baseline, self.history_previous)
         if not changes:
             return
+        allowed = self.accepted_body_history_changes()
+        changes = [(tag, lines) for tag, lines in changes if tag not in allowed]
+        if not changes:
+            return
         tag = changes[0][0]
         record = self.history_previous.get(tag, self.history_baseline.get(tag))
         self.stage = "Сравнение истории модели: " + history_feature_label(tag, record)
-        details = ["В итоговой истории изменились элементы, родители или состав выражений; элементов: " + str(len(changes))]
+        details = ["В истории остались неразрешённые изменения элементов, родителей или состава выражений; элементов: " + str(len(changes))]
         for _, lines in changes:
             details.extend(lines)
-        details.append("Этапы появления различий приведены выше. Допустимость этих изменений не подтверждена.")
+        details.append("Этапы появления различий приведены выше. Эти изменения выходят за разрешённый переход тела в BREP.")
         raise RuntimeError("\n".join(details))
+
+    def capture_body_history(self, topology):
+        """Freeze ownership and expression users before NX can remove features.
+        No generic feature-name whitelist can establish body ownership by itself.
+        """
+        self.body_history, self.body_conversions = {}, []
+        for body in self.bodies:
+            body_tag = int(body.Tag)
+            if body_tag in self.protected_bodies:
+                continue
+            self.stage = "Чтение истории тела и зависимостей выражений: " + str(body_tag)
+            features, owners, dependencies = {}, {}, {}
+            for feature in body.GetFeatures():
+                tag = int(feature.Tag)
+                if tag not in self.history_baseline:
+                    raise RuntimeError("История тела изменилась ещё до отражения: " + str(tag))
+                record = self.history_baseline[tag]
+                features[tag] = record["type"]
+                if record["type"].upper() not in BODY_HISTORY_TYPES:
+                    continue
+                owners[tag] = tuple(sorted(int(b.Tag) for b in feature.GetBodies()))
+                for expression in feature.GetExpressions():
+                    expression_tag = int(expression.Tag)
+                    dependencies[expression_tag] = (
+                        tuple(sorted(int(f.Tag) for f in expression.GetUsingFeatures())),
+                        tuple(sorted(int(e.Tag) for e in expression.GetReferencingExpressions())))
+            self.body_history[body_tag] = {"features": features, "owners": owners,
+                "dependencies": dependencies, "topology": topology[body_tag]}
+
+    def accepted_body_history_changes(self):
+        """Accept only a verified one-body history -> one plain BREP conversion.
+        All other history differences remain failures. CAM, stock settings,
+        reflected geometry and MCS are still checked by the normal workflow.
+        """
+        before, after = self.history_baseline, self.history_previous
+        saved_bodies = getattr(self, "body_history", {})
+        if not saved_bodies:
+            return set()
+        current_bodies = {int(b.Tag): b for b in self.part.Bodies}
+        replacements, new_features, conversions = {}, set(), []
+        for body_tag, saved in sorted(saved_bodies.items()):
+            old_features = set(saved["features"])
+            removed = old_features - set(after)
+            if not removed:
+                continue
+            self.stage = "Проверка перехода истории тела в BREP: " + str(body_tag)
+            if body_tag in self.protected_bodies:
+                raise RuntimeError("Параметрическая заготовка не может переходить в BREP")
+            if (removed != old_features or
+                    any(kind.upper() not in BODY_HISTORY_TYPES for kind in saved["features"].values()) or
+                    any(saved["owners"].get(tag) != (body_tag,) for tag in old_features)):
+                raise RuntimeError("Не подтверждена полная замена истории одного модельного тела: " + str(body_tag))
+            if set(replacements).intersection(old_features):
+                raise RuntimeError("Один модельный элемент относится к нескольким преобразуемым телам")
+            body = current_bodies.get(body_tag)
+            if body is None:
+                raise RuntimeError("При переходе в BREP изменился идентификатор тела: " + str(body_tag))
+            actual_topology = (tuple(sorted(int(f.Tag) for f in body.GetFaces())),
+                               tuple(sorted(int(e.Tag) for e in body.GetEdges())))
+            if actual_topology != saved["topology"]:
+                raise RuntimeError("При переходе в BREP изменились идентификаторы граней/рёбер тела: " + str(body_tag))
+            features = list(body.GetFeatures())
+            if len(features) != 1:
+                raise RuntimeError("Вместо истории тела ожидался один элемент BREP: " + str(body_tag))
+            feature = features[0]
+            new_tag = int(feature.Tag)
+            record = after.get(new_tag)
+            if (new_tag in before or new_tag in new_features or record is None or
+                    record["type"].upper() != "BREP" or record["parents"] or record["expressions"] or
+                    tuple(sorted(int(b.Tag) for b in feature.GetBodies())) != (body_tag,)):
+                raise RuntimeError("Не подтверждён новый BREP того же модельного тела: " + str(body_tag))
+            replacements.update((tag, new_tag) for tag in old_features)
+            new_features.add(new_tag)
+            conversions.append((body_tag, tuple(sorted(old_features)), new_tag))
+
+        removed_features = set(replacements)
+        removed_expressions = {e for tag in removed_features for e in before[tag]["expressions"]}
+        for body_tag, old_features, _ in conversions:
+            self.stage = "Проверка зависимостей удаляемых параметров тела: " + str(body_tag)
+            dependencies = saved_bodies[body_tag]["dependencies"]
+            for tag in old_features:
+                for expression_tag in before[tag]["expressions"]:
+                    if expression_tag not in dependencies:
+                        raise RuntimeError("Не прочитаны зависимости выражения: " + str(expression_tag))
+                    users, references = dependencies[expression_tag]
+                    external_users = set(users) - removed_features
+                    external_expressions = set(references) - removed_expressions
+                    if external_users or external_expressions:
+                        raise RuntimeError("Параметр удаляемого построения используется вне заменяемой истории: " +
+                            before[tag]["expressions"][expression_tag] +
+                            "\nЭлементы: " + str(sorted(external_users)) +
+                            "; выражения: " + str(sorted(external_expressions)))
+
+        allowed = removed_features | new_features
+        for tag in getattr(self, "stock_features", {}):
+            old, new = before.get(tag), after.get(tag)
+            if old is None or new is None or not (set(old["parents"]) & removed_features):
+                continue
+            expected_parents = {replacements.get(p, p) for p in old["parents"]}
+            # Only the already protected Tooling Box may replace model-feature
+            # parents with that same body's BREP. Its parameters stay protected.
+            if (old["type"].upper() == "TOOLING BOX" and old["type"] == new["type"] and
+                    set(old["expressions"]) == set(new["expressions"]) and
+                    set(new["parents"]) == expected_parents):
+                allowed.add(tag)
+        self.body_conversions = conversions
+        for body_tag, old_features, new_tag in conversions:
+            self.lines.append("Разрешён переход истории модельного тела " + str(body_tag) +
+                " в BREP " + str(new_tag) + "; заменены элементы " + str(old_features) +
+                ". Идентификаторы тела, граней и рёбер сохранены.")
+        return allowed
 
     def tooling_builder(self, feature):
         return self.part.Features.ToolingFeatureCollection.CreateToolingBoxBuilder(feature)
@@ -1388,6 +1508,7 @@ class Trial:
             set_wcs_values(wcs, self.nx, origin, axes)
 
     def run_in_absolute_wcs(self):
+        self.lines.append("Режим: геометрия и CAM. В копии допускается замена истории модельных тел на BREP; заготовки и MCS защищены отдельно.")
         self.check_cam_builders()
         self.history_baseline, self.history_previous = None, None
         self.checkpoint_model_history("Исходное состояние после первичного чтения CAM", check_errors=True)
@@ -1400,6 +1521,7 @@ class Trial:
             self.capture_csys_definition(tag, origin, axes)
         self.stage = "Чтение топологии тел"
         topology = self.capture_topology()
+        self.capture_body_history(topology)
         operations = self.operation_snapshot()
         targets = {int(body.Tag): body for body in self.bodies if int(body.Tag) not in self.protected_bodies}
         transformable = tuple(getattr(self.nx, name) for name in
@@ -1472,6 +1594,9 @@ class Trial:
         self.lines.append("Перенесены и проверены заданные плоскости границ: " + str(self.moved_boundary_count))
         self.lines.append("Проверены данные редакторов Workpiece/MCS/операций: " + str(len(self.cam_builder_state)))
         self.lines.append("Параметрические заготовки сохранены: " + str(len(self.stock_features)))
+        self.lines.append("Модельные тела с заменой истории построения на BREP: " + str(len(self.body_conversions)))
+        if self.body_conversions:
+            self.lines.append("В этой копии эти тела редактируются без исходных Extrude/Blend; история исходного проекта не изменялась.")
         self.lines.append("Сохранены определения Three Planes: " + str(sum(bool(p) for _, p in self.mcs_definitions.values())))
         self.lines.append("Распознаны CSYS с числовым Xform: " + str(len(self.mcs_fixed_xforms)))
         if self.unavailable:

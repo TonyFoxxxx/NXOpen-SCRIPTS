@@ -249,6 +249,7 @@ class BoundaryAbiTests(unittest.TestCase):
         trial.nodes = [types.SimpleNamespace(Tag=tag, Name='NODE_' + str(tag))
                        for tag in sorted({key[0] for key in rows})]
         trial.root = trial.nodes[0]
+        trial.lines = []
         trial.frames, trial.refs, trial.mcs_expected = {}, {}, {}
         trial.mcs_sources = {}
         trial.mcs_links = {}
