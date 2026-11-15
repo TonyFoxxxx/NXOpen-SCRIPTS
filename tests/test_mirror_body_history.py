@@ -14,18 +14,21 @@ class Feature:
     def __init__(self, tag, kind, name='', parents=(), bodies=()):
         self.Tag, self.FeatureType, self.Name = tag,kind,name
         self.parents, self.bodies, self.expressions = list(parents),list(bodies),[]
+        self.OwningPart = None
 
     def GetParents(self):
         return self.parents[:]
-
-    def GetBodies(self):
-        return self.bodies[:]
 
     def GetExpressions(self):
         return self.expressions[:]
 
     def GetFeatureErrorMessages(self):
         return []
+
+
+class BodyFeature(Feature):
+    def GetBodies(self):
+        return self.bodies[:]
 
 
 class Expression:
@@ -61,10 +64,10 @@ class Fixture:
     def __init__(self):
         self.body, self.blank_body, self.box_body = Body(1000),Body(2000),Body(3000)
         self.sketch = Feature(1,'SKETCH')
-        self.extrude = Feature(10,'EXTRUDE',parents=[self.sketch],bodies=[self.body])
-        self.blends = [Feature(tag,'BLEND',parents=[self.extrude],bodies=[self.body]) for tag in (11,12)]
-        self.blank = Feature(20,'Tooling Box','Blank',bodies=[self.blank_body])
-        self.box = Feature(21,'Tooling Box','Part Box',parents=[self.extrude]+self.blends,bodies=[self.box_body])
+        self.extrude = BodyFeature(10,'EXTRUDE',parents=[self.sketch],bodies=[self.body])
+        self.blends = [BodyFeature(tag,'BLEND',parents=[self.extrude],bodies=[self.body]) for tag in (11,12)]
+        self.blank = BodyFeature(20,'Tooling Box','Blank',bodies=[self.blank_body])
+        self.box = BodyFeature(21,'Tooling Box','Part Box',parents=[self.extrude]+self.blends,bodies=[self.box_body])
         self.mcs = Feature(22,'DATUM_CSYS','MCS')
         self.group = Feature(90,'FSET','CAM_WORKPIECE')
         self.model_features = [self.extrude]+self.blends
@@ -72,14 +75,29 @@ class Fixture:
         self.blank_body.features, self.box_body.features = [self.blank],[self.box]
         for i,feature in enumerate(self.model_features+[self.blank,self.box,self.mcs]):
             Expression(100+i,feature)
-        self.brep = Feature(30,'BREP',bodies=[self.body])
+        self.brep = BodyFeature(30,'BREP',bodies=[self.body])
         t = self.trial = object.__new__(M.Trial)
-        t.part = NS(Features=[self.sketch]+self.model_features+[self.blank,self.box,self.mcs,self.group],
+        t.part = NS(Tag=5000,Features=[self.sketch]+self.model_features+[self.blank,self.box,self.mcs,self.group],
                     Bodies=[self.body,self.blank_body,self.box_body])
+        for feature in t.part.Features+[self.brep]:
+            feature.OwningPart = t.part
+        t.nx = NS(Features=NS(BodyFeature=BodyFeature))
         t.bodies = t.part.Bodies[:]
         t.protected_bodies, t.stock_features = {2000,3000},{20:None,21:None}
         t.history_baseline, t.history_previous = None,None
         t.body_history, t.body_conversions, t.lines = {},[],[]
+
+    def initialize(self):
+        operation = NS(Tag=900,IsMirror=lambda:False)
+        class Group:
+            Tag = 901
+            def GetMembers(self):
+                return [operation]
+        t = self.trial
+        t.nx.CAM = NS(NCGroup=Group,CAMSetup=NS(View=NS(Geometry=1)))
+        t.part.CAMSetup = NS(CAMOperationCollection=[operation],GetRoot=lambda view:Group())
+        self.trial = M.Trial(None,t.nx,None,t.part,M.MirrorPlane([0,0,0],[1,0,0]),[],native=NS())
+        return self.trial
 
     def topology(self):
         return {b.Tag:(tuple(f.Tag for f in b.faces),tuple(e.Tag for e in b.edges)) for b in self.trial.bodies}
@@ -105,7 +123,7 @@ class Fixture:
         t.capture_topology = self.topology
         t.operation_snapshot = lambda:[]
         t.frames, t.refs, t.bounds, t.operations = {},{},{},[]
-        t.nx = NS(Curve=type('Curve',(),{}),Point=type('Point',(),{}))
+        t.nx.Curve, t.nx.Point = type('Curve',(),{}),type('Point',(),{})
         t.native = NS(reflection_matrix=lambda plane:[0]*16,transform_entities=Mock(side_effect=self.convert),update_model=Mock())
         t.plane = M.MirrorPlane([0,0,0],[1,0,0])
         t.transfer_mcs, t.update_stock = Mock(return_value={}),Mock()
@@ -116,6 +134,186 @@ class Fixture:
         t.box_csys, t.moved_boundary_count, t.cam_builder_state = 99,0,{}
         t.mcs_definitions, t.mcs_fixed_xforms, t.unavailable, t.raw_spatial = {},{},set(),[]
         return t
+
+
+class GeneralFeatureHistoryTests(unittest.TestCase):
+    def test_initialization_inspects_all_features_without_a_name_catalog(self):
+        f = Fixture()
+        f.extrude.FeatureType = 'DELETE FACE'
+        f.blends[0].FeatureType = 'UNLISTED_BODY_FEATURE_2606'
+        other = Feature(50,'UNLISTED_NON_BODY_FEATURE')
+        f.trial.part.Features.append(other)
+        for feature in f.trial.part.Features:
+            feature.GetParents = Mock(wraps=feature.GetParents)
+        t = f.initialize()
+        for feature in t.part.Features:
+            feature.GetParents.assert_called_once()
+        self.assertEqual(t.operations[0].Tag,900)
+
+    def test_unlisted_feature_external_parent_still_blocks_initialization(self):
+        f = Fixture()
+        f.extrude.FeatureType = 'UNLISTED_BODY_FEATURE'
+        f.sketch.OwningPart = NS(Tag=6000)
+        with self.assertRaisesRegex(RuntimeError,'внешнего родителя.*UNLISTED_BODY_FEATURE'):
+            f.initialize()
+
+    def test_unlisted_feature_parent_query_error_is_not_treated_as_no_parents(self):
+        f = Fixture()
+        f.extrude.FeatureType = 'DELETE FACE'
+        error = RuntimeError('parent query failed')
+        f.extrude.GetParents = Mock(side_effect=error)
+        with self.assertRaises(RuntimeError) as caught:
+            f.initialize()
+        self.assertIs(caught.exception,error)
+
+    def test_delete_face_and_unlisted_body_features_use_the_same_verified_conversion(self):
+        # Deliberately fictitious label: a finite list of modeling names must
+        # not become a second operation/feature catalog.
+        for kind in ('DELETE FACE','REVOLVE','BOOLEAN','PATTERN','UNLISTED_BODY_FEATURE_2606'):
+            with self.subTest(kind=kind):
+                f = Fixture()
+                f.extrude.FeatureType = kind
+                f.before()
+                f.convert()
+                f.after()
+                self.assertEqual(f.trial.body_conversions,[(1000,(10,11,12),30)])
+                self.assertEqual(f.trial.history_baseline[10]['type'],kind)
+                self.assertIn(f.sketch,f.trial.part.Features)
+
+    def test_missing_body_feature_class_stops_before_transform_or_path_deletion(self):
+        f = Fixture()
+        t = f.workflow()
+        del t.nx.Features.BodyFeature
+        with self.assertRaisesRegex(RuntimeError,'Недоступен NXOpen.Features.BodyFeature'):
+            t.run_in_absolute_wcs()
+        t.native.transform_entities.assert_not_called()
+        t.setup.DeleteToolPath.assert_not_called()
+
+    def test_body_ownership_query_failure_stops_before_transform_and_identifies_feature(self):
+        f = Fixture()
+        f.extrude.FeatureType, f.extrude.Name = 'DELETE FACE','Remove patch'
+        error = RuntimeError('NX body ownership failed')
+        f.extrude.GetBodies = Mock(side_effect=error)
+        t = f.workflow()
+        with self.assertRaises(RuntimeError) as caught:
+            t.run_in_absolute_wcs()
+        self.assertIs(caught.exception,error)
+        self.assertIn('Remove patch [DELETE FACE] (элемент 10)',t.stage)
+        t.native.transform_entities.assert_not_called()
+        t.setup.DeleteToolPath.assert_not_called()
+
+    def test_missing_or_null_body_query_does_not_fall_back_to_label_or_membership(self):
+        for query in (None,Mock(return_value=None)):
+            with self.subTest(query=query):
+                f = Fixture()
+                f.extrude.FeatureType = 'DELETE FACE'
+                f.extrude.GetBodies = query
+                t = f.workflow()
+                with self.assertRaises(TypeError):
+                    t.run_in_absolute_wcs()
+                t.native.transform_entities.assert_not_called()
+
+    def test_unreadable_expression_users_stop_before_transform(self):
+        for query in ('GetUsingFeatures','GetReferencingExpressions'):
+            with self.subTest(query=query):
+                f = Fixture()
+                f.extrude.FeatureType = 'UNLISTED_BODY_FEATURE'
+                error = RuntimeError(query+' failed')
+                setattr(f.extrude.expressions[0],query,Mock(side_effect=error))
+                t = f.workflow()
+                with self.assertRaises(RuntimeError) as caught:
+                    t.run_in_absolute_wcs()
+                self.assertIs(caught.exception,error)
+                t.native.transform_entities.assert_not_called()
+                t.setup.DeleteToolPath.assert_not_called()
+
+    def test_expression_inventory_change_before_transform_is_rejected(self):
+        f = Fixture()
+        f.extrude.GetExpressions = Mock(side_effect=[f.extrude.expressions[:],[]])
+        t = f.workflow()
+        with self.assertRaisesRegex(RuntimeError,'Состав выражений изменился ещё до отражения'):
+            t.run_in_absolute_wcs()
+        t.native.transform_entities.assert_not_called()
+
+    def test_no_body_or_multiple_bodies_cannot_authorize_generic_feature_conversion(self):
+        for bodies in ([],[1000,2000]):
+            with self.subTest(bodies=bodies):
+                f = Fixture()
+                f.extrude.FeatureType = 'UNLISTED_BODY_FEATURE'
+                f.extrude.GetBodies = Mock(return_value=[NS(Tag=tag) for tag in bodies])
+                f.before()
+                f.convert()
+                with self.assertRaisesRegex(RuntimeError,'UNLISTED_BODY_FEATURE.*GetBodies'):
+                    f.after()
+                self.assertFalse(f.trial.body_conversions)
+
+    def test_protected_stock_feature_cannot_enter_model_body_conversion(self):
+        f = Fixture()
+        f.model_features.append(f.blank)
+        f.body.features.append(f.blank)
+        f.blank.GetBodies = Mock(return_value=[f.body])
+        f.before()
+        f.convert()
+        with self.assertRaisesRegex(RuntimeError,'Blank.*защищённая заготовка'):
+            f.after()
+        f.blank.GetBodies.assert_not_called()
+
+    def test_unlisted_non_body_feature_is_monitored_and_cannot_disappear(self):
+        for remove in (False,True):
+            with self.subTest(remove=remove):
+                f = Fixture()
+                other = Feature(50,'UNLISTED_NON_BODY_FEATURE','Other')
+                f.trial.part.Features.append(other)
+                f.before()
+                f.convert()
+                if remove:
+                    f.trial.part.Features.remove(other)
+                    with self.assertRaisesRegex(RuntimeError,'Other.*UNLISTED_NON_BODY_FEATURE'):
+                        f.after()
+                else:
+                    f.after()
+
+    def test_generic_body_feature_with_external_parameter_user_still_fails(self):
+        f = Fixture()
+        f.extrude.FeatureType = 'DELETE FACE'
+        f.extrude.expressions[0].users.append(f.mcs)
+        f.before()
+        f.convert()
+        with self.assertRaisesRegex(RuntimeError,'используется вне заменяемой истории'):
+            f.after()
+
+    def test_generic_body_conversion_still_rejects_replaced_face_identifiers(self):
+        f = Fixture()
+        f.extrude.FeatureType = 'DELETE FACE'
+        f.before()
+        f.convert()
+        f.body.faces[0] = NS(Tag=9999)
+        with self.assertRaisesRegex(RuntimeError,'идентификаторы граней/рёбер'):
+            f.after()
+
+    def test_generic_body_conversion_keeps_full_workflow_guards(self):
+        for kind in ('DELETE FACE','UNLISTED_BODY_FEATURE'):
+            with self.subTest(kind=kind):
+                f = Fixture()
+                f.extrude.FeatureType = kind
+                t = f.workflow()
+                t.run_in_absolute_wcs()
+                self.assertEqual(t.check_cam_builders.call_count,2)
+                self.assertEqual(t.geometry_snapshot.call_count,2)
+                t.verify_mcs.assert_called_once()
+                t.verify_boundary_planes.assert_called_once()
+                t.setup.DeleteToolPath.assert_called_once()
+                self.assertEqual(len(t.body_conversions),1)
+
+    def test_lost_cam_selection_still_fails_after_generic_body_conversion(self):
+        f = Fixture()
+        f.extrude.FeatureType = 'DELETE FACE'
+        t = f.workflow()
+        t.geometry_snapshot.side_effect = [{},{'lost_selection':1}]
+        with self.assertRaisesRegex(RuntimeError,'Изменились ссылки на выбранную CAM'):
+            t.run_in_absolute_wcs()
+        self.assertEqual(len(t.body_conversions),1)
+        self.assertNotIn('ПРОЙДЕНО','\n'.join(t.lines))
 
 
 class BodyHistoryTests(unittest.TestCase):
@@ -151,7 +349,7 @@ class BodyHistoryTests(unittest.TestCase):
         f.extrude.bodies.append(f.blank_body)
         f.before()
         f.convert()
-        with self.assertRaisesRegex(RuntimeError,'одного модельного тела'):
+        with self.assertRaisesRegex(RuntimeError,'принадлежность истории только одному телу'):
             f.after()
 
     def test_protected_stock_is_not_captured_for_conversion(self):
@@ -161,13 +359,18 @@ class BodyHistoryTests(unittest.TestCase):
         self.assertEqual(set(f.trial.body_history),{1000})
         f.blank_body.GetFeatures.assert_not_called()
 
-    def test_unsupported_feature_cannot_be_erased_with_body_history(self):
-        f = Fixture()
-        f.extrude.FeatureType = 'DATUM_CSYS'
-        f.before()
-        f.convert()
-        with self.assertRaisesRegex(RuntimeError,'одного модельного тела'):
-            f.after()
+    def test_non_body_features_cannot_be_erased_even_with_get_bodies_and_a_familiar_label(self):
+        for kind in ('DATUM_CSYS','DATUM_PLANE','SKETCH','FSET','EXTRUDE','NEW_CUSTOM_FEATURE'):
+            with self.subTest(kind=kind):
+                f = Fixture()
+                f.extrude.__class__ = Feature
+                f.extrude.FeatureType = kind
+                f.extrude.GetBodies = Mock(return_value=[f.body])
+                f.before()
+                f.convert()
+                with self.assertRaisesRegex(RuntimeError,'вне NXOpen.Features.BodyFeature'):
+                    f.after()
+                f.extrude.GetBodies.assert_not_called()
 
     def test_partial_history_removal_is_not_accepted(self):
         f = Fixture()

@@ -2,9 +2,13 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.19**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.20**.
 
 ## Latest release
+
+**V1.20 · 2026-11-15** — Remove both model-feature name catalogs after V1.19 stopped on `DELETE FACE`. All history features undergo common validation. Body history may become BREP based on `NXOpen.Features.BodyFeature` membership, single-body ownership, retained topology and expression dependencies. Modeling command names no longer determine admission. Retain Tooling Box, MCS, sketch and CAM protection. All 244 checks outside NX passed, including 16 new tests. This does not establish that every modeling command works in DC 2606; [methods and definitions needing SDK verification](mirror-operations.md) are listed separately.
+
+### V1.19
 
 **V1.19 · 2026-11-15** — Check Builder classes for specialized factories as well, including CavityMilling. Changed editors, lost fields and read errors stop the trial. Include operations missing from the Geometry traversal. Distinguish editor recognition, accessible geometry reads and unverified definitions in the report. Flag complete hole/FBM data regardless of dispatch route. Preserve NX/API codes, tracebacks and source-integrity diagnostics on failure. All 228 checks outside NX passed; retain the 31-Builder catalog. [Family coverage, sources and separate SDK 2606 verification list](mirror-operations.md).
 
@@ -34,13 +38,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. Y/Z are reflected and X completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.19 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.19 from a healthy original project. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.20 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.20 from a healthy original project. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.19**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.20**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. Read and share the report using **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -58,13 +62,23 @@ MCS transfer retains the existing CSYS. Recognized Three Planes definitions reta
 - Checks exact oriented object bounds in the selected-plane frame, geometry identifiers, available selected CAM references, operation membership and geometry parents, missing toolpaths and transferred MCS/RCS frames. Finally checks the source file checksum and modification flag.
 - On an exception after the Undo mark is created, attempts to undo changes in the copy and reports the stage, error and rollback outcome. After successful rollback, restore the source as work and displayed part. If Undo fails, attempt to restore the original and close only this invocation's copy without saving while retaining other undo marks. If closure is unavailable or unconfirmed, ask the user to close the copy manually. Restoring the source does not delete files or close other parts.
 
+## Model-feature handling
+
+The `Part.Features` traversal covers every type, including `DELETE FACE`, without an allowlist of `FeatureType` names. Read each feature's errors, parents and expressions before reflection; detected external references stop the trial. Compare the entire history after transformation, including features outside body histories.
+
+For a permitted BREP conversion, original features must be `NXOpen.Features.BodyFeature` instances, occur in `Body.GetFeatures()`, and belong exclusively to the checked body according to `GetBodies()`. Individual command names are not used for admission. Freeze expression inventories before reflection; ownership or parameter-consumer read errors are not empty data. The existing NX transformation must retain the same body, faces and edges and leave one new BREP without parents or expressions. The journal does not invoke face-deletion editors or separately remove history.
+
+Other features remain monitored and must retain their checked definitions. Sketches, datum/MCS features, groups and protected Tooling Box features receive no permission to disappear as body history. Partial replacement, shared ownership across bodies and parameter consumers outside the replaced history still stop the trial. Tooling Box retains only the existing permission to remap its parents exactly to that same body's BREP.
+
+This is a general validation mechanism, not confirmed support for every NX command. SDK 2606 must still verify the Python `BodyFeature` class, concrete classes returned by `Body.GetFeatures()`, and completeness of `GetBodies()`, `GetParents()`, `GetExpressions()`, `GetUsingFeatures()` and `GetReferencingExpressions()`, including boolean, multi-body, suppressed and user-defined features. Error reporting through `GetFeatureErrorMessages()` and history replacement by `UF_MODL_transform_entities` also need verification in real NX.
+
 ## First-trial limits
 
-- A model body's history in the copy may be replaced with one BREP. Only verified conversions of EXTRUDE, BLEND, BLOCK, CYLINDER, CONE, SPHERE, BREP, IMPORTED_BODY and IMPORT are permitted. Shared ownership by multiple bodies, partial replacement or external users of a removed parameter stop the trial. Stock, sketch and MCS definitions are not covered by this permission.
+- A model body's history in the copy may be replaced with one BREP based on common BodyFeature class, ownership and dependency checks, without a catalog of command names. Shared ownership by multiple bodies, partial replacement or external users of a removed parameter stop the trial. Stock, sketch and MCS definitions are not covered by this permission.
 - Remaining history validation checks feature identities/types, parents and expression identifiers. Formulas are diagnostic; changing a coordinate formula under the same identifier is not treated as parameter loss. This is not complete validation of all CAD values and dependencies. Replacing expression identifiers outside the permitted body history is rejected even when formulas match.
 - Three Planes rebuilding supports recognized mutually perpendicular support planes with unit scale. A CSYS backed by one numerical Xform is also supported with unit scale and matching initial origin/axes. An unconfirmed definition or damaged support stops the trial. Other associative CSYS definitions are accepted only if native updates retain their definition and produce the correct reflected frame.
 - Some parametric stock cannot reach the reflected position without changing its settings. If original orientation, asymmetric offsets or dependencies prevent exact reflection, verification stops the trial. The journal does not switch stock to From Geometry or zero its offsets.
-- Supported simple local feature history: DATUM_CSYS, DATUM_PLANE, DATUM_AXIS, SKETCH, EXTRUDE, BLEND, Tooling Box, FSET, BREP, BLOCK, CYLINDER, CONE, SPHERE, IMPORTED_BODY, IMPORT. Other types and detected external parents stop the trial before transformation.
+- All model features undergo validation without a name filter. This does not guarantee that every feature reflects successfully: an unknown class receives no permission to lose its history; unavailable data and detected external parents stop the trial.
 - Components, non-associative boundaries without geometry references and detected custom start/predrill points are not supported yet.
 - Other numerical spatial operation parameters are not reflected. The report lists detected local nonzero 3D parameters for inspection; this is not a complete inventory of spatial settings. The journal does not edit feeds, allowances or strategies.
 - Preserving references and bounds does not prove machining correctness. Selected regions, directions, engage/retract moves and regenerated paths must be checked before use on production projects.
@@ -74,7 +88,7 @@ MCS transfer retains the existing CSYS. Recognized Three Planes definitions reta
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-All 228 checks outside NX passed, including 32 using a separately compiled test C library. The 18 new scenarios cover both editor dispatch routes, retained field availability, read/cleanup errors, operation coverage and failure diagnostics. Preserve MCS/RCS orientation, face selection, support lifetime, stock, BREP, CAM, boundary and rollback checks. These are API simulations, not the Siemens SDK or kernel; V1.19 execution, saving/reopening and toolpath regeneration still require an NX test.
+All 244 checks outside NX passed, including 32 using a separately compiled test C library. The 16 new tests cover general feature admission, DELETE FACE and an unknown modeling label, external parents, body ownership, unavailable APIs, changed expression inventories, stock protection and lost geometry/CAM references. Retain MCS/RCS orientation, face selection, support lifetime, stock, CAM editor, boundary and rollback checks. These are API simulations, not the Siemens SDK or kernel. The user's V1.19 run stopped before reflection on DELETE FACE; a complete V1.20 run, saving/reopening and toolpath regeneration still require an NX test.
 
 ## Later stages — not implemented yet
 

@@ -1,4 +1,4 @@
-# CAM operation coverage audit — V1.19
+# CAM operation coverage audit — V1.20
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
@@ -6,7 +6,7 @@ Audit date: **2026-11-15**. Baseline: published V1.18, commit `b7c881ce685020697
 
 ## What the catalog means
 
-The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.19 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
+The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.20 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
 
 | Level | Actual status |
 | --- | --- |
@@ -68,6 +68,7 @@ Existing custom-point query exceptions remain: `SurfaceContour` queries channel 
 5. `GetFeatureGeometry()` and `NXOpen.CAM.FBM.FeatureGeometry`, hole/thread/machining-feature definitions: enumeration, references, points/axes, coordinate frames and units. Method availability currently only flags additional unverified data; its contents are not read.
 6. Declarations/applicability of `UF_CAMGEOM_ask_items`, `UF_CAMGEOM_ask_geom_provider`, `UF_CAMGEOM_ask_collector_items`, `UF_CAMGEOM_ask_custom_points`; `UF_CAMBND_ask_boundaries`, `UF_CAMBND_ask_boundary_data`, `UF_CAMBND_ask_boundary_items`, `UF_CAMBND_set_boundary_plane`; structures, sizes, ownership and code 1345005 in 2606 headers. Check custom-point channels for SurfaceContour and TpMultiAxisDeburring separately.
 7. `UF_PARAM_ask_required_params` / Python `AskRequiredParams`, `AskParamAttributes`, 3D/3DLength/tag/VLA-tag types, `UF_PARAM_ask_param_status`, `UF_PARAM_ask_param_definer`, MCS/RCS indices 59/60 and link index 41. Each transformed parameter needs verified meaning and frame, not just a type.
+8. For V1.20's general model-history admission: Python `NXOpen.Features.BodyFeature`, concrete classes from `Body.GetFeatures()`, `BodyFeature.GetBodies()`, `Feature.GetParents()`, `GetExpressions()`, `GetFeatureErrorMessages()`, `Expression.GetUsingFeatures()` and `GetReferencingExpressions()`. Verify completeness for boolean, multi-body, suppressed and user-defined features and history preservation/replacement by `UF_MODL_transform_entities`. [Rules and limits](mirror-project.md#model-feature-handling).
 
 SDK verification cannot replace an NX run. Each new family needs a test PRT with nonempty family-specific settings, selection/axis inspection, manual save and reopen of the copy, then normal toolpath regeneration and inspection. The source must remain unchanged; the journal neither saves automatically nor creates extra files.
 
@@ -78,4 +79,4 @@ SDK verification cannot replace an NX run. Each new family needs a test PRT with
 - [Siemens SurfaceContourBuilder, older reference reproduced by ugapi](https://www.ugapi.com/doc/nxopen/a02024.html) and [deprecated API list](https://www.ugapi.com/doc/NXOpen/a10908.html) provide further reason not to transfer old signatures mechanically to 2606.
 - The [official Siemens NX documentation portal](https://docs.sw.siemens.com/en-US/product/209349590) could not be read with the available lookup tool. No SDK 2606 sources were available for exact comparison.
 
-V1.19: **228 regression checks outside NX**, including 32 using a separately compiled C library. New checks reproduce specialized-factory allowlist bypass, changed Builder type, lost fields, getter failures, incomplete hole/FBM definitions, operations missing from the Geometry branch and lost failure diagnostics. The C library is a test implementation of the contract, not a Siemens library. These results do not establish NX compatibility or machining correctness.
+V1.20: **244 regression checks outside NX**, including 32 using a separately compiled C library. Retain V1.19 editor-catalog checks; the 16 new tests cover general model-history admission and protection failures. Operation coverage remains 21 dispatch routes / 31 Builders. The C library is a test implementation of the contract, not a Siemens library. These results do not establish NX compatibility or machining correctness.

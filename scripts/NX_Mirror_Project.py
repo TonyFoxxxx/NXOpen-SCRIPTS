@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.19
-SCRIPT_VERSION = "V1.19"
+# SCRIPT_VERSION: V1.20
+SCRIPT_VERSION = "V1.20"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -32,12 +32,6 @@ PARAM_STATUS_NAMES = ("по умолчанию NX", "наследуется", "�
 # Only length-valued CAM editor fields use this absolute tolerance, in part
 # units. Modes, flags and identifiers must match exactly; no relative tolerance.
 CAM_LENGTH_TOLERANCE = 1e-8
-# The mirrored copy may have non-parametric model solids. This permission does
-# not extend to stock, datum/MCS definitions, sketches or CAM objects.
-BODY_HISTORY_TYPES = frozenset(("EXTRUDE", "BLEND", "BLOCK", "CYLINDER", "CONE",
-                                "SPHERE", "BREP", "IMPORTED_BODY", "IMPORT"))
-
-
 # Editor recognition only, not a complete operation-settings mirror adapter.
 # See docs/mirror-project.md for provenance and the DC 2606 verification limits.
 # Generic dispatch does not authorize turning, additive, probing or user-defined motion.
@@ -764,19 +758,16 @@ class Trial:
             raise RuntimeError("В копии должны быть тела и CAM-операции")
         if any(op.IsMirror() for op in self.operations):
             raise RuntimeError("В этой версии нужны обычные операции, без существующих зеркальных операций")
-        # UF_MODL_transform_entities also transforms model parents. This trial is
-        # deliberately restricted to simple, local model histories.
-        allowed = {"DATUM_CSYS", "DATUM_PLANE", "DATUM_AXIS", "SKETCH", "EXTRUDE",
-                   "BLEND", "TOOLING BOX", "FSET", "BREP", "BLOCK", "CYLINDER",
-                   "CONE", "SPHERE", "IMPORTED_BODY", "IMPORT"}
+        # Inspect every feature, regardless of its FeatureType label. Permission
+        # to replace history is established later from its NX class, body
+        # ownership and dependencies; it does not cover arbitrary features.
         for feature in part.Features:
-            name = str(feature.FeatureType).upper()
-            if name not in allowed:
-                raise RuntimeError("Для первого теста пока не поддержан модельный элемент " + name)
             for parent in feature.GetParents():
                 owner = parent.OwningPart
                 if owner is not None and int(owner.Tag) != int(part.Tag):
-                    raise RuntimeError("Модель содержит внешнего родителя. Тест остановлен до преобразования.")
+                    raise RuntimeError("Модель содержит внешнего родителя у " +
+                        history_feature_label(int(feature.Tag), {"name": str(feature.Name),
+                            "type": str(feature.FeatureType)}) + ". Тест остановлен до преобразования.")
 
     def reference(self, tag):
         tag = int(tag)
@@ -1229,31 +1220,43 @@ class Trial:
 
     def capture_body_history(self, topology):
         """Freeze ownership and expression users before NX can remove features.
-        No generic feature-name whitelist can establish body ownership by itself.
+        FeatureType is diagnostic, never a whitelist of modeling commands.
+        Only BodyFeature instances may qualify; all other features must remain.
         """
+        self.stage = "Чтение класса NXOpen.Features.BodyFeature для проверки истории тел"
+        body_feature_class = getattr(getattr(self.nx, "Features", None), "BodyFeature", None)
+        if body_feature_class is None:
+            raise RuntimeError("Недоступен NXOpen.Features.BodyFeature; принадлежность истории телам не подтверждена")
         self.body_history, self.body_conversions = {}, []
         for body in self.bodies:
             body_tag = int(body.Tag)
             if body_tag in self.protected_bodies:
                 continue
             self.stage = "Чтение истории тела и зависимостей выражений: " + str(body_tag)
-            features, owners, dependencies = {}, {}, {}
+            features, owners, dependencies, retained = {}, {}, {}, {}
             for feature in body.GetFeatures():
                 tag = int(feature.Tag)
                 if tag not in self.history_baseline:
                     raise RuntimeError("История тела изменилась ещё до отражения: " + str(tag))
                 record = self.history_baseline[tag]
+                self.stage = "Чтение истории тела " + str(body_tag) + " / " + history_feature_label(tag, record)
                 features[tag] = record["type"]
-                if record["type"].upper() not in BODY_HISTORY_TYPES:
+                if tag in self.stock_features or not isinstance(feature, body_feature_class):
+                    retained[tag] = "защищённая заготовка или элемент вне NXOpen.Features.BodyFeature"
                     continue
+                # Do not infer ownership from membership in Body.GetFeatures,
+                # or treat an unreadable GetBodies/dependency query as empty.
                 owners[tag] = tuple(sorted(int(b.Tag) for b in feature.GetBodies()))
-                for expression in feature.GetExpressions():
+                expressions = list(feature.GetExpressions())
+                if {int(e.Tag) for e in expressions} != set(record["expressions"]):
+                    raise RuntimeError("Состав выражений изменился ещё до отражения: " + history_feature_label(tag, record))
+                for expression in expressions:
                     expression_tag = int(expression.Tag)
                     dependencies[expression_tag] = (
                         tuple(sorted(int(f.Tag) for f in expression.GetUsingFeatures())),
                         tuple(sorted(int(e.Tag) for e in expression.GetReferencingExpressions())))
             self.body_history[body_tag] = {"features": features, "owners": owners,
-                "dependencies": dependencies, "topology": topology[body_tag]}
+                "dependencies": dependencies, "retained": retained, "topology": topology[body_tag]}
 
     def accepted_body_history_changes(self):
         """Accept only a verified one-body history -> one plain BREP conversion.
@@ -1274,10 +1277,15 @@ class Trial:
             self.stage = "Проверка перехода истории тела в BREP: " + str(body_tag)
             if body_tag in self.protected_bodies:
                 raise RuntimeError("Параметрическая заготовка не может переходить в BREP")
-            if (removed != old_features or
-                    any(kind.upper() not in BODY_HISTORY_TYPES for kind in saved["features"].values()) or
-                    any(saved["owners"].get(tag) != (body_tag,) for tag in old_features)):
+            if removed != old_features:
                 raise RuntimeError("Не подтверждена полная замена истории одного модельного тела: " + str(body_tag))
+            unowned = {tag for tag in old_features if saved["owners"].get(tag) != (body_tag,)}
+            if unowned:
+                details = [history_feature_label(tag, before[tag]) + ": " +
+                    saved["retained"].get(tag, "тела по GetBodies: " + str(saved["owners"].get(tag, "не прочитаны")))
+                    for tag in sorted(unowned)]
+                raise RuntimeError("Не подтверждена принадлежность истории только одному телу " +
+                                   str(body_tag) + "; замена запрещена:\n" + "\n".join(details))
             if set(replacements).intersection(old_features):
                 raise RuntimeError("Один модельный элемент относится к нескольким преобразуемым телам")
             body = current_bodies.get(body_tag)

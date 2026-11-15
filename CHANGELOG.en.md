@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Mirrored CAM project trial V1.20
+
+The user's V1.19 test stopped before reflection on the DELETE FACE model feature. Remove both modeling-name allowlists: initialization and history-to-BREP validation. Every Part.Features item undergoes common validation; permitted history replacement uses NXOpen.Features.BodyFeature membership, Body.GetFeatures, exclusive single-body ownership through GetBodies and a frozen expression-consumer snapshot. New modeling command names need no catalog entry. Unavailable ownership/dependency APIs stop the trial, as does an expression-inventory change before reflection.
+
+Retain full-history replacement by one new BREP, unchanged body/face/edge identifiers and absence of external consumers of removed parameters. Features outside BodyFeature remain covered by whole-history validation; sketches, datum/MCS features, groups and protected Tooling Box features receive no deletion permission. Shared multi-body ownership and partial replacement remain rejected. Ownership errors now identify the feature and returned bodies or protection reason. Preserve geometry reflection, MCS/stock dependency order, face selections, CAM, rollback and file behavior.
+
+All 244 focused checks outside NX passed, including 32 using a test C library. Add 16 admission/protection-failure tests, with an unknown modeling label tested separately from DELETE FACE. These API simulations do not certify every modeling command, the Python BodyFeature contract or DC 2606 compatibility. The guides now explain general admission and list methods requiring SDK verification. A complete V1.20 run, manual save/reopen and toolpath regeneration still require verification in NX.
+
 ## 2026-11-15 — Mirrored CAM project trial V1.19
 
 Close V1.18's specialized-factory catalog bypass: check returned Builders for both CavityMilling and generic CreateBuilder. Do not hide factory exceptions by retrying with another editor. Compare operation/Builder classes and availability of seven geometry fields; losing a field fails even when Validate passes. Getter errors are not absent properties, and incomplete dir output does not prevent reading an accessible field. Report absent, null and unhandled fields separately from empty geometry. Also check collection operations absent from the Geometry traversal. Flag complete hole/FBM definitions for generic dispatch without GetFeatureGeometry as well.
