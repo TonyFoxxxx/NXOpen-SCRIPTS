@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.25.02
-SCRIPT_VERSION = "V1.25.02"
+# SCRIPT_VERSION: V1.26
+SCRIPT_VERSION = "V1.26"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -81,6 +81,9 @@ CUSTOM_POINT_KINDS = ("Predrill Engage", "Cut Region Start")
 CUSTOM_POINT_DEPTH_FIELDS = ("upper_depth", "lower_depth", "depth")
 BOUNDARY_SNAPSHOT_FIELDS = ("plane_type", "boundary_type", "material_side",
                             "ignore_holes", "ignore_islands", "ignore_chamfers")
+BOUNDARY_APP_FIELDS = ("has_stock", "stock", "has_tolerances", "intol", "outtol",
+                      "has_feedrate", "feedrate_unit", "feedrate_value",
+                      "has_blank_distance", "blank_distance", "has_tool_position", "tool_position")
 
 
 def custom_point_depth_indices(operation_class, kind):
@@ -197,6 +200,9 @@ def geometry_snapshot_differences(before, after, labels):
             label += " / " + GEOMETRY_KINDS[kind]
             if len(key) == 4 and key[2] == "boundary":
                 label += " / граница " + str(key[3]) + " / параметры"
+            elif len(key) in (4, 5) and key[2] == "boundary_app":
+                label += " / граница " + str(key[3]) + (" / элемент " + str(key[4]) if len(key) == 5 else "")
+                label += " / application data (Tool Position отдельно от Tool Side)"
             return label
         return label + " / " + repr(key[1:])
     details = []
@@ -213,6 +219,8 @@ def geometry_snapshot_differences(before, after, labels):
                           "CAM-ссылки: элементы, затем элементы границ", "Элементы границ по порядку")
             elif len(key) == 4 and key[2] == "boundary":
                 fields = BOUNDARY_SNAPSHOT_FIELDS
+            elif len(key) in (4, 5) and key[2] == "boundary_app":
+                fields = BOUNDARY_APP_FIELDS
         if fields and all(v is missing or isinstance(v, sequence) and len(v) == len(fields) for v in (old, new)):
             for i, name in enumerate(fields):
                 lines.extend(describe(name, old[i] if old is not missing else missing,
@@ -513,6 +521,16 @@ class _BoundaryData(ctypes.Structure):
     ]
 
 
+class _BoundaryAppData(ctypes.Structure):
+    """Caller-owned UF_CAMBND_app_data_t; flags are C int, not UF logical."""
+    _fields_ = [("has_stock", ctypes.c_int), ("stock", ctypes.c_double),
+                ("has_tolerances", ctypes.c_int), ("tolerances", ctypes.c_double * 2),
+                ("has_feedrate", ctypes.c_int), ("feedrate_unit", ctypes.c_int),
+                ("feedrate_value", ctypes.c_double), ("has_blank_distance", ctypes.c_int),
+                ("blank_distance", ctypes.c_double), ("has_tool_position", ctypes.c_int),
+                ("tool_position", ctypes.c_int)]
+
+
 class _CustomPointData(ctypes.Structure):
     # uf_camgeom.h: point_acs uses ABS coordinates in part units. The returned
     # list contains separately allocated record pointers, not inline records.
@@ -560,6 +578,8 @@ class NativeCam:
         self.collector = self.bind("UF_CAMGEOM_ask_collector_items", (p, ip, pp))
         self.boundaries = self.bind("UF_CAMBND_ask_boundaries", (u, i, ip, pp))
         self.boundary_data = self.bind("UF_CAMBND_ask_boundary_data", (p, ctypes.POINTER(_BoundaryData)))
+        self.boundary_app = self.bind("UF_CAMBND_ask_boundary_app_data", (p, ctypes.POINTER(_BoundaryAppData)))
+        self.member_app = self.bind("UF_CAMBND_ask_item_app_data", (p, ctypes.POINTER(_BoundaryAppData)))
         self.members = self.bind("UF_CAMBND_ask_boundary_items", (p, ip, pp))
         self.member_entity = self.bind("UF_CAMBND_ask_item_entity", (p, ctypes.POINTER(u)))
         self.custom = self.bind("UF_CAMGEOM_ask_custom_points", (u, i, ip, pp))
@@ -748,6 +768,40 @@ class NativeCam:
 
     def boundary_plane_type(self, handle):
         return int(self.read_boundary(handle).plane_type)
+
+    def read_boundary_app(self, handle, member=False):
+        if not handle:
+            raise RuntimeError("Пустой дескриптор application data границы")
+        data = _BoundaryAppData()
+        for name, field_type in data._fields_:
+            if field_type is ctypes.c_int:
+                setattr(data, name, -1)
+            elif field_type is ctypes.c_double:
+                setattr(data, name, math.nan)
+        data.tolerances[:] = (math.nan, math.nan)
+        function = self.member_app if member else self.boundary_app
+        self.check(function(handle, ctypes.byref(data)), function.__name__)
+        result = []
+        # Inactive storage is unspecified by UF. Keep the explicit zero flag
+        # and None, never mistake unreadable data for an unused parameter.
+        for flag, fields in (("has_stock", ("stock",)), ("has_tolerances", ("intol", "outtol")),
+                ("has_feedrate", ("feedrate_unit", "feedrate_value")),
+                ("has_blank_distance", ("blank_distance",)), ("has_tool_position", ("tool_position",))):
+            active = getattr(data, flag)
+            if active not in (0, 1):
+                raise RuntimeError(function.__name__ + ": не прочитан флаг " + flag)
+            result.append(active)
+            for name in fields:
+                value = (data.tolerances[("intol", "outtol").index(name)] if name in ("intol", "outtol")
+                         else getattr(data, name)) if active else None
+                if active:
+                    if name in ("feedrate_unit", "tool_position"):
+                        if value not in (0, 1, 2):
+                            raise RuntimeError(function.__name__ + ": неизвестное значение " + name + "=" + str(value))
+                    elif not math.isfinite(value):
+                        raise RuntimeError(function.__name__ + ": не прочитано значение " + name)
+                result.append(value)
+        return tuple(result)
 
     def set_boundary_plane(self, handle, origin, matrix):
         if not handle or len(origin) != 3 or not all(math.isfinite(v) for v in origin):
@@ -976,6 +1030,508 @@ def cam_nodes(setup, nx):
             if len(nodes) > MAX_OBJECTS:
                 raise RuntimeError("Слишком большое дерево CAM для тестовой версии")
     return root, nodes
+
+
+class ReplacementProbeComplete(Exception):
+    """The isolated experiment must use the normal copy-only rollback path."""
+
+
+def probe_array(value, context):
+    if not isinstance(value, (tuple, list)) or len(value) > MAX_OBJECTS:
+        raise RuntimeError(context + ": не прочитан ограниченный массив NX")
+    return tuple(value)
+
+
+def probe_tag(value, context):
+    if isinstance(value, (bool, float, str, bytes)):
+        raise RuntimeError(context + ": неверный тип tag")
+    tag = int(value)
+    if not 0 < tag <= 0xffffffff:
+        raise RuntimeError(context + ": некорректный tag " + str(tag))
+    return tag
+
+
+def probe_feature_references(uf, feature):
+    """Managed UF wrapper; never guess native ownership of replacement maps.
+
+    AskReferencesOfFeatures(Tag[], int) returns parents, names, count in the
+    published wrapper contract. Missing methods or another shape are failures,
+    not an empty reference list. Returned order is recorded, never used to
+    infer a correspondence between two different bodies.
+    """
+    tag = probe_tag(feature.Tag, "Элемент истории")
+    result = uf.Modl.AskReferencesOfFeatures([tag], 1)
+    if not isinstance(result, (tuple, list)) or len(result) != 3:
+        raise RuntimeError("AskReferencesOfFeatures: ожидались родители, имена, количество; получено " +
+                           type(result).__name__)
+    parents, names, count = result
+    if type(count) is not int or not 0 <= count <= MAX_OBJECTS:
+        raise RuntimeError("AskReferencesOfFeatures: некорректное количество родителей")
+    parents = probe_array(parents, "AskReferencesOfFeatures / родители")
+    names = probe_array(names, "AskReferencesOfFeatures / имена")
+    if len(parents) != count or len(names) != count or any(not isinstance(n, str) for n in names):
+        raise RuntimeError("AskReferencesOfFeatures: неполные родители или имена опор")
+    return tuple((probe_tag(p, "Опора элемента " + str(tag)), n) for p, n in zip(parents, names))
+
+
+def unique_probe_mapping(originals, copies, matches, context):
+    """A complete bijection; neither list order nor a first match is evidence."""
+    originals, copies = tuple(originals), tuple(copies)
+    if (not originals or len(originals) != len(copies) or
+            len(set(originals)) != len(originals) or len(set(copies)) != len(copies)):
+        raise RuntimeError(context + ": различаются состав или количество объектов")
+    result = {}
+    for source in originals:
+        candidates = [target for target in copies if matches(source, target)]
+        if len(candidates) != 1:
+            raise RuntimeError(context + ": для " + str(source) + " требуется единственное соответствие; " +
+                               "кандидаты " + str(candidates))
+        result[source] = candidates[0]
+    if len(set(result.values())) != len(copies):
+        raise RuntimeError(context + ": несколько исходных объектов сопоставлены одной копии")
+    return result
+
+
+class BodyReplacementProbe:
+    """One-body experiment, always rolled back; never a completed CAM project.
+
+    Only a newly extracted, independent body is raw-transformed. Original
+    history can be replaced only after a bijection and the complete builder
+    map are checked. The original tag/selection checks remain mandatory.
+    """
+    def __init__(self, trial, body, topology, geometry, operations):
+        self.t, self.body = trial, body
+        self.topology, self.geometry, self.operations = topology, geometry, operations
+        self.body_tag = int(body.Tag)
+        self.old = set(trial.body_history[self.body_tag]["features"])
+        self.features = {int(f.Tag): f for f in trial.part.Features}
+        self.retained = set(self.features) - self.old
+        self.copy = self.copy_feature = None
+        self.map = {}
+
+    def stage(self, value):
+        self.t.stage = "Прототип одного тела " + str(self.body_tag) + " / " + value
+
+    def object(self, tag):
+        obj = self.t.nx.TaggedObjectManager.GetTaggedObject(int(tag))
+        if (obj is None or int(obj.Tag) != int(tag) or bool(getattr(obj, "IsOccurrence", False)) or
+                obj.OwningPart is None or int(obj.OwningPart.Tag) != int(self.t.part.Tag)):
+            raise RuntimeError("Не подтверждена опора текущей копии: " + str(tag))
+        return obj
+
+    def references(self, features, report=False):
+        result = {}
+        for tag, feature in features.items():
+            self.stage("AskReferencesOfFeatures / " + history_feature_label(tag, self.t.history_baseline[tag]))
+            refs = probe_feature_references(self.t.uf, feature)
+            result[tag] = refs
+            if report:
+                self.t.lines.append("Опоры " + history_feature_label(tag, self.t.history_baseline[tag]) +
+                                    "; количество " + str(len(refs)))
+            for parent, name in refs:
+                obj = self.object(parent)
+                if report:
+                    self.t.lines.append("  " + name + ": tag=" + str(parent) + "; класс=" + type(obj).__name__)
+        return result
+
+    def curve_state(self, features, report=False):
+        membership, boxes, by_feature = {}, {}, {}
+        sketch_class = self.t.nx.Features.SketchFeature
+        for tag, feature in features.items():
+            self.stage("Геометрия сохраняемого элемента " + str(tag))
+            objects = list(probe_array(feature.GetEntities(), "Feature.GetEntities"))
+            if isinstance(feature, sketch_class):
+                sketch = feature.Sketch
+                geoms = probe_array(sketch.GetAllGeometry(), "Sketch.GetAllGeometry")
+                expressions = probe_array(sketch.GetAllExpressions(), "Sketch.GetAllExpressions")
+                membership[tag] = (probe_tag(sketch.Tag, "Sketch"),
+                    tuple(sorted(probe_tag(o.Tag, "Sketch geometry") for o in geoms)),
+                    tuple(sorted(probe_tag(e.Tag, "Sketch expression") for e in expressions)))
+                objects.extend(geoms)
+                if report:
+                    self.t.lines.append("Элемент SKETCH " + str(tag) + " → эскиз " + str(sketch.Tag) +
+                        "; геометрия " + str(membership[tag][1]) + "; выражения " + str(membership[tag][2]))
+            elif str(feature.FeatureType).upper() == "SKETCH":
+                raise RuntimeError("Не подтверждён класс SketchFeature: " + str(tag))
+            by_feature[tag] = set()
+            for obj in objects:
+                if isinstance(obj, (self.t.nx.Curve, self.t.nx.Point)) and not isinstance(obj, self.t.nx.Edge):
+                    entity = probe_tag(obj.Tag, "Геометрия сохраняемого элемента")
+                    self.t.reference(entity)
+                    by_feature[tag].add(entity)
+                    boxes[entity] = self.t.bounding_box(entity)
+        return membership, boxes, by_feature
+
+    def check_ownership(self):
+        self.stage("Принадлежность истории и потребители параметров")
+        saved = self.t.body_history[self.body_tag]
+        if not self.old or any(saved["owners"].get(tag) != (self.body_tag,) for tag in self.old):
+            raise RuntimeError("История для пробной замены не принадлежит исключительно одному обычному телу")
+        expressions = {e for tag in self.old for e in self.t.history_baseline[tag]["expressions"]}
+        for expression in expressions:
+            users, references = saved["dependencies"][expression]
+            if set(users) - self.old or set(references) - expressions:
+                raise RuntimeError("Параметр заменяемой истории имеет внешних потребителей: " + str(expression))
+
+    def snapshot(self):
+        self.check_ownership()
+        self.initial_refs = self.references(self.features, report=True)
+        kept = {tag: self.features[tag] for tag in self.retained}
+        self.sketches, self.curves, self.curves_by_feature = self.curve_state(kept, report=True)
+        self.initial_boxes = dict(self.t.bounds)
+        self.initial_boxes.update(self.curves)
+        self.initial_custom_points = dict(self.t.current_custom_points)
+        self.frame_graphs = {tag: self.t.smart_graph(tag) for tag in self.t.frames}
+        self.dependents = set(self.old)
+        while True:
+            updated = self.dependents | {tag for tag, record in self.t.history_baseline.items()
+                                       if set(record["parents"]) & self.dependents}
+            if updated == self.dependents:
+                break
+            self.dependents = updated
+        # A face/edge used at an earlier feature timestamp may be absent from
+        # the final body. It cannot silently be mapped to another planar face.
+        final_entities = {self.body_tag} | set(self.topology[self.body_tag][0]) | set(self.topology[self.body_tag][1])
+        missing = []
+        for tag in sorted(self.retained):
+            for parent, name in self.initial_refs[tag]:
+                obj = self.object(parent)
+                if isinstance(obj, (self.t.nx.Face, self.t.nx.Edge)):
+                    owner = obj.GetBody()
+                    if owner is None:
+                        raise RuntimeError("Не прочитано тело опоры " + str(parent))
+                    if int(owner.Tag) == self.body_tag and parent not in final_entities:
+                        missing.append(str(tag) + " / " + name + ": " + type(obj).__name__ + " " + str(parent))
+        if missing:
+            raise RuntimeError("Опоры промежуточной истории отсутствуют в конечном теле; " +
+                "копия конечного тела не даёт проверенного соответствия:\n" + "\n".join(missing))
+
+    def check_stock_and_frames(self, unchanged_positions):
+        for tag, (feature, bodies, state, _) in self.t.stock_features.items():
+            self.stage("Параметры заготовки " + str(tag))
+            builder = self.t.tooling_builder(feature)
+            try:
+                if self.t.stock_state(builder) != state or not builder.Validate():
+                    raise RuntimeError("Изменились параметры защищённой заготовки " + str(tag))
+                if tuple(int(b.Tag) for b in feature.GetBodies()) != bodies:
+                    raise RuntimeError("Изменились тела защищённой заготовки " + str(tag))
+            finally:
+                builder.Destroy()
+        for tag, graph in self.frame_graphs.items():
+            self.stage("Опоры MCS/RCS " + str(tag))
+            if self.t.smart_graph(tag) != graph:
+                raise RuntimeError("Изменилось определение MCS/RCS до его отдельного переноса: " + str(tag))
+            if unchanged_positions:
+                origin, axes = self.t.frames[tag]
+                self.t.require_csys_frame(tag, origin, axes, "подготовка независимой копии тела")
+        for tag in self.t.mcs_definitions:
+            self.t.verify_three_plane_selections(tag)
+
+    def check_cam(self, context):
+        self.t.check_geometry_snapshot(self.geometry, context, "Изменились CAM-ссылки или параметры границ")
+        # No boundary-plane/custom-point transfer is part of this experiment.
+        for key, (origin, axes) in self.t.boundary_planes.items():
+            _, actual = self.t.current_boundaries[key]
+            if not close_values(list(actual.origin), origin) or not close_values(list(actual.matrix), axes):
+                raise RuntimeError("Пробная замена изменила заданную плоскость CAM-границы: " + str(key))
+        if self.t.current_custom_points != self.initial_custom_points:
+            raise RuntimeError("Пробная замена изменила пользовательские точки CAM")
+
+    def check_originals(self):
+        self.stage("Сохранность исходных объектов внутри копии PRT")
+        current = self.t.checkpoint_model_history("Подготовка независимого тела", check_errors=True)
+        original = {tag: record for tag, record in current.items() if tag in self.features}
+        differences = model_history_changes(self.t.history_baseline, original)
+        if differences:
+            raise RuntimeError("Подготовка кандидата изменила исходную историю:\n" +
+                               "\n".join(line for _, lines in differences for line in lines))
+        self.t.verify_model_warnings("подготовка независимого тела")
+        bodies = {int(b.Tag): b for b in self.t.part.Bodies}
+        expected = set(self.topology) | ({int(self.copy.Tag)} if self.copy is not None else set())
+        if set(bodies) != expected:
+            raise RuntimeError("Подготовка кандидата изменила состав тел: " + str(sorted(bodies)))
+        candidate_features = {int(f.Tag) for f in self.copy.GetFeatures()} if self.copy is not None else set()
+        if set(current) - set(self.features) != candidate_features:
+            raise RuntimeError("Подготовка создала элементы за пределами истории нового тела")
+        for tag, topology in self.topology.items():
+            actual = (tuple(sorted(int(f.Tag) for f in bodies[tag].GetFaces())),
+                      tuple(sorted(int(e.Tag) for e in bodies[tag].GetEdges())))
+            if actual != topology:
+                raise RuntimeError("При подготовке изменились идентификаторы граней/рёбер тела " + str(tag))
+        for tag, box in self.initial_boxes.items():
+            if not close_values(self.t.bounding_box(tag), box):
+                raise RuntimeError("Подготовка кандидата сдвинула исходную геометрию " + str(tag))
+        refs = self.references(self.features)
+        if any(Counter(refs[tag]) != Counter(self.initial_refs[tag]) for tag in self.features):
+            raise RuntimeError("Подготовка кандидата изменила геометрические опоры истории")
+        sketches, _, _ = self.curve_state({tag: self.features[tag] for tag in self.retained})
+        if sketches != self.sketches:
+            raise RuntimeError("Подготовка кандидата изменила состав геометрии/выражений эскизов")
+        self.check_stock_and_frames(True)
+        self.check_cam("подготовка независимого тела")
+        if self.t.operation_snapshot() != self.operations:
+            raise RuntimeError("Подготовка кандидата изменила состав операций")
+
+    def independent_copy(self):
+        self.stage("Создание независимой копии тела / ExtractFaceBuilder")
+        builder = self.t.part.Features.CreateExtractFaceBuilder(None)
+        try:
+            types = self.t.nx.Features.ExtractFaceBuilder
+            builder.Type = types.ExtractType.Body
+            builder.ParentPart = types.ParentPartType.WorkPart
+            builder.Associative = False
+            builder.HideOriginal = False
+            builder.BodyReverseDirection = False
+            builder.DeleteHoles = False
+            rule = self.t.part.ScRuleFactory.CreateRuleBodyDumb([self.body], True)
+            builder.ExtractBodyCollector.ReplaceRules([rule], False)
+            if (builder.Type != types.ExtractType.Body or builder.Associative or
+                    builder.HideOriginal or builder.BodyReverseDirection or builder.DeleteHoles or
+                    builder.ParentPart != types.ParentPartType.WorkPart or not builder.Validate()):
+                raise RuntimeError("Не подтверждены параметры независимого извлечения тела")
+            feature = builder.CommitFeature()
+            bodies = probe_array(feature.GetBodies(), "Extract / GetBodies")
+            if len(bodies) != 1 or int(bodies[0].Tag) in self.topology:
+                raise RuntimeError("Извлечение не создало одно отдельное тело")
+            self.copy = bodies[0]
+            self.object(self.copy.Tag)
+        finally:
+            builder.Destroy()
+        self.check_originals()
+        # Removal is limited to the NEW independent candidate, never source
+        # body history, sketches, Tooling Boxes or MCS.
+        self.stage("Проверка независимости нового тела перед снятием параметров")
+        features = probe_array(self.copy.GetFeatures(), "Candidate / GetFeatures")
+        candidate_tags = {int(f.Tag) for f in features}
+        if not features or candidate_tags & set(self.features):
+            raise RuntimeError("У кандидата общая история с исходной моделью")
+        candidate_expressions = {int(e.Tag) for f in features
+                                 for e in probe_array(f.GetExpressions(), "Candidate / GetExpressions")}
+        for feature in features:
+            if (probe_array(feature.GetParents(), "Candidate / GetParents") or
+                    tuple(int(b.Tag) for b in probe_array(feature.GetBodies(), "Candidate / GetBodies")) != (int(self.copy.Tag),)):
+                raise RuntimeError("Кандидат не является независимым телом")
+            for expression in probe_array(feature.GetExpressions(), "Candidate / GetExpressions"):
+                if ({int(f.Tag) for f in probe_array(expression.GetUsingFeatures(), "Candidate / GetUsingFeatures")} - candidate_tags or
+                        {int(e.Tag) for e in probe_array(expression.GetReferencingExpressions(), "Candidate / GetReferencingExpressions")} - candidate_expressions):
+                    raise RuntimeError("У параметров кандидата есть внешние потребители")
+        self.stage("Снятие параметров только нового тела / DeleteObjectParms")
+        self.t.uf.Modl.DeleteObjectParms([int(self.copy.Tag)])
+        self.copy_feature = self.plain_brep(self.copy)
+        self.check_originals()
+
+    def plain_brep(self, body):
+        features = probe_array(body.GetFeatures(), "BREP / GetFeatures")
+        if len(features) != 1:
+            raise RuntimeError("У тела ожидался единственный BREP")
+        feature = features[0]
+        if (str(feature.FeatureType).upper() != "BREP" or probe_array(feature.GetParents(), "BREP / GetParents") or
+                probe_array(feature.GetExpressions(), "BREP / GetExpressions") or
+                tuple(int(b.Tag) for b in probe_array(feature.GetBodies(), "BREP / GetBodies")) != (int(body.Tag),)):
+            raise RuntimeError("Не подтверждён независимый BREP тела " + str(body.Tag))
+        return feature
+
+    def match_topology(self):
+        self.stage("Однозначная карта граней/рёбер до отражения")
+        constants = self.t.nx.UF.UFConstants
+        units = self.t.nx.BasePart.Units
+        if self.t.part.PartUnits == units.Millimeters:
+            facet_tolerance = 0.01
+        elif self.t.part.PartUnits == units.Inches:
+            facet_tolerance = 0.000254
+        else:
+            raise RuntimeError("Не прочитаны единицы детали для сравнения топологии")
+        # UF recommends these minimum faceting tolerances. Coarse faceting is
+        # NOT enough to match: exact underlying geometry, tight bounds and
+        # the complete edge incidence are required independently below.
+        old_faces = {int(o.Tag): o for o in self.body.GetFaces()}
+        old_edges = {int(o.Tag): o for o in self.body.GetEdges()}
+        new_faces = {int(o.Tag): o for o in self.copy.GetFaces()}
+        new_edges = {int(o.Tag): o for o in self.copy.GetEdges()}
+        all_objects = dict(old_faces)
+        all_objects.update(old_edges)
+        all_objects.update(new_faces)
+        all_objects.update(new_edges)
+        boxes = {tag: self.t.bounding_box(tag) for tag in all_objects}
+        statuses = {getattr(constants, name) for name in ("COMPARE_NOMATCH", "COMPARE_FACES_IDENTICAL",
+            "COMPARE_FACES_EQUIVALENT", "COMPARE_SURFACES_IDENTICAL", "COMPARE_SURFACES_EQUIVALENT",
+            "COMPARE_EDGES_IDENTICAL", "COMPARE_EDGES_EQUIVALENT", "COMPARE_CURVES_IDENTICAL", "COMPARE_CURVES_EQUIVALENT")}
+
+        def same(a, b, status):
+            if not close_values(boxes[a], boxes[b], 1e-7):
+                return False
+            self.stage("Сравнение геометрии и обрезанной топологии " + str(a) + " → " + str(b))
+            equivalent = self.t.uf.Modl.Compare(a, b, 1)
+            if type(equivalent) is not int or equivalent not in (0, 1):
+                raise RuntimeError("UF.Modl.Compare: некорректный результат")
+            if not equivalent:
+                return False
+            actual = self.t.uf.Modl.CompareTopology(a, b, facet_tolerance, facet_tolerance)
+            if type(actual) is not int or actual not in statuses:
+                raise RuntimeError("UF.Modl.CompareTopology: не прочитан статус")
+            return actual == status
+
+        if not old_edges and not new_edges:
+            edge_map = {}
+        else:
+            edge_map = unique_probe_mapping(old_edges, new_edges,
+                lambda a, b: same(a, b, constants.COMPARE_EDGES_IDENTICAL), "Рёбра")
+        old_incidence = {tag: Counter(edge_map[int(e.Tag)] for e in face.GetEdges()) for tag, face in old_faces.items()}
+        new_incidence = {tag: Counter(int(e.Tag) for e in face.GetEdges()) for tag, face in new_faces.items()}
+        face_map = unique_probe_mapping(old_faces, new_faces,
+            lambda a, b: old_incidence[a] == new_incidence[b] and same(a, b, constants.COMPARE_FACES_IDENTICAL), "Грани")
+        self.map = dict(edge_map)
+        self.map.update(face_map)
+        self.map[self.body_tag] = int(self.copy.Tag)
+        self.copy_boxes = {tag: self.t.bounding_box(tag) for tag in set(self.map.values())}
+        self.copy_topology = (tuple(sorted(new_faces)), tuple(sorted(new_edges)))
+        self.t.lines.append("Карта независимой копии: граней " + str(len(face_map)) +
+                            "; рёбер " + str(len(edge_map)) + ". Соответствие взаимно однозначно.")
+
+    def reflect_candidate(self):
+        self.stage("Отражение только нового независимого BREP")
+        self.t.lines.append("Прямой вызов отражения кандидата: только тело " + str(self.copy.Tag))
+        self.t.native.transform_entities([int(self.copy.Tag)], self.t.native.reflection_matrix(self.t.plane))
+        self.copy_feature = self.plain_brep(self.copy)
+        actual = (tuple(sorted(int(f.Tag) for f in self.copy.GetFaces())),
+                  tuple(sorted(int(e.Tag) for e in self.copy.GetEdges())))
+        if actual != self.copy_topology:
+            raise RuntimeError("Отражение кандидата изменило идентификаторы его граней/рёбер")
+        for tag, box in self.copy_boxes.items():
+            if not close_values(self.t.bounding_box(tag), reflected_box(box, 0, 0.0)):
+                raise RuntimeError("Не подтверждено отражение геометрии кандидата " + str(tag))
+        self.check_originals()
+
+    def replace(self):
+        self.stage("Явная карта замены / ReplaceFeatureBuilder")
+        builder = self.t.part.Features.CreateReplaceFeatureBuilder()
+        try:
+            method = self.t.nx.Features.ReplaceFeatureBuilder.MappingMethodType.MapOnlyObjectsWithModelingDependencies
+            builder.MappingMethod = method
+            builder.DoAutomaticGeomMatch = False
+            builder.CopyReplacementFeature = True
+            builder.DeleteOriginalFeature = True
+            original = [f for tag, f in self.features.items() if tag in self.old]
+            builder.SelectFeature.Add(original)
+            builder.ReplacementFeature.Add([self.copy_feature])
+            def check_selections():
+                selected = probe_array(builder.SelectFeature.GetArray(), "SelectFeature.GetArray")
+                replacement = probe_array(builder.ReplacementFeature.GetArray(), "ReplacementFeature.GetArray")
+                if (Counter(int(f.Tag) for f in selected) != Counter(self.old) or
+                        tuple(int(f.Tag) for f in replacement) != (int(self.copy_feature.Tag),)):
+                    raise RuntimeError("Редактор замены содержит другой выбор исходных/заменяющих элементов")
+            check_selections()
+            if (builder.MappingMethod != method or builder.DoAutomaticGeomMatch or
+                    not builder.CopyReplacementFeature or not builder.DeleteOriginalFeature):
+                raise RuntimeError("NX не подтвердил режим явной замены с копированием кандидата")
+            builder.UpdateMap()
+            rows = probe_array(builder.FeatureReferences.GetMatchedReferences(), "GetMatchedReferences")
+            parents, directions = [], {}
+            mapping = dict(self.map)
+            mapping.update((tag, int(self.copy_feature.Tag)) for tag in self.old)
+            for row in rows:
+                parent = row.ParentEntity
+                tag = probe_tag(parent.Tag, "ParentEntity")
+                self.object(tag)
+                if tag not in mapping:
+                    raise RuntimeError("Нет проверенного соответствия опоре редактора: " +
+                                       type(parent).__name__ + " " + str(tag))
+                if type(row.ReverseDirection) is not bool:
+                    raise RuntimeError("Не прочитан ReverseDirection опоры " + str(tag))
+                if tag in directions and directions[tag] != row.ReverseDirection:
+                    raise RuntimeError("Неоднозначные направления повторной опоры " + str(tag))
+                parents.append(tag)
+                directions[tag] = row.ReverseDirection
+            required = {p for tag in self.retained for p, _ in self.initial_refs[tag] if p in self.map}
+            if required - set(parents):
+                raise RuntimeError("Редактор не включил в явную карту используемые геометрические опоры: " +
+                                   str(sorted(required - set(parents))))
+            for tag in dict.fromkeys(parents):
+                builder.SetMatchingForParent(self.object(tag), self.object(mapping[tag]))
+            checked = probe_array(builder.FeatureReferences.GetMatchedReferences(), "Повторное GetMatchedReferences")
+            if Counter(int(row.ParentEntity.Tag) for row in checked) != Counter(parents):
+                raise RuntimeError("Изменился состав опор редактора замены")
+            for row in checked:
+                tag = int(row.ParentEntity.Tag)
+                if (row.MatchedEntity is None or int(row.MatchedEntity.Tag) != mapping[tag] or
+                        row.ReverseDirection != directions[tag] or not row.Validate()):
+                    raise RuntimeError("Не подтверждено явное сопоставление опоры " + str(tag))
+                self.t.lines.append("Карта редактора: " + str(tag) + " → " + str(mapping[tag]) +
+                                    "; ReverseDirection=" + str(row.ReverseDirection))
+            if not builder.FeatureReferences.Validate() or not builder.Validate():
+                raise RuntimeError("Редактор замены отклонил полную карту опор")
+            check_selections()
+            self.check_originals()
+            self.stage("Пробная замена истории одного тела / ReplaceFeatureBuilder.Commit")
+            builder.Commit()
+        finally:
+            builder.Destroy()
+
+    def verify_replacement(self):
+        self.t.checkpoint_model_history("Пробная замена одного тела", check_errors=False)
+        self.stage("Идентификаторы тел после пробной замены")
+        bodies = {int(b.Tag): b for b in self.t.part.Bodies}
+        expected = set(self.topology) | {int(self.copy.Tag)}
+        self.t.lines.append("Тела после замены: " + str(sorted(bodies)) + "; ожидались " + str(sorted(expected)))
+        if set(bodies) != expected:
+            raise RuntimeError("Замена не сохранила идентификаторы исходных тел; результат не допускается")
+        for tag, topology in self.topology.items():
+            actual = (tuple(sorted(int(f.Tag) for f in bodies[tag].GetFaces())),
+                      tuple(sorted(int(e.Tag) for e in bodies[tag].GetEdges())))
+            if tag not in self.t.protected_bodies and actual != topology:
+                raise RuntimeError("Замена не сохранила идентификаторы граней/рёбер тела " + str(tag))
+        replacement = self.plain_brep(bodies[self.body_tag])
+        new_tag = int(replacement.Tag)
+        current = self.t.checkpoint_model_history("Обновление после пробной замены", check_errors=True)
+        self.t.verify_model_warnings("пробная замена одного тела")
+        if set(current) != self.retained | {new_tag, int(self.copy_feature.Tag)}:
+            raise RuntimeError("Замена удалила сохраняемые или создала посторонние модельные элементы")
+        if set(current) & self.old != ({new_tag} if new_tag in self.old else set()):
+            raise RuntimeError("Не подтверждена замена всей выбранной истории одного тела")
+        for tag in self.retained:
+            old, new = self.t.history_baseline[tag], current.get(tag)
+            expected_parents = {new_tag if p in self.old else p for p in old["parents"]}
+            if (new is None or new["type"] != old["type"] or new["name"] != old["name"] or set(new["parents"]) != expected_parents or
+                    set(new["expressions"]) != set(old["expressions"])):
+                raise RuntimeError("Замена повредила сохраняемое определение " + history_feature_label(tag, old))
+        features = {int(f.Tag): f for f in self.t.part.Features if int(f.Tag) in self.retained}
+        refs = self.references(features)
+        for tag in self.retained:
+            expected_refs = tuple((new_tag if p in self.old else p, name) for p, name in self.initial_refs[tag])
+            if Counter(refs[tag]) != Counter(expected_refs):
+                raise RuntimeError("Замена изменила геометрические опоры сохраняемого элемента " + str(tag))
+        sketches, curves, _ = self.curve_state(features)
+        if sketches != self.sketches or set(curves) != set(self.curves):
+            raise RuntimeError("Замена изменила состав геометрии/выражений эскизов или кривых проекций")
+        reflected_curves = {c for f in self.dependents for c in self.curves_by_feature.get(f, ())}
+        for tag, box in self.curves.items():
+            expected_box = reflected_box(box, 0, 0.0) if tag in reflected_curves else box
+            if not close_values(curves[tag], expected_box):
+                raise RuntimeError("Не подтверждено положение сохраняемой кривой/точки " + str(tag))
+        for tag in (self.body_tag,) + self.topology[self.body_tag][0] + self.topology[self.body_tag][1]:
+            if not close_values(self.t.bounding_box(tag), reflected_box(self.initial_boxes[tag], 0, 0.0)):
+                raise RuntimeError("Не подтверждено отражение исходного объекта " + str(tag))
+        self.check_stock_and_frames(False)
+        if self.t.operation_snapshot() != self.operations:
+            raise RuntimeError("Пробная замена изменила состав операций")
+        self.check_cam("пробная замена одного тела")
+        self.t.verify_sketch_geometry()
+        self.t.lines.append("Проверено зависимых кривых/точек: " + str(len(reflected_curves)) +
+                            "; состав эскизов и их выражений: " + str(len(sketches)))
+
+    def run(self):
+        self.t.lines.append("РЕЖИМ " + SCRIPT_VERSION + ": изолированный прототип одного тела с обязательным откатом. " +
+            "Это не готовая зеркальная CAM-копия. MCS/заготовки отдельно не переносятся; DeleteToolPath не вызывается.")
+        self.snapshot()
+        self.independent_copy()
+        self.match_topology()
+        self.reflect_candidate()
+        self.replace()
+        self.stage("Обновление пробной замены")
+        self.t.native.update_model()
+        self.verify_replacement()
+        raise ReplacementProbeComplete("Замена одного тела и перечисленные проверки завершены. " +
+            "Эксперимент отменяется. Полный перенос CAM, всех ограничений эскизов и пространственных настроек не подтверждён.")
 
 
 class Trial:
@@ -1819,6 +2375,28 @@ class Trial:
     def tooling_builder(self, feature):
         return self.part.Features.ToolingFeatureCollection.CreateToolingBoxBuilder(feature)
 
+    def choose_replacement_body(self):
+        # Detect consumers by graph, not by a list of modeling-command names.
+        # A Tooling Box alone already has its separate transfer implementation.
+        choices = []
+        for body in self.bodies:
+            tag = int(body.Tag)
+            if tag in self.protected_bodies:
+                continue
+            saved = self.body_history[tag]
+            original = set(saved["features"])
+            consumers = {f for f, record in self.history_baseline.items()
+                         if f not in original and f not in self.stock_features and
+                         set(record["parents"]) & original}
+            if consumers:
+                choices.append((len(consumers), body, consumers))
+        if not choices:
+            return None
+        _, body, consumers = max(choices, key=lambda item: item[0])
+        self.lines.append("Прототип замены одного тела: " + str(body.Tag) +
+                          "; непосредственные сохраняемые потребители " + str(sorted(consumers)))
+        return body
+
     def mcs_stock_order(self, topology):
         """Use the pre-transform references, including faces of protected stock."""
         self.stage = "Проверка порядка зависимостей заготовок и MCS"
@@ -2122,6 +2700,8 @@ class Trial:
                     self.current_boundaries[key] = (handle, data)
                     result[(int(node.Tag), kind, "boundary", number)] = tuple(
                         int(getattr(data, name)) for name in BOUNDARY_SNAPSHOT_FIELDS)
+                    self.stage = "Чтение геометрии: " + boundary_context + " / application data"
+                    result[(int(node.Tag), kind, "boundary_app", number)] = self.native.read_boundary_app(handle)
                     if collect and data.plane_type == 0:
                         origin, axes = list(data.origin), list(data.matrix)
                         if not all(math.isfinite(v) for v in origin):
@@ -2131,6 +2711,9 @@ class Trial:
                     self.stage = "Чтение геометрии: " + boundary_context + " / элементы"
                     members = self.native.pointers(self.native.members, handle)
                     member_tags = [self.native.entity(self.native.member_entity, item) for item in members]
+                    for position, item in enumerate(members, 1):
+                        self.stage = "Чтение геометрии: " + boundary_context + " / элемент " + str(position) + " / Tool Position"
+                        result[(int(node.Tag), kind, "boundary_app", number, position)] = self.native.read_boundary_app(item, member=True)
                     boundaries.append(tuple(member_tags))
                     tags.extend(member_tags)
                 result[(int(node.Tag), kind)] = (item_state, item_owner, bnd_state, bnd_owner,
@@ -2143,8 +2726,11 @@ class Trial:
                         self.lines.append("Исходная CAM-граница: " + context + " / " + str(number) +
                             "; " + "; ".join(name + "=" + str(value) for name, value in zip(BOUNDARY_SNAPSHOT_FIELDS, fields)))
                         for position, tag in enumerate(member_tags, 1):
+                            app = result[(int(node.Tag), kind, "boundary_app", number, position)]
+                            position_text = {0: "Undefined", 1: "On", 2: "Tanto"}.get(app[-1], "не задан отдельно")
                             self.lines.append("  Элемент " + str(position) + ": tag=" + str(tag) +
-                                              "; класс NXOpen=" + type(self.refs[tag]).__name__)
+                                              "; класс NXOpen=" + type(self.refs[tag]).__name__ +
+                                              "; has_tool_position=" + str(app[-2]) + "; Tool Position=" + position_text)
             if isinstance(node, self.nx.CAM.Operation):
                 # Query both channels for newly accepted families; an unsupported
                 # UF channel is recorded as unverified, never assumed empty.
@@ -2648,6 +3234,10 @@ class Trial:
         self.lines.append("MCS/RCS, включая корневую систему: " + str(len(self.frames)))
         self.checkpoint_model_history("Подготовка геометрии, MCS и заготовок до отражения")
         self.verify_model_warnings("подготовка до отражения")
+        replacement_body = self.choose_replacement_body()
+        if replacement_body is not None:
+            BodyReplacementProbe(self, replacement_body, topology, geometry, operations).run()
+            raise RuntimeError("Прототип должен завершаться проверяемым откатом; продолжение CAM запрещено")
         self.stage = "Создание матрицы отражения"
         matrix = self.native.reflection_matrix(self.plane)
         self.stage = "Отражение геометрии и её модельных родителей"
@@ -2786,9 +3376,14 @@ def execute(session, nx, uf, plane, native=None):
         lines.append("после проверки сохраните открытую копию штатной командой NX.")
         lines.append("Затем рассчитайте операции заново. Исходный проект скрипт не сохранял.")
     except Exception as exc:
-        failure_traceback = traceback.format_exc()
-        lines.append("\nТЕСТ НЕ ПРОЙДЕН. Этап: " + (trial.stage if trial else stage))
-        lines.append(type(exc).__name__ + ": " + str(exc))
+        probe_complete = isinstance(exc, ReplacementProbeComplete)
+        failure_traceback = None if probe_complete else traceback.format_exc()
+        if probe_complete:
+            lines.append("\nПРОТОТИП ОДНОГО ТЕЛА: проверки завершены, выполняется обязательный откат.")
+            lines.append(str(exc))
+        else:
+            lines.append("\nТЕСТ НЕ ПРОЙДЕН. Этап: " + (trial.stage if trial else stage))
+            lines.append(type(exc).__name__ + ": " + str(exc))
         for attribute in ("ErrorCode", "code"):
             try:
                 code = getattr(exc, attribute, None)
@@ -2843,7 +3438,8 @@ def execute(session, nx, uf, plane, native=None):
             if unverified:
                 lines.append("Данные CAM, оставшиеся непроверенными до остановки:")
                 lines.extend(sorted(unverified))
-        lines.append("\n" + failure_traceback)
+        if failure_traceback is not None:
+            lines.append("\n" + failure_traceback)
     lines.append("\nНажмите «Копировать всё» и пришлите результат теста.")
     return "\r\n".join(lines)
 

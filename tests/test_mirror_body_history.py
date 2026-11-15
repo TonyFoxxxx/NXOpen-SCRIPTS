@@ -121,8 +121,12 @@ class Fixture:
         self.trial.checkpoint_model_history('After reflection')
         self.trial.verify_model_history()
 
-    def workflow(self):
+    def workflow(self, legacy_branch=True):
         t = self.trial
+        # These fixtures exercise the original full-project branch and its
+        # history guards. The V1.26 routing/probe has separate stateful tests.
+        if legacy_branch:
+            t.choose_replacement_body = Mock(return_value=None)
         t.check_cam_builders, t.capture_stock, t.capture_parameters = Mock(),Mock(),Mock()
         t.geometry_snapshot = Mock(return_value={})
         t.capture_topology = self.topology

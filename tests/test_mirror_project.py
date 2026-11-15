@@ -694,6 +694,36 @@ class TransactionTests(unittest.TestCase):
         self.assertIn('display-status-dispose',events)
         self.assertIn('Снова активен исходный проект',report)
 
+    def test_completed_one_body_probe_rolls_back_and_never_claims_a_cam_result(self):
+        events,report = self.run_with_trial(M.ReplacementProbeComplete('one body checked'))
+        self.assertIn(('undo',55),events)
+        self.assertIn(('active',1,1),events)
+        self.assertIn('ПРОТОТИП ОДНОГО ТЕЛА',report)
+        self.assertIn('обязательный откат',report)
+        self.assertIn('one body checked',report)
+        self.assertIn('признак изменения не установлен',report)
+        self.assertIn('контрольная сумма не изменилась',report)
+        self.assertNotIn('ТЕСТ НЕ ПРОЙДЕН',report)
+        self.assertNotIn('Traceback',report)
+        self.assertNotIn('РЕЗУЛЬТАТ ОТКРЫТ В NX',report)
+        self.assertNotIn('сохраните открытую копию',report)
+
+    def test_completed_probe_failed_undo_uses_only_copy_close_fallback(self):
+        events,report = self.run_with_trial(M.ReplacementProbeComplete('checked'),rollback_fails=True)
+        self.assertIn(('close',2,0,1,None),events)
+        self.assertIn(('active',1,1),events)
+        self.assertIn('это не успешный Undo',report)
+        self.assertNotIn('Изменения теста в копии отменены через Undo',report)
+
+    def test_probe_completion_cannot_hide_failed_source_checks_or_discard(self):
+        events,report = self.run_with_trial(M.ReplacementProbeComplete('checked'),rollback_fails=True,
+            close_fails=True,source_modified=True,source_check_error=True)
+        self.assertIn('Не удалось подтвердить закрытие',report)
+        self.assertIn('Не удалось проверить контрольную сумму исходника',report)
+        self.assertIn('NX выставил исходной детали признак изменения',report)
+        self.assertNotIn('контрольная сумма не изменилась',report)
+        self.assertNotIn('признак изменения не установлен',report)
+
     def test_failure_reports_native_code_independent_of_exception_message(self):
         class NxError(RuntimeError):
             ErrorCode = 98765

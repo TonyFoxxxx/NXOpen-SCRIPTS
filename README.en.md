@@ -32,18 +32,18 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.25.02 | Trial geometry reflection and MCS transfer; body history may become BREP. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.26 | CAM-copy trial; dependent history uses a one-body prototype with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.20 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.25.02 · 2026-11-15
+### Latest update — Mirrored CAM project trial V1.26 · 2026-11-15
 
-Query modeling parents for curves/points outside sketches and UF Smart Objects. Exclude dependent objects from direct transformation while retaining position, parent and CAM-reference checks. Report exact transformation inputs. [Details](docs/en/mirror-project.md#latest-release).
+Add an isolated one-body history replacement prototype for models with retained dependencies. It checks an explicit face/edge map, sketch references and selected geometry, then **always rolls back**. It does not leave a completed CAM result. Also check boundary/member application data, including Tool Position On separately from Tool Side. [Prototype workflow and limits](docs/en/mirror-project.md#replacement-probe-v126).
 
-**NX test result:** V1.25.02 also failed. The common call with three bodies and 23 points damaged the same eight retained features; both sketch arcs were excluded. Target-selection changes did not resolve the failure. With the added regression, 395 focused checks outside NX pass, including 61 using test C libraries; these verify protective rejection, not NX functionality. No new journal revision was issued for this report. [Report analysis and limitations](docs/en/mirror-project.md#v125-result-in-nx).
+All **427 focused checks outside NX** pass, including **67 using test C libraries**. The V1.25.02 working-PRT failure is confirmed; successful V1.26 execution in NX is not. SDK 2606 and complete sketch-constraint/CAM transfer remain unverified.
 
-In updater **V1.20**, run Check and update **«Зеркальная копия CAM-проекта — тест» to V1.25.02**. If your updater is older, update and restart it first. [Test workflow](docs/en/mirror-project.md).
+In updater **V1.20**, run Check and update the mirror journal to **V1.26**; this version is newer than V1.25.02. Run on the saved source without components and share the complete report. The prototype's result is rolled back, not saved.
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 

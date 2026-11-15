@@ -515,6 +515,7 @@ class BoundarySelectionReportTests(unittest.TestCase):
         data.plane_type, data.boundary_type, data.material_side = 1, 2, 1
         t.native = NS(items=object(), boundaries=object(), item_entity=object(),
                       members=object(), member_entity=object(), read_boundary=lambda _: data,
+                      read_boundary_app=lambda *a,**kw:(0,None,0,None,None,0,None,None,0,None,1,1),
                       pointers=lambda *args: [101, 102, 101], entity=lambda _, item, **kw: item)
         t.native.channel = lambda function, node, kind: ('read', node,
             ([100] if function is t.native.items else [200]) if kind == 0 else [])

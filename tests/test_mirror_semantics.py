@@ -578,6 +578,7 @@ class SupportDependencyTests(unittest.TestCase):
         trial.geometry_snapshot = Mock(return_value={})
         trial.capture_topology = Mock(return_value={300:((10,11,12),())})
         trial.capture_body_history = Mock()
+        trial.choose_replacement_body = Mock(return_value=None)  # Full-project stock/history branch.
         trial.native.transform_entities = Mock()
         with self.assertRaisesRegex(RuntimeError,'Цикл зависимостей'):
             trial.run_in_absolute_wcs()
@@ -1451,6 +1452,7 @@ class HistoryTests(unittest.TestCase):
         trial.geometry_snapshot = lambda **kw:{}
         trial.capture_parameters, trial.capture_topology = Mock(),Mock(return_value={})
         trial.capture_body_history = Mock()
+        trial.choose_replacement_body = Mock(return_value=None)  # Full-project stock branch.
         trial.body_history = {}
         trial.stabilize_three_planes_after_update = Mock()
         trial.operation_snapshot = lambda:[]
@@ -1486,6 +1488,7 @@ class StockTests(unittest.TestCase):
         trial.geometry_snapshot = lambda **kw:{}
         trial.capture_parameters, trial.capture_topology = Mock(), Mock(return_value={})
         trial.capture_body_history = Mock()
+        trial.choose_replacement_body = Mock(return_value=None)  # Full-project stock branch.
         trial.body_history = {}
         trial.operation_snapshot = lambda:[]
         trial.frames, trial.refs, trial.bounds, trial.lines = {}, {}, {}, []

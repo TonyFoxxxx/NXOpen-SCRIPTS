@@ -1,8 +1,10 @@
-# CAM operation coverage audit — V1.25.02
+# CAM operation coverage audit — V1.26
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-15**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
+
+V1.26 adds an isolated one-body replacement prototype with mandatory rollback and boundary/member application-data checks, including Tool Position On. The 21 dispatch routes and 31 recognized builders are unchanged. It does not establish full CAM transfer. [Prototype and additional SDK methods](mirror-project.md#replacement-probe-v126).
 
 V1.25.02 queries modeling parents of curves/points when selecting direct reflection targets. Operation coverage is unchanged. The user V1.25.02 report confirms the same failure after the common transform of three bodies and 23 points; target-selection changes did not preserve dependent history. [Report analysis](mirror-project.md#v125-result-in-nx).
 
@@ -81,13 +83,15 @@ V1.25 corrects sketch-curve target selection and adds retained-history/warning g
 
 11. For V1.25: `UF_SKET_ask_sketch_of_geom(tag_t, tag_t*)`, its NULL_TAG/error semantics and coverage of sketch curves/points, including extracted/referenced geometry; `Feature.GetFeatureWarningMessages()` Python return type, timing and completeness of NX update warnings. Verify `UF_MODL_transform_entities` plus model update with sketch members excluded from the input array, retained curve/edge tags, sketch dependencies/constraints and CAM boundaries. `UF_SO_is_so` is not proof of no sketch owner. Check the reported `UF_CAM_boundary_type_t` value 2 and boundary application/member data before implementing any restoration; six integer fields do not constitute a complete boundary definition.
 
-12. For the alternative investigated after V1.25 (not implemented): `UF_MODL_replace_features`, `UF_MODL_replace_features_t`, `return_map`, `use_copy_of_replacement`, returned-map ownership and cleanup; `FeatureCollection.CreateReplaceFeatureBuilder`, `UpdateMap`, `SetMatchingForParent`, `MappingMethod`, `DeleteOriginalFeature` and `CopyReplacementFeature`. Verify coverage of intermediate-history references, actual tags before/after, the distinction between modeling dependencies and CAM references, and complete sketch constraints/associative curves. Check the single-face sheet-body restriction on `UF_MODL_replace_body_data` separately; do not use it as a general solid-body replacement. [Alternative analysis](mirror-project.md#investigated-transformation-alternatives).
+12. For the replacement mechanism (V1.26 implements only an isolated prototype): `UF_MODL_replace_features`, `UF_MODL_replace_features_t`, `return_map`, `use_copy_of_replacement`, returned-map ownership and cleanup; `FeatureCollection.CreateReplaceFeatureBuilder`, `UpdateMap`, `SetMatchingForParent`, `MappingMethod`, `DeleteOriginalFeature` and `CopyReplacementFeature`. Verify coverage of intermediate-history references, actual tags before/after, the distinction between modeling dependencies and CAM references, and complete sketch constraints/associative curves. Check the single-face sheet-body restriction on `UF_MODL_replace_body_data` separately; do not use it as a general solid-body replacement. [Alternative analysis](mirror-project.md#investigated-transformation-alternatives).
 
 V1.25 runtime evidence: `UF_SKET_ask_sketch_of_geom` recognized both selected Arc members of one sketch; `GetFeatureWarningMessages()` returned baseline/current data and the new warning messages. This confirms those calls for the observed case, not every sketch/point form or the complete SDK 2606 contract. The general model transform still damaged retained history. A new read of CAM boundaries, their transfer and final geometry/MCS checks were not reached. [NX report result](mirror-project.md#v125-result-in-nx).
 
 V1.22 distinguishes active, unused and unverified fields. The [applicability table](mirror-project.md#custom-cam-points) follows the older UF header and still needs SDK 2606 verification. An active-data read error is not an absent value; active nonzero depths are not rounded.
 
 SDK verification cannot replace an NX run. Each new family needs a test PRT with nonempty family-specific settings, selection/axis inspection, manual save and reopen of the copy, then normal toolpath regeneration and inspection. The source must remain unchanged; the journal neither saves automatically nor creates extra files.
+
+13. V1.26 additionally requires verification of extraction, topology matching, builder map/selection readback and both boundary/member application-data reads. The [separate SDK 2606 table](mirror-project.md#replacement-probe-sdk-2606) lists the exact methods and definitions. No new operation family is automatically approved.
 
 ## Sources and verification limits
 

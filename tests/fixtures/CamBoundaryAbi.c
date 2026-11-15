@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 /* Independent reproduction of the old uf_sket.h signature, not SDK 2606. */
 int UF_SKET_ask_sketch_of_geom(uint32_t geometry, uint32_t *sketch) {
@@ -78,7 +79,21 @@ typedef enum { boundary_closed, boundary_open } UF_CAM_boundary_type_t;
 typedef enum { material_undefined, material_in_left, material_out_right } UF_CAM_material_side_t;
 typedef void *UF_CAMBND_boundary_t;
 typedef void *UF_CAMBND_item_t;
-typedef struct UF_CAMBND_app_data_s UF_CAMBND_app_data_t;
+typedef enum { feed_none, feed_minute, feed_revolution } UF_CAM_feedrate_unit_t;
+typedef enum { tool_undefined, tool_on, tool_tanto } UF_CAM_tool_position_t;
+typedef struct UF_CAMBND_app_data_s {
+    int has_stock;
+    double stock;
+    int has_tolerances;
+    double tolerances[2];
+    int has_feedrate;
+    UF_CAM_feedrate_unit_t feedrate_unit;
+    double feedrate_value;
+    int has_blank_distance;
+    double blank_distance;
+    int has_tool_position;
+    UF_CAM_tool_position_t tool_position;
+} UF_CAMBND_app_data_t;
 typedef struct {
     UF_CAM_boundary_type_t boundary_type;
     int plane_type;
@@ -93,6 +108,7 @@ static int boundary_token, member_token;
 static void *allocations[8];
 static int plane_mode = 1, error_code, free_count, invalid_frees, data_calls;
 static int write_error, write_calls;
+static int app_mode;
 static double plane_origin[3], plane_matrix[9];
 static double xform_values[9]; /* origin, X direction, Y direction */
 static int xform_calls[2], xform_error_step, xform_error;
@@ -103,6 +119,7 @@ void fixture_reset(int mode, int error) {
     error_code = error;
     free_count = invalid_frees = data_calls = 0;
     write_error = write_calls = 0;
+    app_mode = 0;
     memset(xform_values, 0, sizeof(xform_values));
     memset(xform_calls, 0, sizeof(xform_calls));
     xform_error_step = xform_error = 0;
@@ -111,6 +128,46 @@ void fixture_reset(int mode, int error) {
 }
 
 void fixture_write_error(int error) { write_error = error; }
+void fixture_app_mode(int mode) { app_mode = mode; }
+
+size_t fixture_app_layout(int index) {
+    const size_t values[] = {sizeof(UF_CAMBND_app_data_t),
+        offsetof(UF_CAMBND_app_data_t, has_stock), offsetof(UF_CAMBND_app_data_t, stock),
+        offsetof(UF_CAMBND_app_data_t, has_tolerances), offsetof(UF_CAMBND_app_data_t, tolerances),
+        offsetof(UF_CAMBND_app_data_t, has_feedrate), offsetof(UF_CAMBND_app_data_t, feedrate_unit),
+        offsetof(UF_CAMBND_app_data_t, feedrate_value), offsetof(UF_CAMBND_app_data_t, has_blank_distance),
+        offsetof(UF_CAMBND_app_data_t, blank_distance), offsetof(UF_CAMBND_app_data_t, has_tool_position),
+        offsetof(UF_CAMBND_app_data_t, tool_position)};
+    return index >= 0 && index < 12 ? values[index] : (size_t)-1;
+}
+
+static int app_data(UF_CAMBND_app_data_t *data, int member) {
+    if (app_mode == 1) return 1345005;
+    if (app_mode == 2) return 0; /* Successful but unwritten is invalid. */
+    memset(data, 0, sizeof(*data));
+    data->has_tool_position = member;
+    data->tool_position = tool_on;
+    if (app_mode == 3) data->has_tool_position = -2;
+    if (app_mode == 4) data->tool_position = 17;
+    if (app_mode == 5) data->tool_position = tool_tanto;
+    if (app_mode == 6) {
+        data->has_stock = data->has_tolerances = data->has_feedrate = data->has_blank_distance = 1;
+        data->stock = 0.25; data->tolerances[0] = 0.01; data->tolerances[1] = 0.02;
+        data->feedrate_unit = feed_revolution; data->feedrate_value = 0.075;
+        data->blank_distance = 2.5;
+    }
+    if (app_mode == 7) { data->has_stock = 1; data->stock = NAN; }
+    if (app_mode == 8) { data->has_feedrate = 1; data->feedrate_unit = 9; }
+    if (app_mode == 9) { data->stock = NAN; data->has_tool_position = 0; data->tool_position = 123; }
+    return 0;
+}
+
+int UF_CAMBND_ask_boundary_app_data(UF_CAMBND_boundary_t boundary, UF_CAMBND_app_data_t *data) {
+    return boundary == &boundary_token ? app_data(data, 0) : 90003;
+}
+int UF_CAMBND_ask_item_app_data(UF_CAMBND_item_t item, UF_CAMBND_app_data_t *data) {
+    return item == &member_token ? app_data(data, 1) : 90004;
+}
 
 size_t fixture_layout(int index) {
     const size_t values[] = {

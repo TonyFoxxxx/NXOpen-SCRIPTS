@@ -41,6 +41,9 @@ class BoundaryAbiTests(unittest.TestCase):
         self.native.free = self.native.bind('UF_free', (p,), None)
         self.native.boundaries = self.native.bind('UF_CAMBND_ask_boundaries', (u,i,ip,pp))
         self.native.boundary_data = self.native.bind('UF_CAMBND_ask_boundary_data', (p,ctypes.POINTER(M._BoundaryData)))
+        self.native.boundary_app = self.native.bind('UF_CAMBND_ask_boundary_app_data', (p,ctypes.POINTER(M._BoundaryAppData)))
+        self.native.member_app = self.native.bind('UF_CAMBND_ask_item_app_data', (p,ctypes.POINTER(M._BoundaryAppData)))
+        self.app_mode = self.native.bind('fixture_app_mode', (i,), None)
         self.native.set_boundary = self.native.bind('UF_CAMBND_set_boundary_plane', (p,ctypes.POINTER(ctypes.c_double),ctypes.POINTER(ctypes.c_double)))
         self.native.model_update = self.native.bind('UF_MODL_update', ())
         self.native.param_status = self.native.bind('UF_PARAM_ask_param_status', (u,i,ip))
@@ -77,6 +80,53 @@ class BoundaryAbiTests(unittest.TestCase):
     def test_smart_parents_uses_unsigned_tag_array_and_frees_it(self):
         self.assertEqual(self.native.smart_parents(4), (0xf0000001,29,0xf0000003))
         self.assertEqual(self.stat(0),1)
+
+    def test_boundary_application_layout_and_member_on_are_independent_of_material_side(self):
+        layout = self.native.bind('fixture_app_layout', (ctypes.c_int,), ctypes.c_size_t)
+        self.assertEqual(layout(0), 80)
+        self.assertEqual(ctypes.sizeof(M._BoundaryAppData), layout(0))
+        for i, (name, _) in enumerate(M._BoundaryAppData._fields_, 1):
+            self.assertEqual(getattr(M._BoundaryAppData, name).offset, layout(i))
+        boundary = self.handle()
+        member = self.native.pointers(self.native.members, boundary)[0]
+        self.assertEqual(self.native.read_boundary(boundary).material_side, 2)
+        self.assertEqual(self.native.read_boundary_app(boundary)[-2:], (0, None))
+        self.assertEqual(self.native.read_boundary_app(member, member=True)[-2:], (1, 1))
+
+    def test_application_data_preserves_all_active_values(self):
+        member = self.native.pointers(self.native.members, self.handle())[0]
+        self.app_mode(6)
+        self.assertEqual(self.native.read_boundary_app(member, member=True),
+            (1,0.25,1,0.01,0.02,1,2,0.075,1,2.5,1,1))
+
+    def test_application_data_error_is_not_empty_or_default_position(self):
+        member = self.native.pointers(self.native.members, self.handle())[0]
+        self.app_mode(1)
+        with self.assertRaises(M.NativeApiError) as caught:
+            self.native.read_boundary_app(member, member=True)
+        self.assertEqual(caught.exception.code,1345005)
+        self.assertEqual(caught.exception.context,'UF_CAMBND_ask_item_app_data')
+
+    def test_application_data_missing_flags_invalid_enum_or_active_nan_stop(self):
+        member = self.native.pointers(self.native.members, self.handle())[0]
+        for mode in (2,3,4,7,8):
+            with self.subTest(mode=mode):
+                self.app_mode(mode)
+                with self.assertRaises(RuntimeError): self.native.read_boundary_app(member, member=True)
+
+    def test_explicit_inactive_storage_is_distinct_from_unreadable(self):
+        member = self.native.pointers(self.native.members, self.handle())[0]
+        self.app_mode(9)
+        self.assertEqual(self.native.read_boundary_app(member, member=True),
+            (0,None,0,None,None,0,None,None,0,None,0,None))
+
+    def test_member_position_change_rejects_same_boundary_tags_and_tool_side(self):
+        trial = self.trial()
+        before = trial.geometry_snapshot(collect=True)
+        self.app_mode(5)
+        with self.assertRaisesRegex(RuntimeError,'tool_position: до=1; после=2'):
+            trial.check_geometry_snapshot(before,'probe','changed')
+        self.assertIn('элемент 1',trial.stage)
 
     def test_smart_empty_and_dumb_are_distinct_and_errors_are_fatal(self):
         self.assertIsNone(self.native.smart_parents(1))

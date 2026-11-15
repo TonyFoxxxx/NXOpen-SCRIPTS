@@ -361,6 +361,7 @@ class PlaneDirectionTests(unittest.TestCase):
                 t.bounds, t.protected_bodies, t.operations = {},set(),[]
                 t.check_cam_builders = Mock()
                 t.capture_stock, t.capture_parameters, t.capture_body_history = Mock(),Mock(),Mock()
+                t.choose_replacement_body = Mock(return_value=None)  # Isolate full-project MCS branch.
                 t.checkpoint_model_history, t.verify_model_history = Mock(),Mock()
                 t.verify_retained_model_history, t.verify_model_warnings = Mock(),Mock()
                 t.capture_topology = Mock(return_value=topology)

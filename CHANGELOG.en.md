@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Mirrored CAM project trial V1.26
+
+Add a one-body replacement experiment for retained model dependencies: read exact references and sketch membership, create an independent body, require a complete unique face/edge map, reflect only the candidate and try explicit ReplaceFeatureBuilder mapping. Missing intermediate references, changed geometry tags, sketch definitions, MCS selections, stock settings or new warnings cause rejection. Success and failure both use the existing copy-only rollback; no MCS/stock transfer or toolpath deletion follows this branch.
+
+Preserve boundary/member application data independently, including the groove-centerline member's Tool Position On separately from Tool Side Outside. Fail on unreadable flags, active values and API errors. Add 32 regressions; all 427 focused checks pass, including 67 using compiled C fixtures. These are not NX/SDK 2606 compatibility checks. Full sketch constraints, complete CAM transfer and real-PRT success remain unconfirmed. Update source, catalog checksum and bilingual documentation coherently; V1.26 is detected as newer than V1.25.02. [Prototype and SDK checklist](docs/en/mirror-project.md#replacement-probe-v126).
+
 ## 2026-11-15 — V1.25.02 report analysis; journal unchanged
 
 The user run confirms the same eight damaged retained features after the common transformation of three bodies and 23 points. All those points returned no modeling parents; both sketch arcs were excluded. V1.25.02 target-selection changes did not resolve the failure. Record the evidence limits: no individual culprit has been isolated, final CAM boundaries were not checked, and a successful empty UF result does not verify the nonempty-array branch in DC 2606.
