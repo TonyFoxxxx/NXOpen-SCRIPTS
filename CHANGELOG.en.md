@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — V1.26.02 report analysis; journal unchanged
+
+Confirm two inaccessible Edge supports with six links from three Datum CSYS and three sketches. They are absent from final topology; after UF_MODL_ask_edge_body the owner tag remains zero without a nonzero UF error. Do not attribute the preceding GetBody 630003 code to this failure. Both R1 arcs belong to SKETCH_000 and read as Tool Position On; they remain untested after reflection because candidate creation was never reached. The report records Undo and successful source checks.
+
+Add a regression with this dependency shape and null-owner C responses: 464 focused checks outside NX, including 92 using C fixtures. This verifies rejection, not successful transfer in NX. Further work requires an exact intermediate-support map; final-body mapping is insufficient. Keep the journal, V1.26.02 and catalog SHA-256 unchanged; another run on the same PRT is not currently needed. [Analysis and research APIs](docs/en/mirror-project.md#result-v12602).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.26.02
 
 Repair geometric-reference ownership reading after GetBody error 630003: exact tags/types from all bodies' captured final topology replace the redundant owner call. Other objects use preflighted UF_MODL_ask_face_body/ask_edge_body exports. Errors, null outputs, unknown bodies and intermediate supports without candidate correspondence stop the trial before candidate creation. List every affected consumer and role together; retain the primary UF error, code and traceback. Correct the stale stage that incorrectly named CAM_MAIN.

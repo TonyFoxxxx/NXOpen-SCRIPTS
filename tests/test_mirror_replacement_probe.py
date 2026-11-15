@@ -206,6 +206,48 @@ class ProbeWorld:
         self.after_commit()
 
 
+def ownerless_support_report_world():
+    """The V1.26.02 report's dependency shape, not a reconstruction of its PRT.
+
+    Six readable final entities, two ownerless historical edges, six consumer
+    links, and both R1 centerlines with On. Unrelated geometry is synthetic.
+    """
+    w=ProbeWorld()
+    w.body.faces=[w.register(Face(tag,w.body)) for tag in (538463,560022)]
+    w.body.edges=[w.register(Edge(tag,w.body)) for tag in (64812,65210,66044,66038)]
+    for tag in (64791,73591):
+        obj=w.register(Edge(tag,w.body))
+        obj.GetBody=Mock(side_effect=AssertionError('No guessed owner for historical support'))
+    w.references[22]=((64812,b'csys edge'),(538463,b'csys face'),(65210,b'external edge'))
+    w.references[23]=()
+    arcs=[w.register(Curve(tag)) for tag in (65349,65353)]
+    w.sketch.Name='SKETCH_000';w.sketch.Sketch.geometry=arcs
+    for arc in arcs: w.boxes[arc.Tag]=(2.,3.,4.,6.,7.,8.)
+    for datum_tag,sketch_tag,edge,index in ((69573,69574,64791,7),
+                                          (69576,69578,73591,9),
+                                          (69579,69582,73591,10)):
+        datum=Feature(datum_tag,'DATUM_CSYS',parents=[w.blend])
+        curve=w.register(Curve(sketch_tag+10000));w.boxes[curve.Tag]=(2.,3.,4.,6.,7.,8.)
+        sketch=SketchFeature(sketch_tag,curve,parents=[datum])
+        if index==7: sketch.Sketch.geometry=[]  # An empty sketch still has a support.
+        w.add_feature(datum);w.add_feature(sketch)
+        role=('Coordinate system for Datum Coordinate System('+str(index)+')').encode()
+        w.references[datum_tag]=((edge,role),(560022,role))
+        w.references[sketch_tag]=((edge,role+b' for sketch'),(560022,role+b' for sketch'))
+    w.references[69578]+=((66044,b'external edge'),(66038,b'external edge'),(65349,b'external arc'))
+    w.references[69582]+=((65349,b'external arc'),)
+    w.add_feature(Feature(69595,'FSET','CAM_MAIN'))
+    w.cam={}
+    names=('R1_CHERN_Z-0.97','R1_CHERN_Z-1.149','R1_CHIST_Z-1','R1_CHIST_Z-1.179')
+    for operation,name in enumerate(names,900):
+        arc=65349 if operation%2==0 else 65353
+        w.t.geometry_labels[operation]=name+' [PlanarMilling]'
+        w.cam[(operation,0)]=('read',operation,'read',operation,(arc,),((arc,),))
+        w.cam[(operation,0,'boundary_app',1,1)]=(0,None,0,None,None,0,None,None,0,None,1,1)
+    w.freeze()
+    return w
+
+
 class ProbeReaderTests(unittest.TestCase):
     def test_reference_diagnostic_decoding_does_not_define_identity(self):
         roles = (b'face', 'опора'.encode('utf-8'), b'\xff', b'\\xff')

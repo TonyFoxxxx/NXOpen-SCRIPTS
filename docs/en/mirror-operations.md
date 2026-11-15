@@ -4,6 +4,8 @@
 
 Audit date: **2026-11-16**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
 
+The latest V1.26.02 report identifies two inaccessible supports with six Datum CSYS/sketch links; execution stops before candidate creation. Initial R1 arc selections and Tool Position On are readable, but their post-reflection state is untested. Available operation builders do not resolve intermediate model-history transfer. The executable and catalog are unchanged. [Report analysis](mirror-project.md#result-v12602).
+
 V1.26.02 repairs reference-ownership reading after GetBody error 630003: exact final topology, separate UF queries for other faces/edges, and all unresolved links listed before candidate creation. The V1.26.01 report confirms nonempty UF reference reads and four sketches, not body replacement. Complete intermediate supports, Section/ScCollector definitions and sketch constraints remain unverified; operation coverage is unchanged. [Correction limits and SDK methods](mirror-project.md#reference-ownership-v12602).
 
 V1.26.01 fixes a confirmed API-selection error: Python Modl has no `AskReferencesOfFeatures` on the user installation. The prototype now reads references and calls its other UF operations through C exports, with preflight and unchanged guards. The V1.26 run established initial On values for all four R1 boundaries but stopped before body changes. No additional operation family is approved. [Evidence and C contracts](mirror-project.md#uf-api-v12601).

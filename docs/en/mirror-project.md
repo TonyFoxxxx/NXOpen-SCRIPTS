@@ -4,6 +4,33 @@
 
 Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.26.02**.
 
+<a id="result-v12602"></a>
+## V1.26.02 NX result: two inaccessible supports
+
+The latest user report localizes the blocker: six unique faces/edges are confirmed in body `80517`'s final topology, while **two other edges have six links from retained definitions**. Neither appears in any body's captured final topology. After `UF_MODL_ask_edge_body`, the owner tag remained zero; the call did not report a nonzero UF error. The journal rejected the unreadable output itself. This differs from the preceding run's GetBody exception 630003: that code must not be attributed to the new failure. The null result does not establish either edge's ownership by the selected body or the reason for its absence.
+
+| Edge in this run | Retained consumers |
+| --- | --- |
+| `64791` | Datum CSYS(7), feature `69573`; `SKETCH_001:Sketch(7)`, feature `69574` |
+| `73591` | Datum CSYS(9), feature `69576`; `SKETCH_002:Sketch(9)`, feature `69578`; Datum CSYS(10), feature `69579`; `SKETCH_003:Sketch(10)`, feature `69582` |
+
+SKETCH_001 returns empty geometry/expression lists but still has support references. This does not authorize deleting or skipping it. SKETCH_002 and SKETCH_003 are nonempty. Another object on the same line/plane does not prove preservation of the original selection. These tags identify this run only; they are not permanent script settings.
+
+Both selected R1 centerlines are accessible Arc objects belonging to **SKETCH_000**, feature `69571`, Sketch object `69495`. Its coordinate-system supports and external edge occur in final topology. Initial CAM data contains:
+
+| Operations | Selected arc | Member Tool Position |
+| --- | --- | --- |
+| `R1_CHERN_Z-0.97`, `R1_CHIST_Z-1` | `65349` | `has_tool_position=1`, `On` |
+| `R1_CHERN_Z-1.149`, `R1_CHIST_Z-1.179` | `65353` | `has_tool_position=1`, `On` |
+
+Candidate creation, reflection and history replacement had not started. The report records Undo, source restoration, an unchanged checksum and a clear modification flag. CAM preservation after transformation, final curve positions and toolpath generation are **not tested** by this run.
+
+**The current prototype cannot transfer these intermediate supports.** A map of final faces/edges alone is insufficient for this PRT. Further implementation requires reading each support's geometry at its applicable history state, a verified reflected correspondence, and preservation checks for the original selections, sketch definitions/constraints, projections and MCS after replacement. Replacement must remain blocked until this map exists.
+
+The older Siemens contract describes `UF_MODL_ask_alive_edge` as resolving edge labels after a merge; a null owner does not establish that case. Published API exposes `ExtractFaceBuilder.FixAtCurrentTimestamp` / `FrecAtTimeStamp`, but the available descriptions do not establish extraction of these supports with preserved identifiers in 2606. History-state changes through `UF_MODL_ask_current_feature/set_current_feature` or `Feature.MakeCurrentFeature` require separate verification of all objects and the restored current-feature state. These mechanisms **are not added to the executable path**. [Older uf_modl.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl.html), [ExtractFaceBuilder, published NX 2022.1 API](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.ExtractFaceBuilder.html).
+
+A report-shaped regression uses separately compiled C to return success with null owners for two edges. It checks all six links, including the empty sketch, absence of an invented 630003 code, and rejection before candidate creation/MCS/toolpaths. All **464 focused checks outside NX** pass, including **92 using C fixtures**. This tests rejection with synthetic data, not reproduction or repair of the NX kernel. The executable, V1.26.02 and catalog SHA-256 remain unchanged. Rerunning this revision on the same PRT is not currently needed; a working transfer revision is not yet available.
+
 <a id="reference-ownership-v12602"></a>
 ## V1.26.02: geometric reference ownership
 
@@ -15,7 +42,7 @@ Inspect all readable direct Face/Edge references of retained features. Query eac
 
 The stage now identifies the actual consumer, tag and role; the aggregated failure preserves the primary UF error, code and traceback. These ownership problems are reported **before candidate creation**. This repairs ownership reading and diagnostics; **it does not establish reconstruction of missing intermediate supports or a completed CAM copy**. The prototype still requires rollback, with no subsequent MCS/stock transfer or toolpath deletion.
 
-All **463 focused checks outside NX** pass, including **91 using separately compiled C fixtures**. The 16 new regressions cover exact ownership without `GetBody()`, complete failure enumeration, preserved error codes/causes, distinct Face/Edge C exports, unsigned tags and unreadable outputs. They neither reproduce the NX kernel nor prove 2606 compatibility. Next, run V1.26.02 on the saved source and share the complete report to establish which supports are accessible and which need additional implementation. [SDK verification checklist](#replacement-probe-sdk-2606).
+All **463 focused checks outside NX** pass, including **91 using separately compiled C fixtures**. The 16 new regressions cover exact ownership without `GetBody()`, complete failure enumeration, preserved error codes/causes, distinct Face/Edge C exports, unsigned tags and unreadable outputs. They neither reproduce the NX kernel nor prove 2606 compatibility. The actual run and the final-body mapping limitation are analyzed above in the [V1.26.02 report](#result-v12602). [SDK verification checklist](#replacement-probe-sdk-2606).
 
 New C-signature source: [older Siemens uf_modl.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl.html). Intermediate-object correspondence and owner-query behavior on suppressed objects require actual NX 2606 checks.
 
@@ -45,7 +72,7 @@ C signature sources: [older Siemens uf_modl.h](https://www.ugapi.com/doc/UFun/uf
 4. `ReplaceFeatureBuilder` uses the checked explicit map, disabled automatic matching and `MapOnlyObjectsWithModelingDependencies`. After Commit, check original body/face/edge tags, geometric references, retained features and expressions, sketch membership, dependent-curve positions, new warnings, CAM selections, stock settings and MCS reference selections. The API documentation **does not guarantee tag preservation**; changed tags cause rejection.
 5. Success and failure both enter the existing copy-only rollback path, restore the source and verify its integrity. This branch does not transfer MCS/stock or delete toolpaths. Even a successful prototype **is not left for saving or CAM regeneration**. If Undo fails, retain the existing attempt to close only this invocation's copy without saving and report the actual outcome.
 
-Curves upstream of the replaced body may remain at their original positions in this limited experiment. Complete sketch constraints, all associative definitions and whole-project transfer remain unproven. The next NX step is to run V1.26.02 on the saved source without components and share the complete report; do not save the experimental branch's result. The disk file remains the initial PRT copy.
+Curves upstream of the replaced body may remain at their original positions in this limited experiment. Complete sketch constraints, all associative definitions and whole-project transfer remain unproven. The V1.26.02 run found inaccessible intermediate supports before candidate creation; repeating it on the same PRT without a mechanism change is not needed. The experimental result is not intended for saving. The disk file remains the initial PRT copy.
 
 ### Part Boundary: groove centerlines
 
@@ -58,6 +85,7 @@ V1.26 reads application data for the boundary and **each member**, using `UF_CAM
 
 | Methods / definitions | Outstanding verification |
 | --- | --- |
+| `UF_MODL_ask_alive_edge`; `ExtractFaceBuilder.FixAtCurrentTimestamp/FrecAtTimeStamp`; `UF_MODL_ask_current_feature/set_current_feature`, `Feature.Timestamp/MakeCurrentFeature` | Research candidates, not executable paths: distinguish merged labels from inaccessible historical geometry, access the applicable history state, and restore exact objects/current-feature state. Older documentation does not confirm the 2606 outcome. |
 | `Body.GetFaces/GetEdges`, `UF_MODL_ask_face_body`, `UF_MODL_ask_edge_body` | Completeness of current topology and C owner-query behavior for intermediate/suppressed references. An exact indexed tag replaces a redundant GetBody; an absent tag requires separate evidence, not substituted geometry. |
 | `UF_MODL_ask_references_of_features`, `UF_free`, `UF_free_string_array` | Windows 2606 ABI, complete intermediate-history references, part ownership and names/allocator ownership. The missing Python method is no longer required. |
 | `SketchFeature.Sketch`, `Feature.GetEntities`, `Sketch.GetAllGeometry/GetAllExpressions` | Actual classes/results, associative geometry and complete dependencies; this snapshot does not establish every sketch constraint. |
@@ -299,7 +327,7 @@ The V1.23 report passed the previous MCS “2” stop and both Three Planes rebu
 
 ## Files and validation
 
-V1.26.02: **463 focused checks outside NX**, including **91 C-fixture checks**. Coverage includes exact ownership from final topology, Face/Edge C queries, unsigned tags, unreadable outputs, all affected consumers, and preservation of the primary error through rollback. Existing mapping, history, MCS/stock and boundary guards pass. This is not a real NX/SDK 2606 compatibility test.
+V1.26.02: **464 focused checks outside NX**, including **92 C-fixture checks**. Coverage includes exact ownership from final topology, Face/Edge C queries, unsigned tags, unreadable outputs, all affected consumers, and preservation of the primary error through rollback. Existing mapping, history, MCS/stock and boundary guards pass. This is not a real NX/SDK 2606 compatibility test.
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 

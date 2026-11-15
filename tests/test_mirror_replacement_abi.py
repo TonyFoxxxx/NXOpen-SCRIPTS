@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from test_mirror_replacement_probe import M, ProbeWorld
+from test_mirror_replacement_probe import M, ProbeWorld, ownerless_support_report_world
 
 
 class ReplacementAbiTests(unittest.TestCase):
@@ -106,6 +106,33 @@ class ReplacementAbiTests(unittest.TestCase):
                 self.reset(mode)
                 with self.subTest(kind=kind,mode=mode), self.assertRaisesRegex(RuntimeError,'не прочитано тело опоры'):
                     self.native.reference_body(17,kind)
+
+    def test_v12602_two_ownerless_edges_report_all_six_links_before_candidate(self):
+        w=ownerless_support_report_world();self.reset(33)  # C returns success + NULL_TAG.
+        w.t.native.reference_body=self.native.reference_body
+        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.run()
+        message=str(caught.exception)
+        self.assertEqual(message.count('опора tag=64791 /'),2)
+        self.assertEqual(message.count('опора tag=73591 /'),4)
+        for tag in (69573,69574,69576,69578,69579,69582):
+            self.assertIn('(элемент '+str(tag)+')',message)
+        self.assertIn('подтверждено уникальных граней/рёбер 6; неподтверждённых ссылок 6','\n'.join(w.t.lines))
+        self.assertIn('DATUM_CSYS] (элемент 69573) / опора tag=64791',w.t.stage)
+        self.assertNotIn('CAM_MAIN',w.t.stage)
+        self.assertNotIn('630003',message)  # Do not fabricate an NX error code for a null output.
+        self.assertIsNone(caught.exception.code)
+        self.assertIs(type(caught.exception.__cause__),RuntimeError)
+        self.assertEqual((self.stat(8),self.stat(9)),(0,2))
+        for tag in (64791,73591): w.objects[tag].GetBody.assert_not_called()
+        self.assertEqual(w.probe.sketches[69574][1],())
+        for op,arc in ((900,65349),(901,65353),(902,65349),(903,65353)):
+            self.assertEqual(w.cam[(op,0)][4],(arc,))
+            self.assertEqual(w.cam[(op,0,'boundary_app',1,1)][-2:],(1,1))
+        self.assertEqual(w.events,[])
+        w.t.part.Features.CreateExtractFaceBuilder.assert_not_called()
+        w.t.native.transform_entities.assert_not_called()
+        w.t.transfer_mcs_and_stock.assert_not_called()
+        w.t.setup.DeleteToolPath.assert_not_called()
 
     def test_owner_query_preserves_suppressed_code_even_with_nonnull_output(self):
         for kind in ('Face','Edge'):

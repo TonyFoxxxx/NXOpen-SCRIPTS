@@ -39,11 +39,11 @@ Each guide covers features, use, settings, output files and limitations. See the
 
 ### Latest update — Mirrored CAM project trial V1.26.02 · 2026-11-16
 
-The V1.26.01 run read UF C references and four sketches, then stopped at `GetBody()` with code 630003. V1.26.02 resolves ownership by exact tags from the captured topology of all bodies, with separate UF owner queries for remaining faces/edges. Unreadable or missing intermediate supports are listed with their consumers and roles before candidate creation. [Report, correction and limits](docs/en/mirror-project.md#reference-ownership-v12602).
+The latest V1.26.02 run stopped before candidate creation: two edges are absent from final topology and UF did not provide their owners. Three Datum CSYS and three sketches reference them. Both R1 centerlines read as Tool Position On; model/CAM transfer has not run. A final-body map does not resolve these supports. [Report analysis and remaining requirements](docs/en/mirror-project.md#result-v12602).
 
-All **463 focused checks outside NX** pass, including **91 using test C libraries**. This repairs ownership reading; it does not establish intermediate-support reconstruction or a completed CAM copy. Exact geometry/sketch/MCS/stock guards and mandatory rollback remain.
+All **464 focused checks outside NX** pass, including **92 using test C libraries**. The added regression checks rejection of all six links with null owners; it neither reproduces nor repairs the NX kernel. The executable, V1.26.02 and catalog SHA-256 remain unchanged.
 
-In updater **V1.20**, run Check and install **V1.26.02**. Run on the saved source without components and share the complete report; the experimental branch still requires rollback.
+Rerunning this revision on the same PRT is not currently needed. A working intermediate-support transfer revision is not ready; the prototype retains mandatory rollback.
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 
