@@ -41,6 +41,8 @@ Each guide covers features, use, settings, output files and limitations. See the
 
 Fix reflection target selection: query curve/point sketch membership independently of UF Smart Object status. Exclude sketch geometry from separate transformation, then verify its reflected bounds, original sketch membership and CAM references. Edges move with their bodies. Add an early stop for damaged retained history and checks for new NX warnings. All 368 focused checks outside NX passed, including 53 using test C libraries and 40 new scenarios. The fix remains unverified on the user PRT; safe transfer of every dependent sketch is not claimed. [Details and limits](docs/en/mirror-project.md#sketch-curves-and-nx-warnings).
 
+**NX test result:** V1.25 excluded both sketch arcs as intended, but the common model transformation still damaged sketch/projection dependencies. The trial stopped and rolled back. The script remains unchanged; three added failure regressions bring the focused total to 371. [Report analysis](docs/en/mirror-project.md#v125-result-in-nx).
+
 Update **«Зеркальная копия CAM-проекта — тест» to V1.25** in the updater. [Test workflow, recognized editors and limitations](docs/en/mirror-project.md).
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14

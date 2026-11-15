@@ -375,6 +375,101 @@ class SketchTargetTests(unittest.TestCase):
         t.setup.DeleteToolPath.assert_not_called()
 
 
+class ReportedV125HistoryTests(unittest.TestCase):
+    """Observed failure pattern, with synthetic objects/tags, not NX execution.
+
+    Excluding two selected sketch arcs is insufficient when the common model
+    transform still damages retained history. A datum-parent remap alone does
+    not explain or authorize the remaining sketch/projection losses.
+    """
+    def workflow(self):
+        f = Fixture()
+        root = f.extrude
+        root.FeatureType, root.parents, root.expressions = 'BREP', [], []
+        datums = [f.mcs] + [Feature(tag, 'DATUM_CSYS') for tag in (40, 41, 42)]
+        for datum in datums:
+            datum.parents = [root]
+        first = f.sketch
+        first.parents = [root, datums[0]]
+        project = Feature(50, 'CPROJ', parents=[root, datums[1]])
+        second = Feature(60, 'SKETCH', parents=[root, first, datums[2]])
+        third = Feature(61, 'SKETCH', parents=[first, datums[3], project])
+        warning_only = Feature(70, 'SKETCH', parents=[datums[1]])
+        for tag, name in ((500, 'p58'), (501, 'p59')):
+            expression = Expression(tag, first)
+            expression.Name, expression.RightHandSide = name, '1'
+        for tag, name, value, units in ((502, 'Pattern_p225', '4', None),
+                                       (503, 'Pattern_p228', '360', NS(Name='Degrees'))):
+            expression = Expression(tag, third)
+            expression.Name, expression.RightHandSide, expression.Units = name, value, units
+        added = datums[1:] + [project, second, third, warning_only]
+        for feature in added:
+            feature.OwningPart = f.trial.part
+        f.trial.part.Features.extend(added)
+        t = f.workflow()
+        arc_class = type('Arc', (t.nx.Curve,), {})
+        t.refs = {tag: arc_class() for tag in (101, 102)}
+        t.native.sketch_of_geometry.return_value = 700
+        t.native.smart_parents = Mock(side_effect=AssertionError('Sketch arcs must not reach the free-object path'))
+        t.bounding_box = Mock(return_value=[1, 2, 3, 5, 6, 7])
+        t.transfer_mcs_and_stock, t.transfer_custom_points = Mock(), Mock()
+
+        def observed_transform(*args):
+            f.convert()
+            for datum in datums:
+                datum.parents = [f.brep]
+            first.parents, first.expressions = [datums[0]], []
+            project.parents = [datums[1]]
+            second.parents = [datums[2]]
+            third.parents, third.expressions = [datums[3], project], []
+            warning_only.warnings = [PARENT_WARNING]
+            second.warnings = [PARENT_WARNING, CONSTRAINT_WARNING, 'Sketch contains failed associative curves.']
+            third.warnings = [PARENT_WARNING, CONSTRAINT_WARNING]
+
+        t.native.transform_entities.side_effect = observed_transform
+        return t, datums, (first, project, second, third), warning_only
+
+    def run_failed(self):
+        t, datums, damaged, warning_only = self.workflow()
+        with self.assertRaisesRegex(RuntimeError, 'сохраняемые модельные элементы; элементов: 8') as caught:
+            t.run_in_absolute_wcs()
+        return t, datums, damaged, warning_only, str(caught.exception)
+
+    def test_observed_damage_fails_before_mcs_despite_excluded_sketch_arcs(self):
+        t, datums, damaged, _, error = self.run_failed()
+        t.native.transform_entities.assert_called_once_with([1000], [0]*16)
+        self.assertEqual(t.sketch_geometry, {101: 700, 102: 700})
+        t.native.smart_parents.assert_not_called()
+        for feature in datums + list(damaged):
+            self.assertIn('элемент ' + str(feature.Tag), error)
+        for query in (t.transfer_mcs_and_stock, t.setup.DeleteToolPath,
+                      t.native.update_model, t.transfer_custom_points, t.transfer_boundary_planes):
+            query.assert_not_called()
+        self.assertEqual(set(t.history_baseline[damaged[0].Tag]['expressions']), {500, 501})
+        self.assertEqual(set(t.history_baseline[damaged[3].Tag]['expressions']), {502, 503})
+        self.assertNotIn('ПРОЙДЕНО', '\n'.join(t.lines))
+
+    def test_datum_parent_changes_are_not_the_only_rejection_reason(self):
+        t, datums, damaged, _, _ = self.run_failed()
+        allowed_for_analysis = {feature.Tag for feature in datums}
+        retained = set(t.history_baseline) - {10, 11, 12} - set(t.stock_features)
+        remaining = [(tag, details) for tag, details in
+            M.model_history_changes(t.history_baseline, t.history_previous)
+            if tag in retained - allowed_for_analysis]
+        self.assertEqual({tag for tag, _ in remaining}, {feature.Tag for feature in damaged})
+        self.assertIn('Выражения: количество 2 → 0', '\n'.join(line for _, details in remaining for line in details))
+
+    def test_warning_only_sketch_and_failed_associative_curves_are_reported(self):
+        t, _, damaged, warning_only, _ = self.run_failed()
+        structural = {tag for tag, _ in M.model_history_changes(t.history_baseline, t.history_previous)}
+        self.assertNotIn(warning_only.Tag, structural)
+        warnings = {tag: added for tag, added, _ in M.model_warning_changes(t.history_baseline, t.history_previous)}
+        self.assertEqual(set(warnings), {warning_only.Tag, damaged[2].Tag, damaged[3].Tag})
+        self.assertIn('Sketch contains failed associative curves.', warnings[damaged[2].Tag])
+        with self.assertRaisesRegex(RuntimeError, 'Sketch contains failed associative curves'):
+            t.verify_model_warnings('reported model transform')
+
+
 class BoundarySelectionReportTests(unittest.TestCase):
     def trial(self):
         t = object.__new__(M.Trial)

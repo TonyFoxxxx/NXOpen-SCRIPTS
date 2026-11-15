@@ -2,6 +2,10 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — V1.25 NX report analysis; journal unchanged
+
+The real NX report confirms that excluding the two selected sketch arcs did not prevent retained-history damage during the common model transform. Record the eight changed features and three warned sketches, including one with no structural change. The stop occurred before MCS/stock transfer and toolpath deletion; final CAM boundary preservation was not checked. Add three failure-pattern regressions; all 371 focused checks pass, including 53 using test C libraries. Keep journal version V1.25, its source and catalog checksum unchanged. No replacement transformation or complete NX compatibility is claimed. [Evidence and remaining blocker](docs/en/mirror-project.md#v125-result-in-nx).
+
 ## 2026-11-15 — Mirrored CAM project trial V1.25
 
 Fix reflection target selection: query curve/point sketch membership independently of UF Smart Object status. Exclude sketch geometry from separate transformation, then verify its reflected bounds, original sketch membership and CAM references. Edges move with their bodies. Add an early stop for damaged retained history and checks for new NX warnings. All 368 focused checks outside NX passed, including 53 using test C libraries and 40 new scenarios. The fix remains unverified on the user PRT; safe transfer of every dependent sketch is not claimed.

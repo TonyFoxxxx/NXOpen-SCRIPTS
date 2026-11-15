@@ -4,6 +4,34 @@
 
 Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.25**.
 
+## V1.25 result in NX
+
+**The user PRT still fails.** In the 15 November 2026 report, both selected `Arc` objects were recognized as members of one sketch and excluded from separate transformation. The common `UF_MODL_transform_entities` call nevertheless changed eight retained features: four Datum CSYS parent references, three sketch definitions and one CPROJ definition. Two sketches lost expressions; other parent dependencies were removed. New warnings include lost point parents, under-constrained sketches and failed associative curves. One sketch acquired a warning without a structural snapshot change.
+
+The early history guard stopped execution before MCS/stock transfer and toolpath deletion. The report records successful Undo, return to the source, an unchanged source-file checksum and a clear source modification flag. The final CAM-boundary comparison was not reached, so this run does not establish whether the four boundaries lost in V1.24 were retained or lost again. It confirms damage during the common model transformation; the responsible individual target within that call has not been isolated.
+
+Merely accepting the four Datum CSYS parent remaps would leave three damaged sketches and a damaged projection. These changes are outside the authorized body-history-to-BREP conversion. The current transfer mechanism remains unsuitable for this dependency graph. A replacement must preserve geometry identifiers, selected objects and sketch dependencies; full successful mirroring has not been established.
+
+Three additional regressions reproduce this failure pattern with synthetic objects, including both excluded arcs and the warning-only sketch. All **371 focused checks outside NX** pass, including 53 using test C libraries. These are failure-guard checks, not reproduction or repair of the NX kernel. **The journal remains V1.25 with unchanged source bytes and manifest checksum; no new script revision is issued for this analysis.**
+
+## Investigated transformation alternatives
+
+This investigation uses available older NXOpen/UF contracts, **not the 2606 SDK**. None of the following alternatives has been added to the journal:
+
+| API / approach | Established behavior | Why it is not a ready fix |
+| --- | --- | --- |
+| `UF_MODL_transform_entities` | Transforms input objects and their parents. In the V1.25 report, retained history is damaged even with both arcs excluded. | A different dependency-transfer mechanism is needed; weakening checks does not repair it. |
+| `UF_MODL_replace_body_data` | Replaces an unparameterized feature's body with a copy of another body. Both must be single-face sheet bodies. | It is not a general BREP editor for a solid part. |
+| `UF_MODL_replace_features` | Provides an edge/face correspondence map and reparents child features. With `return_map=true`, it returns downstream references needing mapping without performing replacement. | This map does not promise CAM coverage. The description also does not guarantee preservation of body/face/edge tags. |
+| `ReplaceFeatureBuilder` | Provides explicit reference matching. The older reference marks `MapAllObjects` as unsupported. | Modeling dependencies cannot be treated as a complete map of selected CAM geometry. Verification against 2606 is required. |
+| `MirrorBodyBuilder`, `UF_BREP_make_body` | Create a mirrored/new body. | Creation alone does not preserve existing identifiers or sketch references. |
+
+The next implementation direction is **explicit dependency capture and matching before changing the body**. First, obtain every used reference, including intermediate-history entities, and match each to its exact reflected counterpart. A reference absent from the final body cannot be assumed unnecessary; another coplanar face is not an equivalent selection, and ambiguous matches must not be chosen silently. Then verify preservation of identifiers and sketch/projection definitions through history replacement. Only after those checks may the existing MCS, stock and CAM stages proceed. Reparenting one reference to a BREP without checking the rest of the sketch definition is insufficient.
+
+Open requirements before implementation include the actual DC 2606 API behavior, identifiers after replacement, access to intermediate references, and complete transfer of sketch constraints/associative geometry. Merely finding an API does not justify adding its replacement call to the production journal. There is no ready fix established by the available offline checks; further development does not require the user to provide a manual mirroring method.
+
+Sources: [older Siemens `uf_modl.h` header](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_modl.h), [ReplaceFeatureBuilder](https://www.ugapi.com/doc/nxopen/a03024.html), [MirrorBodyBuilder, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.MirrorBodyBuilder.html). These are published copies of contracts, not proof of kernel behavior or 2606 compatibility.
+
 ## Latest release
 
 **V1.25 · 2026-11-15** — Fix reflection target selection: query curve/point sketch membership independently of UF Smart Object status. Exclude sketch geometry from separate transformation, then verify its reflected bounds, original sketch membership and CAM references. Edges move with their bodies. Add an early stop for damaged retained history and checks for new NX warnings. All 368 focused checks outside NX passed, including 53 using test C libraries and 40 new scenarios. The fix remains unverified on the user PRT; safe transfer of every dependent sketch is not claimed. [Details](#sketch-curves-and-nx-warnings).
@@ -135,7 +163,7 @@ This is a general validation mechanism, not confirmed support for every NX comma
 
 ## Sketch curves and NX warnings
 
-The V1.24 report showed lost Part boundaries in four PlanarMilling operations. The user confirmed sketch-curve selections; model-edge selections remain an intended case too. History snapshots immediately after reflection showed lost sketch parents and expressions, and the NX update report warned about lost point parents and an under-constrained sketch. These are unacceptable retained-history changes. Whether excluding curves from separate transformation resolves them still requires an NX test; the effects of transforming the body and its parents remain unresolved.
+The V1.24 report showed lost Part boundaries in four PlanarMilling operations. The user confirmed sketch-curve selections; model-edge selections remain an intended case too. History snapshots immediately after reflection showed lost sketch parents and expressions, and the NX update report warned about lost point parents and an under-constrained sketch. These are unacceptable retained-history changes. V1.25 confirmed exclusion of both selected arcs, but this was insufficient: the common transformation still damaged dependencies. The individual input object responsible for that damage has not been isolated.
 
 `UF_SKET_ask_sketch_of_geom` is queried for selected curves and points before the general transform. A successful `NULL_TAG` means no sketch; an unavailable function or API error stops the trial. `UF_SO_is_so` alone does not establish independence. A sketch curve/point is expected to follow model updates, retains its tag and remains in reflected-bounds verification. Its original sketch membership is checked after final CAM/MCS reads. Unmoved geometry, lost membership or transfer to another sketch fails. Edges are excluded from separate targets; existing body/face/edge and exact CAM-selection checks remain.
 
@@ -163,7 +191,7 @@ The V1.23 report passed the previous MCS “2” stop and both Three Planes rebu
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-All 368 focused checks outside NX passed, including 53 using separately compiled test C libraries. The 40 new scenarios cover sketch target selection, independent position/membership guards, retained-history loss, baseline/new/transient warnings, unreadable API results and boundary-member diagnostics. The user V1.24 report records successful Undo and source checks, but lost sketch boundaries and damaged history. The V1.25 fix, a complete mirrored result, manual save/reopen and toolpath regeneration need testing in NX / DC 2606. API-model tests and C fixtures do not establish NX compatibility.
+The V1.25 release passed 368 focused checks outside NX, including 53 using separately compiled test C libraries. Its 40 new scenarios cover sketch target selection, independent position/membership guards, retained-history loss, baseline/new/transient warnings, unreadable API results and boundary-member diagnostics. Three later report regressions bring the count to 371. The user V1.25 report confirms that the current transfer still fails on retained history; successful mirroring, manual save/reopen and toolpath regeneration remain unconfirmed. API-model tests and C fixtures do not establish NX compatibility.
 
 ## Later stages — not implemented yet
 
