@@ -2,9 +2,13 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.21**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.22**.
 
 ## Latest release
+
+**V1.22 · 2026-11-15** — Fix V1.21's false stop on an unused custom-point depth field. For Planar/Cavity, check upper_depth/lower_depth for Cut Region Start and depth for Predrill Engage; Face and valid Surface Contour points use no depth fields. Unused values are neither loaded as numbers nor compared as settings. Active nonzero depths, however small, still stop the trial. All 285 checks outside NX passed, including 50 using test C libraries. [Field applicability table](#custom-cam-points).
+
+### V1.21
 
 **V1.21 · 2026-11-15** — Add limited custom CAM point transfer after V1.20 stopped on a PlanarMilling Cut Region Start point. Point references retain their selection; numerical points reflect in ABS while preserving order. Check coordinates after model updates and final CAM editor reads. Nonzero depths and unverified cases stop the trial with recorded data. All 275 checks outside NX passed, including 43 using test C libraries. [Supported cases and limits](#custom-cam-points).
 
@@ -42,13 +46,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. Y/Z are reflected and X completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.21 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.21 from a healthy original project. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.22 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.22 from a healthy original project. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.21**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.22**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. Read and share the report using **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -68,11 +72,22 @@ MCS transfer retains the existing CSYS. Recognized Three Planes definitions reta
 
 ## Custom CAM points
 
-For `PlanarMilling`, `CavityMilling`, `FaceMilling` and `SurfaceContour`, read region-start/predrill records including references, ABS coordinates and three depth fields. Retain a selected `Point` and include it in checked geometry; transform a shared point once. Associative points must follow their defining geometry. Reflect numerical points without references in ABS by replacing the same channel's list, preserving order and other entries' references. Do not reflect coordinates twice if NX already moved them; unexpected motion is an error.
+For `PlanarMilling`, `CavityMilling`, `FaceMilling` and `SurfaceContour`, read point references, ABS coordinates and applicable depth fields. Retain a selected `Point` and include it in checked geometry; transform a shared point once. Associative points must follow their defining geometry. Reflect numerical points without references in ABS by replacing the same channel's list, preserving order and other entries' references. Do not reflect coordinates twice if NX already moved them; unexpected motion is an error.
 
-V1.21 admits only zero `upper_depth`, `lower_depth` and `depth` fields. Planar/Cavity additionally requires a plane parallel to ABS Z, so reflection preserves ABS Z. Zero is not assumed to disable a depth constraint; a plane that changes ABS Z therefore stops these cases before reflection. Face/Surface Contour with zero fields also supports oblique planes. Nonempty lists on other classes, nonzero depths and unverified definitions still stop the trial. The report includes the channel, entry number, tag, coordinates and all three depths; fields are never zeroed to gain admission.
+Determine applicable fields from the operation class and channel using the available older `uf_camgeom.h`, rather than the numerical magnitude:
 
-After transfer, verify record count/order, original references/depths and each point's expected coordinates. Repeat verification after the final CAM editor reads; do not silently repair late motion. Write failures, including append failure after list deletion, propagate to the existing copy rollback. Channels unavailable with code 1345005 remain unverified rather than empty.
+| Operation class | Channel | Used depth fields |
+| --- | --- | --- |
+| PlanarMilling / CavityMilling | 0 — Predrill Engage | `depth` |
+| PlanarMilling / CavityMilling | 1 — Cut Region Start | `upper_depth`, `lower_depth` |
+| FaceMilling | 0 and 1 | None |
+| SurfaceContour | 1 — Cut Region Start | None |
+
+Do not interpret other fields in these records as numbers or include them in the settings snapshot; the report marks them `<не используется>` (unused). Unknown applicability is marked `<не проверено>` (unverified) and does not authorize transfer of a detected nonempty list. Unused storage may contain nonzero values or NaN; this is no reason to round active parameters. For writing, initialize a new C structure and assign only applicable fields; do not zero meaningful depths. Unknown families and unverified combinations are not automatically admitted.
+
+Active Planar/Cavity fields still require exact zero; even a nonzero value around `1e-310` stops the trial. Missing or nonfinite active values also fail. The plane must additionally be parallel to ABS Z: zero is not assumed to disable a depth constraint. Face and valid Surface Contour points also support oblique planes. The meaning/reference frame of nonzero depths in SDK 2606 remains unverified.
+
+After transfer, verify record count/order, original references/active depths and each point's expected coordinates. Repeat verification after final CAM editor reads; do not silently repair late motion. Write failures, including append failure after list deletion, propagate to the existing copy rollback. Channels unavailable with code 1345005 remain unverified rather than empty.
 
 ## Model-feature handling
 
@@ -100,7 +115,7 @@ This is a general validation mechanism, not confirmed support for every NX comma
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-All 275 focused checks outside NX passed, including 43 using separately compiled test C libraries. The 31 new tests cover UF layout/memory ownership, point reads/writes, selection/order preservation, shared points, oblique planes, depth guards, unexpected/late motion and rollback on append failure. The user's V1.20 report confirms initial reads of 35 operation editors, including CavityMilling; it stopped before reflection and therefore does not establish model or CAM transformation. Tests outside NX do not verify SDK 2606 compatibility. A complete V1.21 run, manual save/reopen and toolpath regeneration are still needed in NX.
+All 285 focused checks outside NX passed, including 50 using separately compiled test C libraries. The 10 new scenarios distinguish active and unused fields, reproduce the report's tiny value, NaN/Infinity, changing unused storage and missing active data. Verify writes without rounding meaningful values, retained points and existing protection failures. The V1.21 report contains one selected Cut Region Start point with zero upper_depth/lower_depth and a nonzero unused depth; reflection had not run. These tests do not certify SDK 2606 or the NX kernel. A complete V1.22 run, manual save/reopen and toolpath regeneration are still needed in NX.
 
 ## Later stages — not implemented yet
 

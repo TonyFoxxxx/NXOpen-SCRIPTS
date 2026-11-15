@@ -232,7 +232,7 @@ class NativeArrayTests(unittest.TestCase):
             ctypes.cast(data, ctypes.POINTER(ctypes.c_void_p))[0] = ctypes.addressof(array)
             return 0
         reader.custom = ask
-        self.assertEqual(reader.read_custom_points(123, 1), ((0,(0.0,0.0,0.0),(0.0,0.0,0.0)),) * 2)
+        self.assertEqual(reader.read_custom_points(123, 1, "PlanarMilling"), ((0,(0.0,0.0,0.0),(0.0,0.0,None)),) * 2)
         self.assertEqual(reader.freed, [ctypes.addressof(x) for x in records] + [ctypes.addressof(array)])
 
     def test_native_matrix_must_pass_independent_point_validation(self):
@@ -708,7 +708,7 @@ class TransactionTests(unittest.TestCase):
         native.bind = lambda name,*args: delete if 'delete_custom' in name else append
         native.fail_message = lambda code,buffer:setattr(buffer,'value',b'append custom points failed')
         events,report = self.run_with_trial(lambda:native.replace_custom_points(
-            200,1,((0,(-20.0,3.0,4.0),(0.0,0.0,0.0)),)))
+            200,1,((0,(-20.0,3.0,4.0),(0.0,0.0,None)),),"PlanarMilling"))
         delete.assert_called_once(); append.assert_called_once()
         self.assertIn(('undo',55),events)
         self.assertIn(('active',1,1),events)

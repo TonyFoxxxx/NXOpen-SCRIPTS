@@ -80,6 +80,16 @@ int UF_CAMGEOM_ask_custom_points(uint32_t tag, int kind, int *count, CustomPoint
         list[1]->point_acs[2]=8.25;
     }
     if (mode==3) list[0]->point_acs[1]=NAN;
+    if (mode>=12 && mode<=14) {
+        list[0]->upper_depth=0.0;
+        list[0]->lower_depth=0.0;
+        list[0]->depth=mode==12 ? 6.95090615858665e-310 : (mode==13 ? INFINITY : NAN);
+    }
+    if (mode==15) {
+        list[0]->upper_depth=NAN;
+        list[0]->lower_depth=INFINITY;
+        list[0]->depth=0.0;
+    }
     return mode==5 ? 1345005 : 0;
 }
 

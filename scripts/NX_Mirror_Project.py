@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.21
-SCRIPT_VERSION = "V1.21"
+# SCRIPT_VERSION: V1.22
+SCRIPT_VERSION = "V1.22"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -77,6 +77,30 @@ FEATURE_DEFINITION_BUILDERS = frozenset((
 CAM_GEOMETRY_FIELDS = ('PartGeometry', 'BlankGeometry', 'CheckGeometry',
                        'CutAreaGeometry', 'WallGeometry', 'DriveGeometry', 'TrimGeometry')
 CUSTOM_POINT_KINDS = ("Predrill Engage", "Cut Region Start")
+CUSTOM_POINT_DEPTH_FIELDS = ("upper_depth", "lower_depth", "depth")
+
+
+def custom_point_depth_indices(operation_class, kind):
+    # uf_camgeom.h defines active fields by operation family AND point kind.
+    # None means unknown semantics; () means documented unused depth storage.
+    if kind not in (0, 1):
+        return None
+    if operation_class in ("PlanarMilling", "CavityMilling"):
+        return (2,) if kind == 0 else (0, 1)
+    if operation_class == "FaceMilling" or (operation_class == "SurfaceContour" and kind == 1):
+        return ()
+    return None
+
+
+def validate_custom_point_depths(depths, active):
+    if active is None or len(depths) != 3:
+        raise RuntimeError("Не определены используемые поля глубин пользовательской точки")
+    for index, value in enumerate(depths):
+        if index in active:
+            if value is None or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise RuntimeError("Не прочитано используемое поле пользовательской точки: " + CUSTOM_POINT_DEPTH_FIELDS[index])
+        elif value is not None:
+            raise RuntimeError("Неиспользуемое поле ошибочно включено в определение точки: " + CUSTOM_POINT_DEPTH_FIELDS[index])
 
 
 def cam_enum_snapshot(value, domain, label):
@@ -627,7 +651,8 @@ class NativeCam:
             if data.value:
                 self.free(data)
 
-    def read_custom_points(self, tag, kind):
+    def read_custom_points(self, tag, kind, operation_class):
+        active = custom_point_depth_indices(operation_class, kind)
         count, data = ctypes.c_int(), ctypes.c_void_p()
         try:
             self.check(self.custom(tag, kind, ctypes.byref(count), ctypes.byref(data)), "UF_CAMGEOM_ask_custom_points")
@@ -642,8 +667,11 @@ class NativeCam:
                 seen.add(address)
                 record = ctypes.cast(address, ctypes.POINTER(_CustomPointData)).contents
                 point = tuple(record.point_acs)
-                depths = (record.upper_depth, record.lower_depth, record.depth)
-                if not all(math.isfinite(v) for v in point + depths):
+                # Do not even load inactive doubles: NX may leave those bytes
+                # uninitialized. They are not zero depths or missing API data.
+                depths = tuple(getattr(record, name) if active is not None and index in active else None
+                               for index, name in enumerate(CUSTOM_POINT_DEPTH_FIELDS))
+                if not all(math.isfinite(v) for v in point + tuple(v for v in depths if v is not None)):
                     raise RuntimeError("Некорректные координаты/глубины пользовательской точки: " + str(n + 1))
                 result.append((int(record.point_tag), point, depths))
             return tuple(result)
@@ -659,18 +687,26 @@ class NativeCam:
                             self.free(ctypes.c_void_p(entries[n]))
                 self.free(data)
 
-    def replace_custom_points(self, tag, kind, points):
+    def replace_custom_points(self, tag, kind, points, operation_class):
         # Resolve BOTH entry points and validate the entire list before deleting
         # anything. A failed append propagates to the copy's existing Undo path.
         if kind not in (0, 1) or not points or len(points) > MAX_OBJECTS:
             raise RuntimeError("Некорректный список для переноса пользовательских точек")
+        active = custom_point_depth_indices(operation_class, kind)
         records = []
         for point_tag, point, depths in points:
+            validate_custom_point_depths(depths, active)
             if (not isinstance(point_tag, int) or not 0 <= point_tag <= 0xffffffff or
                     len(point) != 3 or len(depths) != 3 or
-                    not all(math.isfinite(v) for v in tuple(point) + tuple(depths))):
+                    not all(math.isfinite(v) for v in point)):
                 raise RuntimeError("Некорректная запись для переноса пользовательской точки")
-            records.append(_CustomPointData(point_tag, (ctypes.c_double * 3)(*point), *depths))
+            # Initialize request storage, then assign only the documented active
+            # fields. No meaningful depth is overwritten with a default value.
+            record = _CustomPointData()
+            record.point_tag, record.point_acs = point_tag, (ctypes.c_double * 3)(*point)
+            for index in active:
+                setattr(record, CUSTOM_POINT_DEPTH_FIELDS[index], depths[index])
+            records.append(record)
         pointers = (ctypes.POINTER(_CustomPointData) * len(records))(*(ctypes.pointer(r) for r in records))
         u, i = ctypes.c_uint32, ctypes.c_int
         delete = self.bind("UF_CAMGEOM_delete_custom_points", (u, i))
@@ -799,6 +835,7 @@ class Trial:
         self.body_history, self.body_conversions = {}, []
         self.boundary_planes, self.current_boundaries = {}, {}
         self.custom_points, self.current_custom_points, self.custom_point_labels = {}, {}, {}
+        self.custom_point_classes = {}
         self.moved_boundary_count = 0
         if not self.bodies or not self.operations:
             raise RuntimeError("В копии должны быть тела и CAM-операции")
@@ -1663,6 +1700,7 @@ class Trial:
         if collect:
             self.boundary_planes = {}
             self.custom_points, self.custom_point_labels = {}, {}
+            self.custom_point_classes = {}
         for node in self.nodes:
             for kind, label in enumerate(GEOMETRY_KINDS):
                 context = str(node.Name) + " [" + type(node).__name__ + "]/" + label
@@ -1715,7 +1753,7 @@ class Trial:
                     context = str(node.Name) + " / " + CUSTOM_POINT_KINDS[kind]
                     self.stage = "Чтение пользовательских точек: " + context
                     try:
-                        points = self.native.read_custom_points(int(node.Tag), kind)
+                        points = self.native.read_custom_points(int(node.Tag), kind, type(node).__name__)
                     except NativeApiError as exc:
                         if exc.code != 1345005:
                             raise
@@ -1735,16 +1773,23 @@ class Trial:
         return result
 
     def capture_custom_points(self, node, kind, points, context):
+        operation_class = type(node).__name__
+        active = custom_point_depth_indices(operation_class, kind)
         self.lines.append("Пользовательские точки: " + context + "; количество " + str(len(points)))
         for number, (tag, point, depths) in enumerate(points, 1):
+            text = "; ".join(name + "=" + ("<не проверено>" if active is None else
+                str(depths[index]) if index in active else "<не используется>")
+                for index, name in enumerate(CUSTOM_POINT_DEPTH_FIELDS))
             self.lines.append("  Точка " + str(number) + ": tag=" + str(tag) + "; ABS=" + str(point) +
-                              "; upper_depth/lower_depth/depth=" + str(depths))
+                              "; " + text)
         # The old public UF contract describes these four operation classes.
         # Nonzero depth semantics have not been verified against SDK 2606;
         # do not silently preserve or zero them as a substitute for reflection.
-        if type(node).__name__ not in ("PlanarMilling", "CavityMilling", "FaceMilling", "SurfaceContour"):
+        if active is None:
             raise RuntimeError(context + ": перенос пользовательских точек этого класса операции не подтверждён")
-        if any(any(v != 0.0 for v in depths) for _, _, depths in points):
+        for _, _, depths in points:
+            validate_custom_point_depths(depths, active)
+        if any(any(depths[index] != 0.0 for index in active) for _, _, depths in points):
             raise RuntimeError(context + ": ненулевые глубины пользовательских точек требуют проверки по SDK 2606; значения приведены выше")
         # A zero depth may still be a level rather than an inactive field.
         # Until its reference frame is verified, Planar/Cavity points are only
@@ -1759,6 +1804,7 @@ class Trial:
                     raise RuntimeError(context + ": не подтверждена ссылка на Point и его координаты: " + str(tag))
         key = (int(node.Tag), kind)
         self.custom_points[key], self.custom_point_labels[key] = points, context
+        self.custom_point_classes[key] = operation_class
 
     def transfer_custom_points(self, geometry):
         if not self.custom_points:
@@ -1784,7 +1830,7 @@ class Trial:
                 updates.append((key, tuple(expected)))
         for (tag, kind), points in updates:
             self.stage = "Перенос числовых пользовательских точек: " + self.custom_point_labels[(tag, kind)]
-            self.native.replace_custom_points(tag, kind, points)
+            self.native.replace_custom_points(tag, kind, points, self.custom_point_classes[(tag, kind)])
         if updates:
             self.native.update_model()
         if self.geometry_snapshot() != geometry:

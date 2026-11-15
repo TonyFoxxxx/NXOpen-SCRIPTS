@@ -145,8 +145,8 @@ class BoundaryAbiTests(unittest.TestCase):
         trial.nodes = [type('CavityMilling',(operation,),{'Tag':100,'Name':'CAVITY_MILL'})()]
         trial.native.read_custom_points = Mock(return_value=())
         trial.geometry_snapshot(collect=True)
-        self.assertEqual([c.args for c in trial.native.read_custom_points.call_args_list],[(100,0),(100,1)])
-        points = ((0,(1.0,2.0,3.0),(0.0,0.0,0.0)),)
+        self.assertEqual([c.args for c in trial.native.read_custom_points.call_args_list],[(100,0,"CavityMilling"),(100,1,"CavityMilling")])
+        points = ((0,(1.0,2.0,3.0),(0.0,0.0,None)),)
         trial.plane = M.MirrorPlane((2,4,6),(1,0,0))
         trial.native.read_custom_points = Mock(side_effect=[(),points])
         trial.geometry_snapshot(collect=True)

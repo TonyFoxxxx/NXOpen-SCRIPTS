@@ -51,14 +51,14 @@ class CustomPointAbiTests(unittest.TestCase):
         self.assertEqual(self.stat(1),0,'No invalid/double frees')
         self.assertEqual(self.stat(2),0,'No outstanding allocated records or arrays')
 
-    def test_layout_and_pointer_array_read_preserve_unsigned_tags_and_all_depth_fields(self):
+    def test_layout_and_pointer_array_read_preserve_unsigned_tags_and_used_depth_fields(self):
         self.assertEqual([self.layout(i) for i in range(6)],[56,0,8,32,40,48])
         self.assertEqual(ctypes.sizeof(M._CustomPointData),self.layout(0))
         for i,(name,_) in enumerate(M._CustomPointData._fields_,1):
             self.assertEqual(getattr(M._CustomPointData,name).offset,self.layout(i))
-        actual = self.native.read_custom_points(0xf0000080,1)
-        self.assertEqual(actual,((0xf0000042,(12.5,-7.25,3.0),(1.5,-2.25,4.75)),
-                                 (0,(-100.0,0.0,8.25),ZERO)))
+        actual = self.native.read_custom_points(0xf0000080,1,"PlanarMilling")
+        self.assertEqual(actual,((0xf0000042,(12.5,-7.25,3.0),(1.5,-2.25,None)),
+                                 (0,(-100.0,0.0,8.25),(0.0,0.0,None))))
         self.assertEqual(self.target(),0xf0000080)
         self.assertEqual(self.stat(0),3)
 
@@ -66,25 +66,25 @@ class CustomPointAbiTests(unittest.TestCase):
         for mode in (1,2):
             with self.subTest(mode=mode):
                 self.reset(mode,0,0)
-                with self.assertRaises(RuntimeError): self.native.read_custom_points(100,1)
+                with self.assertRaises(RuntimeError): self.native.read_custom_points(100,1,"PlanarMilling")
                 self.assertEqual(self.stat(2),0)
 
     def test_nonfinite_data_rejects_and_frees_every_record(self):
         self.reset(3,0,0)
         with self.assertRaisesRegex(RuntimeError,'координаты/глубины'):
-            self.native.read_custom_points(100,1)
+            self.native.read_custom_points(100,1,"PlanarMilling")
         self.assertEqual(self.stat(0),3)
 
     def test_repeated_record_pointer_is_rejected_without_double_free(self):
         self.reset(4,0,0)
         with self.assertRaisesRegex(RuntimeError,'повторная запись'):
-            self.native.read_custom_points(100,1)
+            self.native.read_custom_points(100,1,"PlanarMilling")
         self.assertEqual(self.stat(0),2)
 
     def test_api_error_preserves_code_and_frees_partial_output(self):
         self.reset(5,0,0)
         with self.assertRaises(M.NativeApiError) as caught:
-            self.native.read_custom_points(100,1)
+            self.native.read_custom_points(100,1,"PlanarMilling")
         self.assertEqual(caught.exception.code,1345005)
         self.assertEqual(self.stat(0),3)
 
@@ -93,35 +93,35 @@ class CustomPointAbiTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.reset(mode,0,0)
                 with self.assertRaisesRegex(RuntimeError,'массив'):
-                    self.native.read_custom_points(100,1)
+                    self.native.read_custom_points(100,1,"PlanarMilling")
                 self.assertEqual(self.stat(0),1)
 
     def test_available_empty_list_is_a_real_empty_tuple(self):
         self.reset(8,0,0)
-        self.assertEqual(self.native.read_custom_points(100,0),())
+        self.assertEqual(self.native.read_custom_points(100,0,"PlanarMilling"),())
         self.assertEqual(self.stat(0),0)
 
     def test_write_uses_record_pointers_and_preserves_order_tags_and_depths(self):
-        points = ((0,(-30.5,2.25,9.0),ZERO),(0xf0000042,(1.,2.,3.),(4.,5.,6.)))
-        self.native.replace_custom_points(0xf0000080,1,points)
+        points = ((0,(-30.5,2.25,9.0),(0.,0.,None)),(0xf0000042,(1.,2.,3.),(4.,5.,None)))
+        self.native.replace_custom_points(0xf0000080,1,points,"PlanarMilling")
         self.assertEqual([self.stat(i) for i in (3,4,5,6)],[1,1,2,1])
         self.assertEqual(self.target(),0xf0000080)
         for index,(tag,point,depths) in enumerate(points):
             value=M._CustomPointData(); self.record(index,ctypes.byref(value))
             self.assertEqual((value.point_tag,tuple(value.point_acs),
-                (value.upper_depth,value.lower_depth,value.depth)),(tag,point,depths))
+                (value.upper_depth,value.lower_depth,value.depth)),(tag,point,depths[:2]+(0.,)))
 
     def test_invalid_write_data_does_not_delete_existing_list(self):
-        for points in ((),((0,(float('nan'),0,0),ZERO),),((-1,ZERO,ZERO),),((0,(1,2),ZERO),)):
+        for points in ((),((0,(float('nan'),0,0),(0.,0.,None)),),((-1,ZERO,(0.,0.,None)),),((0,(1,2),(0.,0.,None)),)):
             with self.subTest(points=points):
-                with self.assertRaises(RuntimeError): self.native.replace_custom_points(100,1,points)
+                with self.assertRaises(RuntimeError): self.native.replace_custom_points(100,1,points,"PlanarMilling")
         self.assertEqual(self.stat(3),0)
 
     def test_both_write_methods_resolve_before_deletion(self):
         bind=self.native.bind
         self.native.bind=lambda name,*a: (_ for _ in ()).throw(RuntimeError('missing append')) if 'append' in name else bind(name,*a)
         with self.assertRaisesRegex(RuntimeError,'missing append'):
-            self.native.replace_custom_points(100,1,((0,ZERO,ZERO),))
+            self.native.replace_custom_points(100,1,((0,ZERO,(0.,0.,None)),),"PlanarMilling")
         self.assertEqual(self.stat(3),0)
 
     def test_delete_or_append_failure_propagates_without_retry(self):
@@ -129,9 +129,77 @@ class CustomPointAbiTests(unittest.TestCase):
             with self.subTest(de=de,ae=ae):
                 self.reset(0,de,ae)
                 with self.assertRaises(M.NativeApiError) as caught:
-                    self.native.replace_custom_points(100,1,((0,ZERO,ZERO),))
+                    self.native.replace_custom_points(100,1,((0,ZERO,(0.,0.,None)),),"PlanarMilling")
                 self.assertEqual(caught.exception.code,de or ae)
                 self.assertEqual([self.stat(i) for i in (3,4)],[1,0 if de else 1])
+
+    def test_cut_region_does_not_interpret_unused_depth_even_if_subnormal_nan_or_infinite(self):
+        for family in ('PlanarMilling','CavityMilling'):
+            for mode in (12,13,14):
+                with self.subTest(family=family,mode=mode):
+                    self.reset(mode,0,0)
+                    points=self.native.read_custom_points(100,1,family)
+                    self.assertEqual(points[0][2],(0.,0.,None))
+                    self.assertEqual(self.stat(0),3)
+                    self.assertEqual(self.stat(2),0)
+
+    def test_predrill_does_not_load_unused_upper_or_lower_depth(self):
+        for family in ('PlanarMilling','CavityMilling'):
+            with self.subTest(family=family):
+                self.reset(15,0,0)
+                self.assertEqual(self.native.read_custom_points(100,0,family)[0][2],(None,None,0.))
+                self.assertEqual(self.stat(0),3)
+
+    def test_same_nonfinite_bytes_in_active_fields_are_fatal_and_freed(self):
+        for kind,mode in ((0,13),(0,14),(1,15)):
+            with self.subTest(kind=kind,mode=mode):
+                self.reset(mode,0,0)
+                with self.assertRaisesRegex(RuntimeError,'координаты/глубины'):
+                    self.native.read_custom_points(100,kind,'PlanarMilling')
+                self.assertEqual(self.stat(0),3)
+                self.assertEqual(self.stat(2),0)
+
+    def test_face_and_surface_have_no_depth_fields_for_documented_channels(self):
+        for family,kind in (('FaceMilling',0),('FaceMilling',1),('SurfaceContour',1)):
+            for mode in (14,15):
+                with self.subTest(family=family,kind=kind,mode=mode):
+                    self.reset(mode,0,0)
+                    self.assertEqual(self.native.read_custom_points(100,kind,family)[0][2],(None,None,None))
+                    self.assertEqual(self.stat(0),3)
+
+    def test_writer_preserves_active_depth_and_initializes_only_unused_request_storage(self):
+        cases=((0,'PlanarMilling',(None,None,6.95090615858665e-310),(0.,0.,6.95090615858665e-310)),
+               (1,'CavityMilling',(1.5,-2.25,None),(1.5,-2.25,0.)),
+               (1,'SurfaceContour',(None,None,None),ZERO))
+        for kind,family,depths,expected in cases:
+            with self.subTest(kind=kind,family=family):
+                self.reset(0,0,0)
+                self.native.replace_custom_points(100,kind,((0,(1.,2.,3.),depths),),family)
+                value=M._CustomPointData(); self.record(0,ctypes.byref(value))
+                self.assertEqual((value.upper_depth,value.lower_depth,value.depth),expected)
+
+    def test_missing_active_value_and_unknown_semantics_cannot_be_written_as_zero(self):
+        cases=((1,'PlanarMilling',(None,0.,None)),(0,'CavityMilling',(None,None,None)),
+               (1,'PlanarMilling',(0.,0.,7.)),(1,'UnknownOperation',(None,None,None)),
+               (0,'SurfaceContour',(None,None,None)))
+        for kind,family,depths in cases:
+            with self.subTest(kind=kind,family=family,depths=depths):
+                with self.assertRaises(RuntimeError):
+                    self.native.replace_custom_points(100,kind,((0,ZERO,depths),),family)
+        self.assertEqual(self.stat(3),0)
+
+    def test_reported_inactive_subnormal_is_admitted_and_not_frozen_as_cam_state(self):
+        self.reset(12,0,0)
+        f=Fixture(self.native.read_custom_points(100,1,'PlanarMilling'))
+        f.trial.native.read_custom_points=lambda tag,kind,family: self.native.read_custom_points(tag,kind,family) if kind==1 else ()
+        baseline=f.capture()
+        self.assertEqual(f.trial.custom_points[(100,1)][0][2],(0.,0.,None))
+        self.assertIn('depth=<не используется>','\n'.join(f.trial.lines))
+        self.assertNotIn('6.95090615858665e-310','\n'.join(f.trial.lines))
+        self.assertEqual(self.stat(2),0)
+        self.reset(14,0,0)  # The same unused slot now contains NaN.
+        self.assertEqual(f.trial.geometry_snapshot(),baseline)
+        f.trial.native.replace_custom_points.assert_not_called()
 
 
 class Point:
@@ -160,10 +228,18 @@ class Fixture:
         items,boundaries=object(),object()
         def channel_read(fn,tag,channel):
             return ('local',tag,[9000] if fn is items and channel==0 else [])
-        def replace(tag,channel,points): self.records[(tag,channel)]=points
+        def read(tag,channel,operation_class):
+            # Fake UF decoder exposes meaningful fields only, as the real
+            # decoder is independently exercised through the C fixture above.
+            active = ((2,) if channel==0 else (0,1)) if operation_class in ('PlanarMilling','CavityMilling') else ()
+            return tuple((point_tag,point,tuple(v if i in active else None for i,v in enumerate(depths)))
+                         for point_tag,point,depths in self.records.get((tag,channel),()))
+        def replace(tag,channel,points,operation_class):
+            self.records[(tag,channel)]=tuple((point_tag,point,tuple(0.0 if v is None else v for v in depths))
+                                            for point_tag,point,depths in points)
         t.native=NS(items=items,boundaries=boundaries,item_entity=object(),
             channel=channel_read,entity=lambda *a,**kw:9000,
-            read_custom_points=Mock(side_effect=lambda tag,channel:self.records.get((tag,channel),())),
+            read_custom_points=Mock(side_effect=read),
             replace_custom_points=Mock(side_effect=replace),update_model=Mock(),smart_parents=lambda tag:None)
 
     def capture(self): return self.trial.geometry_snapshot(collect=True)
@@ -235,14 +311,37 @@ class CustomPointTransferTests(unittest.TestCase):
     def test_nonzero_depths_stop_with_values_before_any_write(self):
         for depths in ((1.,0.,0.),(0.,-20.,0.),(0.,0.,2.)):
             with self.subTest(depths=depths):
-                f=Fixture(((0,(2.,3.,4.),depths),))
+                f=Fixture(((0,(2.,3.,4.),depths),),channel=0 if depths[2] else 1)
                 with self.assertRaisesRegex(RuntimeError,'ненулевые глубины'): f.capture()
-                self.assertIn(str(depths),'\n'.join(f.trial.lines))
+                self.assertIn('depth=', '\n'.join(f.trial.lines))
                 f.trial.native.replace_custom_points.assert_not_called()
+
+    def test_tiny_but_active_depths_are_not_rounded_or_treated_as_unused(self):
+        tiny=6.95090615858665e-310
+        for channel,depths in ((1,(tiny,0.,99.)),(1,(0.,tiny,99.)),(0,(99.,99.,tiny))):
+            with self.subTest(channel=channel,depths=depths):
+                f=Fixture(((0,(2.,3.,4.),depths),),channel=channel)
+                with self.assertRaisesRegex(RuntimeError,'ненулевые глубины'): f.capture()
+                self.assertIn(str(tiny),'\n'.join(f.trial.lines))
+                f.trial.native.replace_custom_points.assert_not_called()
+
+    def test_unused_depth_changes_do_not_block_transfer_of_verified_point_data(self):
+        f=Fixture(((0,(60.,-25.,16.),(0.,0.,float('nan'))),)); baseline=f.capture()
+        f.records[(100,1)]=((0,(60.,-25.,16.),(0.,0.,123.)),)
+        f.trial.transfer_custom_points(baseline)
+        self.assertEqual(f.records[(100,1)][0][1],(-218.,-25.,16.))
+        self.assertEqual(f.trial.current_custom_points[(100,1)][0][2],(0.,0.,None))
+
+    def test_missing_active_depth_is_not_confused_with_unused_storage(self):
+        f=Fixture(((0,(2.,3.,4.),(None,0.,99.)),))
+        with self.assertRaisesRegex(RuntimeError,'Не прочитано используемое поле.*upper_depth'): f.capture()
+        f.trial.native.replace_custom_points.assert_not_called()
 
     def test_nonempty_unverified_operation_family_is_not_silently_admitted(self):
         f=Fixture(kind='HoleDrilling')
         with self.assertRaisesRegex(RuntimeError,'класса операции не подтверждён'): f.capture()
+        self.assertIn('<не проверено>','\n'.join(f.trial.lines))
+        self.assertNotIn('<не используется>','\n'.join(f.trial.lines))
 
     def test_tagged_non_point_external_or_occurrence_reference_is_rejected(self):
         for reason in ('type','external','occurrence','coordinates'):
@@ -256,7 +355,7 @@ class CustomPointTransferTests(unittest.TestCase):
 
     def test_unavailable_channel_is_distinct_from_available_empty(self):
         f=Fixture(points=())
-        def read(tag,kind):
+        def read(tag,kind,operation_class):
             if kind==1: raise M.NativeApiError(1345005,'UF_CAMGEOM_ask_custom_points','unavailable')
             return ()
         f.trial.native.read_custom_points.side_effect=read
@@ -272,7 +371,7 @@ class CustomPointTransferTests(unittest.TestCase):
         self.assertIs(caught.exception,error)
 
     def test_changed_count_tags_or_depths_are_rejected_before_replacement(self):
-        for points in ((),((999,(60.,-25.,16.),ZERO),),((0,(60.,-25.,16.),(0.,0.,1.)),)):
+        for points in ((),((999,(60.,-25.,16.),ZERO),),((0,(60.,-25.,16.),(1.,0.,0.)),)):
             with self.subTest(points=points):
                 f=Fixture(); baseline=f.capture(); f.records[(100,1)]=points
                 with self.assertRaisesRegex(RuntimeError,'определения пользовательских точек'):
@@ -287,7 +386,7 @@ class CustomPointTransferTests(unittest.TestCase):
 
     def test_reordered_numeric_entries_are_detected_after_write(self):
         f=Fixture(((0,(2.,3.,4.),ZERO),(0,(7.,8.,9.),ZERO))); baseline=f.capture()
-        f.trial.native.replace_custom_points.side_effect=lambda tag,kind,points:f.records.update({(tag,kind):points[::-1]})
+        f.trial.native.replace_custom_points.side_effect=lambda tag,kind,points,operation_class:f.records.update({(tag,kind):points[::-1]})
         with self.assertRaisesRegex(RuntimeError,'не подтверждены отражение'):
             f.trial.transfer_custom_points(baseline)
 

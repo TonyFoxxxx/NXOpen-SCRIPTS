@@ -1,4 +1,4 @@
-# CAM operation coverage audit — V1.21
+# CAM operation coverage audit — V1.22
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
@@ -6,7 +6,7 @@ Audit date: **2026-11-15**. Baseline: published V1.18, commit `b7c881ce685020697
 
 ## What the catalog means
 
-The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.21 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
+The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.22 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
 
 | Level | Actual status |
 | --- | --- |
@@ -55,7 +55,7 @@ The catalog additionally recognizes `EdgeChamferBuilder`, `FacingBuilder`, `Faci
 | Cavity / Planar / Face / Z-level / Plunge and related | Editor opening, accessible geometry, boundaries, MCS/RCS; both custom-point channels for newly admitted families | Manual cut levels/planes, numerical directions and points, engage/retract and transfer moves; meaning of settings after reflection |
 | Surface Contour, multi-axis, Swarf, Rotary, Deburring | The same common processing and accessible Drive/Wall/Check references | Complete tool-axis definitions, orientation/tilt, drive geometry outside the read channels, local directions and moves |
 | HoleMaking / HoleDrilling / Thread / Cylinder / FeatureMilling / GenericFeature | Common references and editors; full hole/FBM definitions explicitly remain unverified, including generic dispatch without `GetFeatureGeometry` | Feature/hole membership and order, axes and depths, local CSYS, control points, attributes and machining-feature data |
-| All 31 Builders | Read accessible custom points; transfer is limited to four classes and cases described in the [guide](mirror-project.md#custom-cam-points). Code 1345005 still marks an unverified channel | Nonzero depths and other point definitions remain unsupported. Other numerical spatial settings are not reflected; the local 3D-parameter inventory is incomplete |
+| All 31 Builders | Read accessible custom points; transfer is limited to four classes and cases described in the [guide](mirror-project.md#custom-cam-points). Code 1345005 still marks an unverified channel | Nonzero active depths and other unverified point definitions remain unsupported; unused fields are excluded from validation. Other numerical spatial settings are not reflected; the local 3D-parameter inventory is incomplete |
 
 Existing custom-point query exceptions remain: `SurfaceContour` queries channel 1, `TpMultiAxisDeburring` makes no such UF query, and other operations query channels 0 and 1. These are coverage limits, not proof that those two classes contain no other points; channel applicability requires the 2606 SDK.
 
@@ -71,6 +71,8 @@ Existing custom-point query exceptions remain: `SurfaceContour` queries channel 
 8. For V1.20's general model-history admission: Python `NXOpen.Features.BodyFeature`, concrete classes from `Body.GetFeatures()`, `BodyFeature.GetBodies()`, `Feature.GetParents()`, `GetExpressions()`, `GetFeatureErrorMessages()`, `Expression.GetUsingFeatures()` and `GetReferencingExpressions()`. Verify completeness for boolean, multi-body, suppressed and user-defined features and history preservation/replacement by `UF_MODL_transform_entities`. [Rules and limits](mirror-project.md#model-feature-handling).
 9. For V1.21 points: `UF_CAMGEOM_custom_point_s`, pointer-array layout and individual-record cleanup, `UF_CAMGEOM_ask_custom_points`, `UF_CAMGEOM_delete_custom_points`, `UF_CAMGEOM_append_custom_points`; units/reference frames and zero/nonzero meanings of `upper_depth`, `lower_depth`, `depth`, retained associativity and order after replacement. In particular, verify Planar/Cavity cases where reflection changes ABS Z.
 
+V1.22 distinguishes active, unused and unverified fields. The [applicability table](mirror-project.md#custom-cam-points) follows the older UF header and still needs SDK 2606 verification. An active-data read error is not an absent value; active nonzero depths are not rounded.
+
 SDK verification cannot replace an NX run. Each new family needs a test PRT with nonempty family-specific settings, selection/axis inspection, manual save and reopen of the copy, then normal toolpath regeneration and inspection. The source must remain unchanged; the journal neither saves automatically nor creates extra files.
 
 ## Sources and verification limits
@@ -82,4 +84,4 @@ SDK verification cannot replace an NX run. Each new family needs a test PRT with
 - [Siemens SurfaceContourBuilder, older reference reproduced by ugapi](https://www.ugapi.com/doc/nxopen/a02024.html) and [deprecated API list](https://www.ugapi.com/doc/NXOpen/a10908.html) provide further reason not to transfer old signatures mechanically to 2606.
 - The [official Siemens NX documentation portal](https://docs.sw.siemens.com/en-US/product/209349590) could not be read with the available lookup tool. No SDK 2606 sources were available for exact comparison.
 
-V1.21: **275 regression checks outside NX**, including 43 using test C libraries. Add 31 custom-point, memory-ownership, selection/order, protection-failure and rollback scenarios. Coverage remains 21 dispatch routes / 31 Builders. The user's V1.20 report confirms only initial reads of 35 editors before stopping on a point; reflection had not run. The test libraries are not Siemens libraries and do not establish NX compatibility.
+V1.22: **285 regression checks outside NX**, including 50 using test C libraries. Add 10 active/unused-field, NaN/Infinity, tiny-nonzero-value, read/write and protection-failure scenarios. Coverage remains 21 dispatch routes / 31 Builders. The V1.21 report exposed a false stop before reflection; a complete result on the user's PRT remains unconfirmed. The test libraries are not Siemens libraries.

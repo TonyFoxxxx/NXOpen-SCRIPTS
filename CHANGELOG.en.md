@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Mirrored CAM project trial V1.22
+
+Fix V1.21's false stop: a Cut Region Start point had zero upper_depth/lower_depth, but validation also considered its unused depth field containing a value around 1e-310. This is not a rounding fix: determine field applicability from operation class and channel according to the available uf_camgeom.h contract. Planar/Cavity uses upper_depth/lower_depth for Cut Region Start and depth for Predrill Engage. Face and valid Surface Contour points use no depth fields.
+
+Do not load unused fields as numbers or include them in settings snapshots; mark them in the report. Unknown applicability remains separately unverified and does not authorize transfer. Writes initialize a new C structure and assign only applicable fields. Active nonzero values, even around 1e-310, still stop the trial; missing or NaN/Infinity active values are errors too. Retain the Planar/Cavity plane restriction, coordinate/reference/order checks, MCS, model history, stock, source integrity and rollback.
+
+All 285 focused checks outside NX passed, including 50 using test C libraries; add 10 field-applicability/protection scenarios. A complete V1.22 run, SDK 2606 compatibility, save/reopen and toolpath regeneration remain unverified. The V1.21 report stopped before reflection.
+
 ## 2026-11-15 — Mirrored CAM project trial V1.21
 
 V1.20 completed initial reads of 35 operation editors, including CavityMilling, then stopped before reflection on a PlanarMilling Cut Region Start point. V1.21 reads full UF records instead of only their count: tag, ABS coordinates, upper_depth, lower_depth and depth. Referenced Points retain their selection and follow the geometry transfer; shared points transform once. Reflect numerical points by replacing the same channel's list with order and references preserved. Do not reflect coordinates twice when NX has already moved them; unexpected motion, lost references, changed depths or late movement stop the trial.
