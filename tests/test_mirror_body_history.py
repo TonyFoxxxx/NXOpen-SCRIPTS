@@ -14,6 +14,7 @@ class Feature:
     def __init__(self, tag, kind, name='', parents=(), bodies=()):
         self.Tag, self.FeatureType, self.Name = tag,kind,name
         self.parents, self.bodies, self.expressions = list(parents),list(bodies),[]
+        self.warnings = []
         self.OwningPart = None
 
     def GetParents(self):
@@ -24,6 +25,9 @@ class Feature:
 
     def GetFeatureErrorMessages(self):
         return []
+
+    def GetFeatureWarningMessages(self):
+        return self.warnings[:]
 
 
 class BodyFeature(Feature):
@@ -126,6 +130,7 @@ class Fixture:
         t.frames, t.refs, t.bounds, t.operations = {},{},{},[]
         t.nx.Curve, t.nx.Point = type('Curve',(),{}),type('Point',(),{})
         t.native = NS(reflection_matrix=lambda plane:[0]*16,transform_entities=Mock(side_effect=self.convert),update_model=Mock())
+        t.native.sketch_of_geometry = Mock(return_value=0)
         t.plane = M.MirrorPlane([0,0,0],[1,0,0])
         t.transfer_mcs, t.update_stock = Mock(return_value={}),Mock()
         t.mcs_stock_order = Mock(return_value=[])

@@ -1284,6 +1284,8 @@ class HistoryTests(unittest.TestCase):
                 return list(self.expressions)
             def GetFeatureErrorMessages(self):
                 return list(self.errors)
+            def GetFeatureWarningMessages(self):
+                return []
         body = Feature(10,'Part','BREP')
         stock = Feature(20,'Part Box','TOOLING BOX',[body],[Expression(100,'stock_offset','2.5')])
         group = Feature(90,'CAM_WORKPIECE','FSET',[body,stock])
@@ -1449,6 +1451,7 @@ class HistoryTests(unittest.TestCase):
         trial.geometry_snapshot = lambda **kw:{}
         trial.capture_parameters, trial.capture_topology = Mock(),Mock(return_value={})
         trial.capture_body_history = Mock()
+        trial.body_history = {}
         trial.stabilize_three_planes_after_update = Mock()
         trial.operation_snapshot = lambda:[]
         trial.frames, trial.refs, trial.bounds = {},{},{}
@@ -1483,6 +1486,7 @@ class StockTests(unittest.TestCase):
         trial.geometry_snapshot = lambda **kw:{}
         trial.capture_parameters, trial.capture_topology = Mock(), Mock(return_value={})
         trial.capture_body_history = Mock()
+        trial.body_history = {}
         trial.operation_snapshot = lambda:[]
         trial.frames, trial.refs, trial.bounds, trial.lines = {}, {}, {}, []
         trial.bodies = [NS(Tag=1),NS(Tag=2)]

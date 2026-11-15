@@ -357,14 +357,17 @@ class PlaneDirectionTests(unittest.TestCase):
                 body = NS(Tag=1000,GetFaces=lambda:w.faces,GetEdges=lambda:[w.edge])
                 topology = {1000:(tuple(f.Tag for f in w.faces),(w.edge.Tag,))}
                 t.bodies, t.part.Bodies = [body],[body]
+                t.nx.Curve = type('Curve', (), {})
                 t.bounds, t.protected_bodies, t.operations = {},set(),[]
                 t.check_cam_builders = Mock()
                 t.capture_stock, t.capture_parameters, t.capture_body_history = Mock(),Mock(),Mock()
                 t.checkpoint_model_history, t.verify_model_history = Mock(),Mock()
+                t.verify_retained_model_history, t.verify_model_warnings = Mock(),Mock()
                 t.capture_topology = Mock(return_value=topology)
                 t.operation_snapshot = Mock(return_value=[])
                 t.geometry_snapshot = Mock(return_value={})
                 t.native.reflection_matrix = Mock(return_value=[0]*16)
+                t.native.sketch_of_geometry = Mock(return_value=0)
                 t.native.transform_entities = Mock(side_effect=lambda *args:w.reflect(t))
                 t.setup = NS(DeleteToolPath=Mock())
                 t.custom_points, t.boundary_planes = {},{}

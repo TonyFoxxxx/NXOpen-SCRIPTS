@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.24
-SCRIPT_VERSION = "V1.24"
+# SCRIPT_VERSION: V1.25
+SCRIPT_VERSION = "V1.25"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -11,6 +11,7 @@ _old_bytecode = sys.dont_write_bytecode
 try:
     sys.dont_write_bytecode = True
     import ctypes
+    from collections import Counter
     from ctypes import wintypes as W
     import hashlib
     import math
@@ -287,6 +288,20 @@ def model_history_changes(before, after):
     return differences
 
 
+def model_warning_changes(before, after):
+    """Warning order is unspecified by NX; preserve message multiplicity.
+    Missing features differ from unreadable warning data on an existing one.
+    """
+    differences = []
+    for tag in sorted(set(before) | set(after)):
+        old = Counter(before[tag]["warnings"]) if tag in before else Counter()
+        new = Counter(after[tag]["warnings"]) if tag in after else Counter()
+        added, removed = new - old, old - new
+        if added or removed:
+            differences.append((tag, tuple(sorted(added.elements())), tuple(sorted(removed.elements()))))
+    return differences
+
+
 def reflect(values, axis, offset=0.0):
     result = [float(x) for x in values]
     result[axis] = 2.0 * offset - result[axis]
@@ -554,6 +569,7 @@ class NativeCam:
         self.so_test = self.bind("UF_SO_is_so", (u, ctypes.POINTER(ctypes.c_ubyte)))
         self.so_parents = self.bind("UF_SO_ask_parents", (u, i, ip, pp))
         self.so_error = self.bind("UF_SO_ask_update_error_code", (u, ip))
+        self.sketch_owner = self.bind("UF_SKET_ask_sketch_of_geom", (u, ctypes.POINTER(u)))
         dp = ctypes.POINTER(ctypes.c_double)
         self.xform_point = self.bind("UF_SO_set_point_of_xform", (u, dp))
         self.xform_axes = self.bind("UF_SO_set_xy_direction_of_xform", (u, dp, dp))
@@ -596,7 +612,9 @@ class NativeCam:
         return MirrorPlane(point, normal)
 
     def smart_parents(self, tag):
-        """None means non-parametric; () is a parameterized object with no parents."""
+        """None means not a UF smart object, not necessarily free geometry.
+        Sketch membership is independent and must be queried separately.
+        """
         smart = ctypes.c_ubyte(255)
         self.check(self.so_test(int(tag), ctypes.byref(smart)), "UF_SO_is_so")
         if smart.value not in (0, 1):
@@ -622,6 +640,16 @@ class NativeCam:
         finally:
             if data.value:
                 self.free(data)
+
+    def sketch_of_geometry(self, tag):
+        tag = int(tag)
+        if not 0 < tag <= 0xffffffff:
+            raise ValueError("Некорректный tag геометрии для проверки эскиза")
+        sketch = ctypes.c_uint32()
+        self.check(self.sketch_owner(tag, ctypes.byref(sketch)), "UF_SKET_ask_sketch_of_geom")
+        # A successful query with NULL_TAG is the documented 'no sketch'.
+        # An absent function or any NX error must not become that answer.
+        return int(sketch.value)
 
     def bounding_box_exact(self, tag, csys):
         corner, distances = (ctypes.c_double * 3)(), (ctypes.c_double * 3)()
@@ -944,6 +972,7 @@ class Trial:
         self.cam_builder_state, self.cam_builder_labels = None, {}
         self.history_baseline, self.history_previous = None, None
         self.body_history, self.body_conversions = {}, []
+        self.sketch_geometry = {}
         self.boundary_planes, self.current_boundaries = {}, {}
         self.geometry_labels, self.current_geometry_labels = {}, {}
         self.custom_points, self.current_custom_points, self.custom_point_labels = {}, {}, {}
@@ -1521,6 +1550,14 @@ class Trial:
             if errors:
                 raise RuntimeError("Ошибка модельного элемента " + history_feature_label(tag, record) +
                                    " после этапа «" + context + "»: " + "; ".join(str(e) for e in errors))
+            self.stage = ("Чтение предупреждений / " + context + " / " + history_feature_label(tag, record) +
+                          " / GetFeatureWarningMessages")
+            warnings = feature.GetFeatureWarningMessages()
+            if not isinstance(warnings, (tuple, list)) or any(not isinstance(w, str) for w in warnings):
+                raise RuntimeError("GetFeatureWarningMessages не вернул прочитанный список сообщений: " +
+                                   history_feature_label(tag, record))
+            record["warnings"] = tuple(warnings)
+            self.stage = "Чтение истории модели / " + context + " / " + history_feature_label(tag, record)
             record["parents"] = {int(p.Tag): str(p.Name) + " [" + str(p.FeatureType) + "]"
                                  for p in feature.GetParents()}
             expressions = {}
@@ -1545,7 +1582,8 @@ class Trial:
 
     def checkpoint_model_history(self, context, check_errors=False):
         current = self.model_history(context, check_errors)
-        if self.history_baseline is None:
+        initial = self.history_baseline is None
+        if initial:
             self.history_baseline = current
         else:
             changes = model_history_changes(self.history_previous, current)
@@ -1553,11 +1591,54 @@ class Trial:
                 self.lines.append("\nИзменения истории зафиксированы после этапа: " + context)
                 for _, details in changes:
                     self.lines.extend(details)
+        warnings = model_warning_changes({} if initial else self.history_previous, current)
+        if warnings:
+            self.lines.append("\n" + ("Исходные предупреждения модели: " if initial else
+                              "Изменения предупреждений модели после этапа: ") + context)
+            for tag, added, removed in warnings:
+                record = current.get(tag, (self.history_previous or {}).get(tag))
+                self.lines.append(history_feature_label(tag, record))
+                self.lines.extend("  " + ("Исходное: " if initial else "Появилось: ") + w for w in added)
+                self.lines.extend("  Больше не сообщается: " + w for w in removed)
         self.history_previous = current
         self.stage = "История модели: " + context
         return current
 
+    def verify_model_warnings(self, context):
+        changes = [(tag, added) for tag, added, _ in
+                   model_warning_changes(self.history_baseline, self.history_previous) if added]
+        if not changes:
+            return
+        first = changes[0][0]
+        self.stage = "Проверка предупреждений / " + context + " / " + history_feature_label(first, self.history_previous[first])
+        lines = ["Появились новые предупреждения NX относительно исходного состояния; этап: " + context]
+        for tag, warnings in changes:
+            lines.append(history_feature_label(tag, self.history_previous[tag]))
+            lines.extend("  " + w for w in warnings)
+        lines.append("Исходные предупреждения учитываются отдельно. Новые предупреждения не разрешают продолжение теста.")
+        raise RuntimeError("\n".join(lines))
+
+    def verify_retained_model_history(self):
+        # Only the existing one-body BodyFeature candidates may lose history.
+        # Stock is checked after its scheduled update. No following MCS/stock
+        # step restores arbitrary sketch/datum/custom-feature definitions.
+        candidates = {tag for body_tag, saved in self.body_history.items()
+                      for tag, owners in saved["owners"].items() if owners == (body_tag,)}
+        retained = set(self.history_baseline) - candidates - set(self.stock_features)
+        changes = [(tag, lines) for tag, lines in model_history_changes(self.history_baseline, self.history_previous)
+                   if tag in retained]
+        if not changes:
+            return
+        first = changes[0][0]
+        self.stage = "Проверка сохраняемой истории сразу после отражения / " + history_feature_label(first, self.history_baseline[first])
+        lines = ["Отражение изменило сохраняемые модельные элементы; элементов: " + str(len(changes))]
+        for _, details in changes:
+            lines.extend(details)
+        lines.append("Изменения выходят за разрешённый переход истории тела в BREP. Перенос MCS/заготовок и удаление траекторий не начинались.")
+        raise RuntimeError("\n".join(lines))
+
     def verify_model_history(self):
+        self.verify_model_warnings("итоговая проверка истории")
         changes = model_history_changes(self.history_baseline, self.history_previous)
         if not changes:
             return
@@ -2024,6 +2105,13 @@ class Trial:
                 if collect:
                     for tag in tags:
                         self.reference(tag)
+                    for number, member_tags in enumerate(boundaries, 1):
+                        fields = result[(int(node.Tag), kind, "boundary", number)]
+                        self.lines.append("Исходная CAM-граница: " + context + " / " + str(number) +
+                            "; " + "; ".join(name + "=" + str(value) for name, value in zip(BOUNDARY_SNAPSHOT_FIELDS, fields)))
+                        for position, tag in enumerate(member_tags, 1):
+                            self.lines.append("  Элемент " + str(position) + ": tag=" + str(tag) +
+                                              "; класс NXOpen=" + type(self.refs[tag]).__name__)
             if isinstance(node, self.nx.CAM.Operation):
                 # Query both channels for newly accepted families; an unsupported
                 # UF channel is recorded as unverified, never assumed empty.
@@ -2440,6 +2528,46 @@ class Trial:
         finally:
             set_wcs_values(wcs, self.nx, origin, axes)
 
+    def select_transform_targets(self):
+        targets = {int(body.Tag): body for body in self.bodies if int(body.Tag) not in self.protected_bodies}
+        transformable = tuple(getattr(self.nx, name) for name in
+            ("Curve", "Point", "Plane", "DatumPlane") if hasattr(self.nx, name))
+        edge_class = getattr(self.nx, "Edge", None)
+        self.sketch_geometry = {}
+        for tag, obj in list(self.refs.items()):
+            # An edge moves with its body; it is never a separate curve target.
+            if edge_class is not None and isinstance(obj, edge_class):
+                continue
+            if not isinstance(obj, transformable):
+                continue
+            self.stage = "Выбор объектов отражения: " + type(obj).__name__ + " " + str(tag)
+            if isinstance(obj, (self.nx.Curve, self.nx.Point)):
+                self.stage += " / UF_SKET_ask_sketch_of_geom"
+                sketch = self.native.sketch_of_geometry(tag)
+                if sketch:
+                    self.sketch_geometry[tag] = sketch
+                    self.bounds[tag] = self.bounding_box(tag)
+                    self.lines.append("Геометрия эскиза: tag=" + str(tag) + "; класс=" + type(obj).__name__ +
+                        "; эскиз=" + str(sketch) + ". Ожидается обновление через модель; отдельно не преобразуется. " +
+                        "Итоговые положение, принадлежность эскизу и CAM-ссылки подлежат проверке.")
+                    continue
+            # Smart objects follow their defining geometry. Transforming a
+            # smart plane explicitly would also transform its parent stock.
+            if self.native.smart_parents(tag) is not None:
+                continue
+            targets[tag] = obj
+            if isinstance(obj, (self.nx.Curve, self.nx.Point)):
+                self.bounds[tag] = self.bounding_box(tag)
+        return targets
+
+    def verify_sketch_geometry(self):
+        for tag, expected in self.sketch_geometry.items():
+            self.stage = "Проверка принадлежности геометрии эскизу: " + str(tag)
+            actual = self.native.sketch_of_geometry(tag)
+            if actual != expected:
+                raise RuntimeError("Изменилась принадлежность геометрии эскизу: " + str(tag) +
+                    "; исходный эскиз " + str(expected) + "; после " + str(actual))
+
     def run_in_absolute_wcs(self):
         self.lines.append("Режим: геометрия и CAM. В копии допускается замена истории модельных тел на BREP; заготовки и MCS защищены отдельно.")
         self.lines.append("Правило MCS/RCS: Y и Z следуют отражению без дополнительного разворота; X = Y × Z для правой системы координат.")
@@ -2458,27 +2586,18 @@ class Trial:
         self.capture_body_history(topology)
         transfer_order = self.mcs_stock_order(topology)
         operations = self.operation_snapshot()
-        targets = {int(body.Tag): body for body in self.bodies if int(body.Tag) not in self.protected_bodies}
-        transformable = tuple(getattr(self.nx, name) for name in
-            ("Curve", "Point", "Plane", "DatumPlane") if hasattr(self.nx, name))
-        for tag, obj in list(self.refs.items()):
-            if isinstance(obj, transformable):
-                # Smart objects follow their defining geometry. Transforming a
-                # smart plane explicitly would also transform its parent stock.
-                if self.native.smart_parents(tag) is not None:
-                    continue
-                targets[tag] = obj
-                if isinstance(obj, (self.nx.Curve, self.nx.Point)):
-                    self.bounds[tag] = self.bounding_box(tag)
+        targets = self.select_transform_targets()
         self.lines.append("Тела: " + str(len(self.bodies)) + "; операции: " + str(len(self.operations)))
         self.lines.append("Проверяемые тела/грани/рёбра/кривые/точки: " + str(len(self.bounds)))
         self.lines.append("MCS/RCS, включая корневую систему: " + str(len(self.frames)))
         self.checkpoint_model_history("Подготовка геометрии, MCS и заготовок до отражения")
+        self.verify_model_warnings("подготовка до отражения")
         self.stage = "Создание матрицы отражения"
         matrix = self.native.reflection_matrix(self.plane)
         self.stage = "Отражение геометрии и её модельных родителей"
         self.native.transform_entities(list(targets), matrix)
         self.checkpoint_model_history("Отражение геометрии и её модельных родителей")
+        self.verify_retained_model_history()
         self.stage = "Обновление заготовок и MCS по зависимостям"
         replacement = self.transfer_mcs_and_stock(transfer_order)
         self.stage = "Удаление рассчитанных траекторий в копии"
@@ -2489,6 +2608,7 @@ class Trial:
         for tag in self.mcs_plane_directions:
             self.verify_plane_direction_csys(tag)
         self.checkpoint_model_history("Удаление траекторий и обновление модели")
+        self.verify_model_warnings("удаление траекторий и обновление модели")
         self.transfer_custom_points(geometry)
         self.checkpoint_model_history("Перенос пользовательских точек")
         self.stage = "Перенос заданных плоскостей границ"
@@ -2522,6 +2642,7 @@ class Trial:
         self.stage = "Проверка плоскостей границ"
         self.verify_boundary_planes()
         self.verify_mcs(replacement)
+        self.verify_sketch_geometry()
         self.stage = "Удаление временной системы проверки"
         self.uf.Obj.DeleteObject(self.box_csys)
         self.box_csys = None

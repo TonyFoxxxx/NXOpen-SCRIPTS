@@ -48,6 +48,7 @@ class BoundaryAbiTests(unittest.TestCase):
         self.native.so_test = self.native.bind('UF_SO_is_so', (u,ctypes.POINTER(ctypes.c_ubyte)))
         self.native.so_parents = self.native.bind('UF_SO_ask_parents', (u,i,ip,pp))
         self.native.so_error = self.native.bind('UF_SO_ask_update_error_code', (u,ip))
+        self.native.sketch_owner = self.native.bind('UF_SKET_ask_sketch_of_geom', (u,ctypes.POINTER(u)))
         dp = ctypes.POINTER(ctypes.c_double)
         self.native.xform_point = self.native.bind('UF_SO_set_point_of_xform', (u,dp))
         self.native.xform_axes = self.native.bind('UF_SO_set_xy_direction_of_xform', (u,dp,dp))
@@ -138,6 +139,21 @@ class BoundaryAbiTests(unittest.TestCase):
         trial.uf = types.SimpleNamespace(Cambnd=types.SimpleNamespace(
             AskBoundaryData=Mock(side_effect=AssertionError('Never mix native handles with the Python wrapper'))))
         return trial
+
+    def test_sketch_membership_preserves_unsigned_tags_through_c(self):
+        self.assertEqual(self.native.sketch_of_geometry(0xf0000001), 0xf0000002)
+        self.assertEqual(self.native.sketch_of_geometry(0xf0000003), 0)
+
+    def test_sketch_membership_error_is_not_no_sketch(self):
+        with self.assertRaises(M.NativeApiError) as caught:
+            self.native.sketch_of_geometry(999)
+        self.assertEqual(caught.exception.code, 90017)
+        self.assertEqual(caught.exception.context, 'UF_SKET_ask_sketch_of_geom')
+
+    def test_invalid_sketch_query_tag_is_rejected_before_c(self):
+        for tag in (0, -1, 0x100000000):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                self.native.sketch_of_geometry(tag)
 
     def test_cavity_geometry_checks_both_custom_point_kinds(self):
         trial = self.trial()

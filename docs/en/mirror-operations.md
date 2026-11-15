@@ -1,4 +1,4 @@
-# CAM operation coverage audit — V1.24
+# CAM operation coverage audit — V1.25
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
@@ -6,7 +6,7 @@ Audit date: **2026-11-15**. Baseline: published V1.18, commit `b7c881ce685020697
 
 ## What the catalog means
 
-The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.24 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
+The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.25 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
 
 | Level | Actual status |
 | --- | --- |
@@ -59,7 +59,7 @@ The catalog additionally recognizes `EdgeChamferBuilder`, `FacingBuilder`, `Faci
 
 Existing custom-point query exceptions remain: `SurfaceContour` queries channel 1, `TpMultiAxisDeburring` makes no such UF query, and other operations query channels 0 and 1. These are coverage limits, not proof that those two classes contain no other points; channel applicability requires the 2606 SDK.
 
-V1.24 adds [CAM-snapshot differences](mirror-project.md#cam-difference-diagnostics) while retaining all existing stop conditions. The V1.23 report did not record which channel changed; the last-read operation name is not an established cause. This release adds no operation families or settings transformations.
+V1.25 corrects sketch-curve target selection and adds retained-history/warning guards after the V1.24 report lost sketch-defined Part boundaries in four PlanarMilling operations. Model-edge selections retain body-topology and CAM checks. [Behavior and limits](mirror-project.md#sketch-curves-and-nx-warnings). No additional operation families or complete settings adapters are introduced.
 
 ## Items to verify against SDK DC 2606
 
@@ -75,11 +75,15 @@ V1.24 adds [CAM-snapshot differences](mirror-project.md#cam-difference-diagnosti
 
 10. For V1.23 CSYS: `XformCollection.CreateXformByPlaneXDirPoint` and `CreateXformByPlaneYDirPoint` — Python signatures, acceptance of a `Plane` object, point-projection and X/Y/Z flag semantics, direct parents (Plane/Direction/Point and numerical Scalar). `Direction.Vector`, `Point.Coordinates`, `Scalar.Value`, `Xform.Scale/Origin/Orientation`, `Plane.Method/GetGeometry()`, `CoordinateSystems.CreateCoordinateSystem`, `SmartObject.Evaluate/ReplaceParameters`, `UF_SO_ask_parents`: evaluation order, retained selected faces/edges and installed CSYS, old Xform lifetime. Verify after update, manual save and reopen. This is an older published contract, not a verified SDK 2606 contract. In the user’s V1.23 report, the X variant with a Plane object passed the implemented checks for one CSYS after update; this does not confirm the Y variant, other definitions or the full SDK contract.
 
+11. For V1.25: `UF_SKET_ask_sketch_of_geom(tag_t, tag_t*)`, its NULL_TAG/error semantics and coverage of sketch curves/points, including extracted/referenced geometry; `Feature.GetFeatureWarningMessages()` Python return type, timing and completeness of NX update warnings. Verify `UF_MODL_transform_entities` plus model update with sketch members excluded from the input array, retained curve/edge tags, sketch dependencies/constraints and CAM boundaries. `UF_SO_is_so` is not proof of no sketch owner. Check the reported `UF_CAM_boundary_type_t` value 2 and boundary application/member data before implementing any restoration; six integer fields do not constitute a complete boundary definition.
+
 V1.22 distinguishes active, unused and unverified fields. The [applicability table](mirror-project.md#custom-cam-points) follows the older UF header and still needs SDK 2606 verification. An active-data read error is not an absent value; active nonzero depths are not rounded.
 
 SDK verification cannot replace an NX run. Each new family needs a test PRT with nonempty family-specific settings, selection/axis inspection, manual save and reopen of the copy, then normal toolpath regeneration and inspection. The source must remain unchanged; the journal neither saves automatically nor creates extra files.
 
 ## Sources and verification limits
+
+- [Older Siemens uf_sket.h contract](https://www.ugapi.com/doc/UFun/uf_sket/global.html) — sketch membership; [Feature warning messages](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a56513.html) — message order is unspecified; [UF transform contract](https://www.ugapi.com/doc/ufun/uf_trns/global.html) — transforms inputs and their parents. Available search excerpts were reviewed; these are not SDK 2606 sources.
 
 - [Siemens NXOpen XformCollection, NX 2022.1 reference mirror](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.XformCollection.html) — Plane/X(Y)Dir/Point factories; [Direction.Vector](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Direction.html). V1.23 API sources, not 2606 documentation.
 
@@ -90,4 +94,4 @@ SDK verification cannot replace an NX run. Each new family needs a test PRT with
 - [Siemens SurfaceContourBuilder, older reference reproduced by ugapi](https://www.ugapi.com/doc/nxopen/a02024.html) and [deprecated API list](https://www.ugapi.com/doc/NXOpen/a10908.html) provide further reason not to transfer old signatures mechanically to 2606.
 - The [official Siemens NX documentation portal](https://docs.sw.siemens.com/en-US/product/209349590) could not be read with the available lookup tool. No SDK 2606 sources were available for exact comparison.
 
-V1.24: **328 regression checks outside NX**, including 50 using test C libraries. Add 21 diagnostic scenarios for exact CAM comparisons. Coverage remains 21 dispatch routes / 31 Builders. V1.23 passed the earlier MCS stop but failed on a CAM-snapshot mismatch; its cause requires a new detailed report. Changes to protected history receive no authorization. A complete result on the user PRT remains unconfirmed. The test libraries are not Siemens libraries.
+V1.25: **368 regression checks outside NX**, including 53 using test C libraries; 40 new scenarios. Coverage remains 21 dispatch routes / 31 Builders. The user identified the V1.24 boundary members as sketch curves. This release does not certify repaired sketch dependencies, a complete mirrored PRT or SDK 2606 compatibility. The test libraries are not Siemens libraries.

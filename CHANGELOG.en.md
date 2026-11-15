@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Mirrored CAM project trial V1.25
+
+Fix reflection target selection: query curve/point sketch membership independently of UF Smart Object status. Exclude sketch geometry from separate transformation, then verify its reflected bounds, original sketch membership and CAM references. Edges move with their bodies. Add an early stop for damaged retained history and checks for new NX warnings. All 368 focused checks outside NX passed, including 53 using test C libraries and 40 new scenarios. The fix remains unverified on the user PRT; safe transfer of every dependent sketch is not claimed.
+
+The V1.24 report showed lost Part boundaries in four PlanarMilling operations. The user confirmed sketch-curve selections; model-edge selections remain an intended case too. History snapshots immediately after reflection showed lost sketch parents and expressions, and the NX update report warned about lost point parents and an under-constrained sketch. These are unacceptable retained-history changes. Whether excluding curves from separate transformation resolves them still requires an NX test; the effects of transforming the body and its parents remain unresolved.
+
+Keep MCS/RCS orientation, exact selected faces, Tooling Box parameters, CAM comparisons, source checks and rollback. No automatic save or extra runtime files. This release does not expand operation families.
+
 ## 2026-11-15 — Mirrored CAM project trial V1.24
 
 Diagnostic revision after V1.23 stopped while comparing CAM references. Replace the generic error and last-read operation label with the actual changed node, channel, field and before/after values. Keep the existing exact snapshot comparisons; add no tolerance, normalization or skipped differences. All 328 focused checks outside NX passed, including 50 using test C libraries and 21 new diagnostic scenarios. The cause of the user PRT’s CAM-data change remains unknown; a V1.24 report is needed.

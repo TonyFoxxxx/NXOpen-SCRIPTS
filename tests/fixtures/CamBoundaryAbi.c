@@ -5,6 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Independent reproduction of the old uf_sket.h signature, not SDK 2606. */
+int UF_SKET_ask_sketch_of_geom(uint32_t geometry, uint32_t *sketch) {
+    if (geometry == UINT32_C(0xf0000001)) { *sketch = UINT32_C(0xf0000002); return 0; }
+    if (geometry == UINT32_C(0xf0000003)) { *sketch = 0; return 0; }
+    return 90017;
+}
+
 typedef enum {
     UF_PARAM_DEFAULT, UF_PARAM_INHERITED, UF_PARAM_OVERRIDDEN, UF_PARAM_INVALID_INDEX
 } UF_PARAM_status_t;
