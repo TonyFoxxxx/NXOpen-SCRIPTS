@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "min_updater_version": "V1.19",
+  "min_updater_version": "V1.20",
   "scripts": [
     {
       "id": "NX_Setup_Prototype",
@@ -202,16 +202,17 @@
       "file": "NX_Mirror_Project.py",
       "version": "V1.25",
       "path": "scripts/NX_Mirror_Project.py",
-      "sha256": "4c5c994a7ed5c66015cd3d6422029776cc3584fa4bc4a7b41c32c218fac5cab9",
-      "description": "Геометрия и CAM без компонентов: копия PRT, выбор плоскости щелчком, перенос MCS и границ. История модельного тела в копии может заменяться на BREP. Без расчёта траекторий и автосохранения; прочие числовые пространственные настройки не отражаются."
+      "sha256": "d34f360eb0ece3acf9e00dabd5bce610746fa0d843bcc2ecb48b0eb3b3bad89c",
+      "description": "Геометрия и CAM без компонентов: копия PRT, выбор плоскости щелчком, перенос MCS и границ. История модельного тела в копии может заменяться на BREP. Без расчёта траекторий и автосохранения; прочие числовые пространственные настройки не отражаются.",
+      "release_version": "V1.25.01"
     },
     {
       "id": "NX_Update_Scripts",
       "name": "Апдейтер скриптов",
       "file": "NX_Update_Scripts.py",
-      "version": "V1.19",
+      "version": "V1.20",
       "path": "scripts/NX_Update_Scripts.py",
-      "sha256": "90a00ec5e7c770fe17c6bd0159fafc183ebf2dfa26d2be3038315d84a4192032",
+      "sha256": "5e3fa47e48f1471ce1e7a605ca6c29f8121a4594406808446a597e4de6fc3d5d",
       "description": "Установка и обновление скриптов из GitHub или папки; настройка нумерации отдельно от обновления кода.",
       "config": {
         "path": "config/NX_Update_Scripts.example.ini",

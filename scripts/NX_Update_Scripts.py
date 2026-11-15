@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # NX_Update_Scripts.py
-# SCRIPT_VERSION: V1.19
+# SCRIPT_VERSION: V1.20
 """
 Апдейтер NX / Designcenter для Windows: GitHub manifest или папка обновлений.
 
@@ -27,7 +27,7 @@ INI и Excel нумератора находятся рядом с устано�
 Новая редакция работает при следующем запуске. Python/NXOpen из скачанных
 исходников во время проверки и установки не запускаются.
 
-Версии: V1, V1.01, ..., V1.09, V1.10. Читаются также старые VERSION/__version__.
+Версии: V1, V1.01, ..., V1.10, V1.25.01. Читаются также старые VERSION/__version__.
 Служебная SHA-256 отметка в конце установленного файла сохраняет контроль
 местных изменений; в исходники GitHub эта отметка не включается.
 """
@@ -58,7 +58,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 
-SCRIPT_VERSION = "V1.19"
+SCRIPT_VERSION = "V1.20"
 SCRIPT_NAME = "Обновление скриптов NX"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode('utf-8')
@@ -1032,6 +1032,24 @@ def _release_version(value):
     return parse_version(value)[0]
 
 
+def catalog_version(entry):
+    """Keep the base field readable by older clients during self-update.
+
+    A patch release uses version=V1.25 and release_version=V1.25.01.
+    validate_manifest requires V1.20 before such journals can be installed.
+    """
+    base = entry.get('version')
+    _release_version(base)
+    if 'release_version' not in entry:
+        return base
+    release = entry['release_version']
+    if (base.count('.') != 1 or not isinstance(release, str)
+            or not re.fullmatch(re.escape(base) + r'\.[0-9]{2,}', release)
+            or parse_version(release)[0] <= parse_version(base)[0]):
+        raise ValueError('release_version должна продолжать version ненулевым суффиксом: V1.25 → V1.25.01')
+    return release
+
+
 def validate_manifest(data):
     if not isinstance(data, bytes) or len(data) > MAX_MANIFEST_SIZE:
         raise ValueError('Недопустимый размер manifest')
@@ -1058,7 +1076,12 @@ def validate_manifest(data):
             value = entry.get(key)
             if not isinstance(value, str) or not value.strip() or len(value) > 500 or any(ord(c) < 32 for c in value):
                 raise ValueError('В manifest нужно короткое текстовое поле ' + key)
-        _release_version(entry.get('version'))
+        catalog_version(entry)
+        if 'release_version' in entry:
+            if _release_version(manifest['min_updater_version']) < (1, 20):
+                raise ValueError('Для release_version требуется min_updater_version не ниже V1.20')
+            if identity.casefold() == UPDATER_ID:
+                raise ValueError('Версия самого апдейтера должна оставаться доступной старым клиентам без release_version')
         validate_remote_path(entry.get('path'), 'scripts')
         if entry['path'] != 'scripts/' + filename:
             raise ValueError('Путь скрипта не соответствует его имени: ' + filename)
@@ -1124,8 +1147,8 @@ def scan_github(settings, cancelled, fetcher=None, self_path=None):
         row = dict(path=path, new_path=RAW_ROOT + entry['path'], remote=entry,
                    operation='update' if paths else 'install', origin='github',
                    identity=(family, None, 'нет версии'), titles=[entry['name']],
-                   installed_label='Не установлен', available_label=entry['version'],
-                   available_version=parse_version(entry['version'])[0], source_hash=entry['sha256'],
+                   installed_label='Не установлен', available_label=catalog_version(entry),
+                   available_version=parse_version(catalog_version(entry))[0], source_hash=entry['sha256'],
                    status='', eligible=True, checked=False, source_issues=[], root_identity=root_id,
                    is_self=path_key(path) == path_key(self_path))
         try:
@@ -1428,7 +1451,7 @@ def prepare_jobs(rows, fetcher=None):
             info = internal_info(entry['file'], raw)
             declarations = version_declarations(source_text(raw, ntpath.splitext(entry['file'])[1]),
                                                 ntpath.splitext(entry['file'])[1])
-            if (info['label'] != entry['version'] or info['meta'] is not None
+            if (info['label'] != catalog_version(entry) or info['meta'] is not None
                     or not any(k == 'SCRIPT_VERSION в шапке' for k, _ in declarations)
                     or not any(k.casefold() == 'script_version' for k, _ in declarations)):
                 raise ValueError('Версия/шапка исходника не соответствует manifest: ' + entry['file'])

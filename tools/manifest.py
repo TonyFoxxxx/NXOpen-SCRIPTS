@@ -45,9 +45,15 @@ def main():
         if not any(key.casefold() == 'script_version' for key, _ in declarations):
             raise ValueError('Missing SCRIPT_VERSION string constant: ' + script.name)
         updater.pack_script(raw, script.name)  # syntax/version check, no execution
-        if info['label'] != entry['version']:
+        if info['label'] != updater.catalog_version(entry):
             changed.append(entry['path'] + ': version')
-            entry['version'] = info['label']
+            segments = info['label'].split('.')
+            if len(segments) == 3:
+                entry['version'] = '.'.join(segments[:2])
+                entry['release_version'] = info['label']
+            else:
+                entry['version'] = info['label']
+                entry.pop('release_version', None)
         records = [entry] + ([entry['config']] if entry.get('config') else []) + entry.get('install_files', [])
         for record in records:
             asset = ROOT / record['path']
@@ -80,6 +86,10 @@ def main():
                 for row in root.findall('.//m:row', ns):
                     if int(row.get('r', '0')) > 1 and any((x.text or '').strip() for x in row.iter()):
                         raise ValueError('Template registry contains user records')
+    if (any('release_version' in entry for entry in manifest['scripts'])
+            and updater.parse_version(manifest['min_updater_version'])[0] < (1, 20)):
+        changed.append('min_updater_version')
+        manifest['min_updater_version'] = 'V1.20'
     updated = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
     updater.validate_manifest(updated)
     updater_entry = next((item for item in manifest['scripts'] if item['id'].casefold() == updater.UPDATER_ID), None)

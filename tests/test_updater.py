@@ -93,6 +93,114 @@ class UpdaterTests(unittest.TestCase):
         self.assertFalse(self.scan()[0]['eligible'])
         self.assertLess(u.parse_version('V1')[0], u.parse_version('V1.01')[0])
 
+    def patch_release(self, release='V1.25.01', name='NX_Mirror_Project.py'):
+        record = self.add_script(name, release)
+        record['version'], record['release_version'] = 'V1.25', release
+        self.manifest['min_updater_version'] = 'V1.20'
+        return record
+
+    def test_patch_release_updates_base_version_and_clears_update_highlight(self):
+        record = self.patch_release()
+        target = self.root / record['file']
+        target.write_bytes(u.pack_script(source('V1.25'), target.name))
+        row = self.scan()[0]
+        self.assertEqual(row['available_label'], 'V1.25.01')
+        self.assertEqual(row['status'], 'Новая версия')
+        self.assertTrue(row['checked'])
+        self.assertTrue(u.has_newer_version(row))
+        u.apply_updates([row], self.fetch)
+        self.assertEqual(u.unpack_script(target.read_bytes())[0], source('V1.25.01'))
+        current = self.scan()[0]
+        self.assertEqual(current['installed_label'], 'V1.25.01')
+        self.assertEqual(current['status'], 'Установлена эта версия')
+        self.assertFalse(current['eligible'])
+        self.assertFalse(u.has_newer_version(current))
+        self.assert_no_stages()
+
+    def test_patch_release_order_and_downgrade_protection(self):
+        record = self.patch_release('V1.25.10')
+        target = self.root / record['file']
+        for installed, newer in (('V1.25', True), ('V1.25.01', True), ('V1.25.09', True),
+                                 ('V1.25.10', False), ('V1.25.11', False), ('V1.26', False)):
+            with self.subTest(installed=installed):
+                target.write_bytes(u.pack_script(source(installed), target.name))
+                row = self.scan()[0]
+                self.assertEqual(row['eligible'], newer)
+                self.assertEqual(u.has_newer_version(row), newer)
+
+    def test_patch_payload_must_match_full_release_even_with_correct_hash(self):
+        record = self.patch_release()
+        target = self.root / record['file']
+        before = u.pack_script(source('V1.25'), target.name)
+        target.write_bytes(before)
+        for wrong in ('V1.25', 'V1.25.02'):
+            with self.subTest(wrong=wrong):
+                self.payloads[record['path']] = source(wrong)
+                record['sha256'] = u.digest(source(wrong))
+                with self.assertRaisesRegex(ValueError, 'не соответствует manifest'):
+                    u.apply_updates(self.scan(), self.fetch)
+                self.assertEqual(target.read_bytes(), before)
+                self.assert_no_stages()
+
+    def test_patch_manifest_rejects_invalid_releases_and_unsafe_bootstrap(self):
+        record = self.patch_release()
+        for value in (None, 1, '', 'v1.25.01', 'V1.26.01', 'V1.25.1', 'V1.25.00',
+                      'V1.25', 'V1.25.01.01', 'V1.25.01beta'):
+            with self.subTest(value=value):
+                bad = copy.deepcopy(self.manifest)
+                bad['scripts'][0]['release_version'] = value
+                with self.assertRaises(ValueError):
+                    u.validate_manifest(json.dumps(bad).encode())
+        for base in ('V1', 'V1.25.01'):
+            with self.subTest(base=base):
+                bad = copy.deepcopy(self.manifest)
+                bad['scripts'][0]['version'] = base
+                with self.assertRaises(ValueError):
+                    u.validate_manifest(json.dumps(bad).encode())
+        self.manifest['min_updater_version'] = 'V1.19'
+        with self.assertRaisesRegex(ValueError, 'min_updater_version'):
+            self.scan()
+        self.manifest['min_updater_version'] = 'V1.20'
+        self.manifest['scripts'].clear()
+        self.patch_release(name='NX_Update_Scripts.py')
+        with self.assertRaisesRegex(ValueError, 'самого апдейтера'):
+            self.scan()
+
+    def test_patch_catalog_allows_updater_first_then_journal_after_restart(self):
+        mirror = self.patch_release()
+        self.add_script('NX_Update_Scripts.py', 'V1.20')
+        mirror_path = self.root / mirror['file']
+        updater_path = self.root / 'NX_Update_Scripts.py'
+        mirror_before = u.pack_script(source('V1.25'), mirror_path.name)
+        updater_before = u.pack_script(source('V1.19'), updater_path.name)
+        mirror_path.write_bytes(mirror_before)
+        updater_path.write_bytes(updater_before)
+        ini = self.root / 'NX_Update_Scripts.ini'
+        ini_before = b'[Personal]\nkeep=unchanged\n'
+        ini.write_bytes(ini_before)
+        # Model V1.19's view: strict base versions, unknown extension ignored.
+        for entry in self.manifest['scripts']:
+            u._release_version(entry['version'])
+        with patch.object(u, 'SCRIPT_VERSION', 'V1.19'), \
+                patch.object(u, 'catalog_version', side_effect=lambda entry: entry['version']):
+            rows = {r['remote']['id']: r for r in self.scan(self_path=str(updater_path))}
+            self.assertFalse(rows['NX_Mirror_Project']['eligible'])
+            self.assertTrue(rows['NX_Update_Scripts']['eligible'])
+            with self.assertRaises(ValueError):
+                u.apply_updates([rows['NX_Mirror_Project']], self.fetch)
+            pending = u.apply_updates([rows['NX_Update_Scripts']], self.fetch, defer_self=True)
+            self.assertEqual(updater_path.read_bytes(), updater_before)
+            self.assertEqual(mirror_path.read_bytes(), mirror_before)
+            u.commit_jobs([pending])
+        rows = {r['remote']['id']: r for r in self.scan(self_path=str(updater_path))}
+        self.assertFalse(rows['NX_Update_Scripts']['eligible'])
+        self.assertTrue(rows['NX_Mirror_Project']['checked'])
+        self.assertEqual(rows['NX_Mirror_Project']['available_label'], 'V1.25.01')
+        u.apply_updates([rows['NX_Mirror_Project']], self.fetch)
+        self.assertEqual(u.unpack_script(mirror_path.read_bytes())[0], source('V1.25.01'))
+        self.assertEqual(ini.read_bytes(), ini_before)
+        self.assert_no_stages()
+
     def test_local_edits_and_unknown_provenance_require_selection(self):
         self.add_script()
         target = self.root / 'Example.py'

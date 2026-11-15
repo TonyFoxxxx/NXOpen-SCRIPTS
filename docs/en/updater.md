@@ -1,4 +1,4 @@
-# Updater V1.19
+# Updater V1.20
 
 [Русский](../updater.md) | **English**
 
@@ -9,6 +9,10 @@ Installs new journals and updates selected working files while retaining their s
 The default working folder is `C:\ProgramData\NX_SCRIPTS`. An existing INI path takes precedence. To relocate an installation, move scripts together with their INI files, change the updater's working folder and update NX button paths.
 
 ## Latest release
+
+**V1.20 · 2026-11-15.** Support suffixed releases such as V1.25.01. The full version drives table labels, update highlighting and downloaded-source validation. The catalog remains readable by the old updater: update the updater to V1.20 first, then restart to update the journal. SHA-256 checks, downgrade prevention and local-edit protection remain in place.
+
+### V1.19
 
 **V1.19 · 2026-10-21.** Code updates no longer depend on Excel/INI availability. Data migration/setup follows the update, with existing-register connection, new numbering or deferred setup.
 
@@ -66,7 +70,7 @@ Base file URL: `https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main
 4. Read local internal versions and validate any installation marker.
 5. Show new scripts and updates in the selection window.
 
-Versions compare by numeric components: `V1.09 < V1.10`. The major version is not automatically changed.
+Versions compare by numeric components: `V1.09 < V1.10` and `V1.25 < V1.25.01 < V1.25.02 < V1.26`. The major version is not automatically changed.
 
 New scripts, unverified files, local edits and different code with an equal version are not selected automatically. A newer local version cannot be downgraded. Multiple working copies of one script family block an ambiguous update.
 
@@ -104,7 +108,15 @@ The new version is written to a verified neighboring `.nxupdater-….pending` fi
 
 Atomic replacement applies to **one file, not the whole selection**. A crash or power loss may leave some files updated and others unchanged. Run Check again after restarting. Leftover pending files from completed processes are removed on the next launch. This does not replace backups of important user data.
 
-## Upgrading to V1.19
+## Upgrading to V1.20
+
+1. In the old updater, run Check, select updater V1.20 and apply the update.
+2. Restart the updater after its window closes.
+3. Run Check and update «Зеркальная копия CAM-проекта — тест» to V1.25.01. Other entries remain blocked by the V1.20 minimum until the updater is upgraded.
+
+Stable working filenames and existing INI files are preserved. The new mirror journal number makes the publication available through the updater; it does not fix the known dependent-sketch mirroring failure.
+
+## Previous upgrade to V1.19
 
 1. Select only updater V1.19 in the old updater and apply. If GitHub cannot be reached, replace the working updater file manually.
 2. Restart after its window closes, check the working folder and run Check.
@@ -123,7 +135,7 @@ Already running Python code stays in memory; new code is not imported over it. A
 ```json
 {
   "schema_version": 1,
-  "min_updater_version": "V1.19",
+  "min_updater_version": "V1.20",
   "scripts": [
     {
       "id": "NX_Setup_Prototype",
@@ -144,9 +156,11 @@ Already running Python code stays in memory; new code is not imported over it. A
 }
 ```
 
-This demonstrates fields, not a ready-to-publish manifest or current release. Real hashes are calculated by the publishing tool. `id` is the stable filename without its extension. Omit `config` for a script without an INI. `location=script` means the installed journal's folder. Since V1.18, `numbering_data` also refers to the installed journal's folder, with special preservation/migration handling and one `install_files` entry for the initial XLSX. The V1.19 minimum ensures separate code updates and explicit numbering data setup.
+This demonstrates fields, not a ready-to-publish manifest or current release. Real hashes are calculated by the publishing tool. `id` is the stable filename without its extension. Omit `config` for a script without an INI. `location=script` means the installed journal's folder. Since V1.18, `numbering_data` also refers to the installed journal's folder, with special preservation/migration handling and one `install_files` entry for the initial XLSX. The V1.20 minimum additionally enables suffixed releases.
 
 New journals with ordinary INI settings can be added without changing the updater. New dependency types or installation directories require format/updater support. Unknown schemas are blocked. If `min_updater_version` increases, an old client may update itself first, while other entries remain blocked.
+
+A `V1.25.01` entry contains `"version": "V1.25"` and `"release_version": "V1.25.01"`, with `min_updater_version` at least `V1.20`. This preserves self-update for old clients that accept only two-component `version` fields. V1.20 uses the full `release_version` for display, comparison and source validation. The suffix must contain at least two digits and be nonzero; its base must exactly match `version`. The extension is disallowed for the updater itself to preserve the old-client upgrade path. `tools/manifest.py --write` derives both fields and the checksum from source; `--check` verifies consistency.
 
 ## Trust and limitations
 

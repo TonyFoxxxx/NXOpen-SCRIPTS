@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.25
-SCRIPT_VERSION = "V1.25"
+# SCRIPT_VERSION: V1.25.01
+SCRIPT_VERSION = "V1.25.01"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.

@@ -2,7 +2,7 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.25**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.25.01**.
 
 ## V1.25 result in NX
 
@@ -12,7 +12,7 @@ The early history guard stopped execution before MCS/stock transfer and toolpath
 
 Merely accepting the four Datum CSYS parent remaps would leave three damaged sketches and a damaged projection. These changes are outside the authorized body-history-to-BREP conversion. The current transfer mechanism remains unsuitable for this dependency graph. A replacement must preserve geometry identifiers, selected objects and sketch dependencies; full successful mirroring has not been established.
 
-Three additional regressions reproduce this failure pattern with synthetic objects, including both excluded arcs and the warning-only sketch. All **371 focused checks outside NX** pass, including 53 using test C libraries. These are failure-guard checks, not reproduction or repair of the NX kernel. **The journal remains V1.25 with unchanged source bytes and manifest checksum; no new script revision is issued for this analysis.**
+Three additional regressions reproduce this failure pattern with synthetic objects, including both excluded arcs and the warning-only sketch. All **371 focused checks outside NX** pass, including 53 using test C libraries. These are failure-guard checks, not reproduction or repair of the NX kernel. The initial analysis was published without changing the journal. **V1.25.01** subsequently updates the version and checksum for updater detection; the algorithm and reported failure remain unchanged.
 
 ## Investigated transformation alternatives
 
@@ -33,6 +33,12 @@ Open requirements before implementation include the actual DC 2606 API behavior,
 Sources: [older Siemens `uf_modl.h` header](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_modl.h), [ReplaceFeatureBuilder](https://www.ugapi.com/doc/nxopen/a03024.html), [MirrorBodyBuilder, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.MirrorBodyBuilder.html). These are published copies of contracts, not proof of kernel behavior or 2606 compatibility.
 
 ## Latest release
+
+First update the updater to **V1.20**, close its window and restart it; then check the catalog and install **V1.25.01**. [Updater upgrade](updater.md#upgrading-to-v120).
+
+**V1.25.01 · 2026-11-15** — Release V1.25.01 so the updater recognizes an update from V1.25. Align the journal header and version constant, catalog and SHA-256. The mirroring algorithm is unchanged; the known sketch/projection dependency damage reported for V1.25 is not fixed. Small publications within the same main revision use .01, .02 and subsequent suffixes; the working filename remains NX_Mirror_Project.py.
+
+### V1.25
 
 **V1.25 · 2026-11-15** — Fix reflection target selection: query curve/point sketch membership independently of UF Smart Object status. Exclude sketch geometry from separate transformation, then verify its reflected bounds, original sketch membership and CAM references. Edges move with their bodies. Add an early stop for damaged retained history and checks for new NX warnings. All 368 focused checks outside NX passed, including 53 using test C libraries and 40 new scenarios. The fix remains unverified on the user PRT; safe transfer of every dependent sketch is not claimed. [Details](#sketch-curves-and-nx-warnings).
 

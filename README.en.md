@@ -32,18 +32,18 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.25 | Trial geometry reflection and MCS transfer; body history may become BREP. No components or automatic save. | [All features](docs/en/mirror-project.md) |
-| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.19 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.25.01 | Trial geometry reflection and MCS transfer; body history may become BREP. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.20 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.25 · 2026-11-15
+### Latest update — Mirrored CAM project trial V1.25.01 · 2026-11-15
 
-Fix reflection target selection: query curve/point sketch membership independently of UF Smart Object status. Exclude sketch geometry from separate transformation, then verify its reflected bounds, original sketch membership and CAM references. Edges move with their bodies. Add an early stop for damaged retained history and checks for new NX warnings. All 368 focused checks outside NX passed, including 53 using test C libraries and 40 new scenarios. The fix remains unverified on the user PRT; safe transfer of every dependent sketch is not claimed. [Details and limits](docs/en/mirror-project.md#sketch-curves-and-nx-warnings).
+V1.25.01 corrects publication numbering so the updater recognizes it as an update from V1.25. The journal version, catalog and SHA-256 agree. Small publications within one revision use .01, .02 and subsequent suffixes. [Details](docs/en/mirror-project.md#latest-release).
 
-**NX test result:** V1.25 excluded both sketch arcs as intended, but the common model transformation still damaged sketch/projection dependencies. The trial stopped and rolled back. The script remains unchanged; three added failure regressions bring the focused total to 371. [Report analysis](docs/en/mirror-project.md#v125-result-in-nx).
+**NX test result:** the V1.25 common model transform damaged sketch/projection dependencies despite excluding both arcs. V1.25.01 retains that algorithm; this failure is not fixed. All 371 focused checks outside NX pass, including three failure regressions. [Report analysis](docs/en/mirror-project.md#v125-result-in-nx).
 
-Update **«Зеркальная копия CAM-проекта — тест» to V1.25** in the updater. [Test workflow, recognized editors and limitations](docs/en/mirror-project.md).
+First update **the updater to V1.20**, close its window and restart it. Then run Check and update **«Зеркальная копия CAM-проекта — тест» to V1.25.01**. [Test workflow and limitations](docs/en/mirror-project.md).
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 

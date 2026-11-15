@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Updater V1.20: suffixed releases
+
+Support suffixed releases such as V1.25.01. The full version drives table labels, update highlighting and downloaded-source validation. The catalog remains readable by the old updater: update the updater to V1.20 first, then restart to update the journal. SHA-256 checks, downgrade prevention and local-edit protection remain in place.
+
+## 2026-11-15 — Mirrored CAM project trial V1.25.01
+
+Release V1.25.01 so the updater recognizes an update from V1.25. Align the journal header and version constant, catalog and SHA-256. The mirroring algorithm is unchanged; the known sketch/projection dependency damage reported for V1.25 is not fixed. Small publications within the same main revision use .01, .02 and subsequent suffixes; the working filename remains NX_Mirror_Project.py.
+
 ## 2026-11-15 — V1.25 NX report analysis; journal unchanged
 
 The real NX report confirms that excluding the two selected sketch arcs did not prevent retained-history damage during the common model transform. Record the eight changed features and three warned sketches, including one with no structural change. The stop occurred before MCS/stock transfer and toolpath deletion; final CAM boundary preservation was not checked. Add three failure-pattern regressions; all 371 focused checks pass, including 53 using test C libraries. Keep journal version V1.25, its source and catalog checksum unchanged. No replacement transformation or complete NX compatibility is claimed. [Evidence and remaining blocker](docs/en/mirror-project.md#v125-result-in-nx).
