@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.22
-SCRIPT_VERSION = "V1.22"
+# SCRIPT_VERSION: V1.23
+SCRIPT_VERSION = "V1.23"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -299,6 +299,21 @@ def reflected_box(box, axis, offset):
 def close_values(a, b, tolerance=1e-5):
     return len(a) == len(b) and all(math.isfinite(x) and math.isfinite(y) and
         abs(x-y) <= tolerance + 1e-9*max(abs(x), abs(y)) for x, y in zip(a, b))
+
+
+def plane_direction_basis(plane, vector, point):
+    """Project a direction and a point onto a plane; reject degenerate inputs."""
+    vector, point = tuple(vector), tuple(point)
+    if len(vector) != 3 or len(point) != 3 or not all(math.isfinite(v) for v in vector + point):
+        raise RuntimeError("Некорректные данные Plane / Direction / Point")
+    normal = plane.normal
+    projected = [v - dot(vector, normal)*n for v, n in zip(vector, normal)]
+    length = math.sqrt(dot(projected, projected))
+    if length < 1e-10:
+        raise RuntimeError("Направление MCS перпендикулярно опорной плоскости")
+    distance = dot([p-o for p,o in zip(point, plane.origin)], normal)
+    return ([p-distance*n for p,n in zip(point, normal)],
+            [v/length for v in projected], list(normal))
 
 
 def local_box(plane, corner, directions, distances):
@@ -826,6 +841,7 @@ class Trial:
         self.mcs_links = {}
         self.mcs_definitions, self.mcs_verified_definitions = {}, {}
         self.mcs_fixed_xforms = {}
+        self.mcs_plane_directions = {}
         self.mcs_rebuilt = {}
         self.mcs_supports = {}
         self.mcs_plane_selections = {}
@@ -926,10 +942,14 @@ class Trial:
                                 self.mcs_supports[int(obj.Tag)] = plane
                                 if isinstance(obj, self.nx.Plane):
                                     self.mcs_plane_selections[int(obj.Tag)] = self.plane_selection(obj)
+                    if planes is None:
+                        self.capture_plane_direction_csys(tag, xform, graph, origin, axes)
         self.mcs_definitions[tag] = (graph, planes)
         self.mcs_verified_definitions[tag] = graph
         fixed = self.mcs_fixed_xforms.get(tag)
-        description = ("Three Planes" if planes else "CSYS с числовым Xform " + str(fixed) if fixed
+        plane_direction = self.mcs_plane_directions.get(tag)
+        description = ("Plane / " + plane_direction["axis"] + " Direction / Point" if plane_direction else
+                       "Three Planes" if planes else "CSYS с числовым Xform " + str(fixed) if fixed
                        else "ассоциативная СК: способ задания не распознан" if parents is not None else "числовая СК")
         self.lines.append("Определение СК " + str(tag) + ": " + description +
                           ("; плоскости " + str(planes) if planes else ""))
@@ -941,8 +961,165 @@ class Trial:
                                   "; статус " + PARAM_STATUS_NAMES[state] + "; источник параметра " + str(definer))
         self.lines.append("  Наследующих параметров: " + str(inherited) + "; начало ABS: " + str(origin))
         self.lines.append("  Исходные оси ABS: X=" + str(axes[:3]) + "; Y=" + str(axes[3:6]) + "; Z=" + str(axes[6:]))
-        if parents is not None and not planes and not fixed:
+        if plane_direction:
+            self.lines.append("  Прямые опоры (Plane, Direction, Point): " + str(plane_direction["sources"]))
+        if parents is not None and not planes and not fixed and not plane_direction:
             self.lines.extend(self.csys_definition_details(tag, graph))
+
+    def capture_plane_direction_csys(self, tag, xform, graph, origin, axes):
+        # Recognize an exact direct-input pattern, never an arbitrary set of
+        # ancestors. X/Y is determined from the original projected direction;
+        # an ambiguous or differently oriented construction is not rebuilt.
+        inputs = graph[int(xform.Tag)]
+        types = ((self.nx.Plane, self.nx.Face, self.nx.DatumPlane),
+                 getattr(self.nx, "Direction", ()), getattr(self.nx, "Point", ()))
+        groups = [[p for p in inputs if isinstance(self.refs[p], kind)] for kind in types]
+        if any(len(group) != 1 for group in groups):
+            return
+        sources = tuple(group[0] for group in groups)
+        others = [p for p in inputs if p not in sources]
+        if (len(inputs) != 4 or len(set(inputs)) != 4 or len(others) != 1
+                or not isinstance(self.refs[others[0]], self.nx.Scalar)
+                or graph[others[0]] is not None or float(self.refs[others[0]].Value) != 1.0
+                or float(xform.Scale) != 1.0):
+            return
+        plane, direction, point = (self.refs[p] for p in sources)
+        support, vector, coords = self.plane_data(plane), xyz(direction.Vector), xyz(point.Coordinates)
+        projected_origin, projected, normal = plane_direction_basis(support, vector, coords)
+        matching = [axis for axis, values in (("X", axes[:3]), ("Y", axes[3:6]))
+                    if abs(dot(projected, values)) > 1.0 - 1e-7]
+        if (len(matching) != 1 or not close_values(projected_origin, origin)
+                or abs(dot(normal, axes[6:])) < 1.0 - 1e-7
+                or not close_values(xyz(xform.Origin), origin)
+                or not close_values([float(getattr(xform.Orientation, f)) for f in MATRIX_FIELDS], axes)):
+            self.lines.append("  Не подтверждена схема Plane / Direction / Point для СК " + str(tag) +
+                "; проекция точки=" + str(projected_origin) + "; направление=" + str(projected) +
+                "; нормаль=" + str(normal))
+            return
+        self.mcs_plane_directions[tag] = {
+            "axis": matching[0], "sources": sources, "plane": support,
+            "vector": tuple(vector), "point": tuple(coords),
+            "selection": self.plane_selection(plane) if isinstance(plane, self.nx.Plane) else None,
+            "branches": {p: graph_branch(graph, p) for p in sources}}
+
+    def plane_direction_supports(self, tag, evaluate=False):
+        data = self.mcs_plane_directions[tag]
+        types = ((self.nx.Plane, self.nx.Face, self.nx.DatumPlane), (self.nx.Direction,), (self.nx.Point,))
+        objects = [self.current_mcs_object(p, kind, "Plane / Direction / Point " + str(tag))
+                   for p, kind in zip(data["sources"], types)]
+        plane, direction, point = objects
+        def check_definition():
+            for source, branch in data["branches"].items():
+                if self.smart_graph(source) != branch:
+                    raise RuntimeError("Изменилось определение опоры Plane / Direction / Point: " + str(source))
+            if data["selection"] is not None:
+                self.require_plane_selection(plane, data["selection"], "СК " + str(tag), "Plane / Direction / Point")
+        check_definition()
+        if evaluate:
+            branches = {p: parents for branch in data["branches"].values() for p, parents in branch.items()}
+            for source in parent_order(branches):
+                update = getattr(self.refs[source], "Evaluate", None)
+                if branches[source] is not None and callable(update):
+                    update()
+            check_definition()
+        actual = self.plane_data(plane)
+        expected = MirrorPlane(self.plane.point(data["plane"].origin), self.plane.vector(data["plane"].normal))
+        if (abs(dot(actual.normal, expected.normal)) < 1.0 - 1e-7
+                or abs(dot(expected.normal, [a-b for a,b in zip(actual.origin, expected.origin)])) > 1e-5):
+            raise RuntimeError("Не подтверждено отражение опоры Plane системы " + str(tag))
+        if not close_values(xyz(point.Coordinates), self.plane.point(data["point"])):
+            raise RuntimeError("Не подтверждено отражение опоры Point системы " + str(tag))
+        _, vector, _ = plane_direction_basis(actual, xyz(direction.Vector), xyz(point.Coordinates))
+        _, original, _ = plane_direction_basis(data["plane"], data["vector"], data["point"])
+        full_vector = MirrorPlane((0, 0, 0), xyz(direction.Vector)).normal
+        full_original = MirrorPlane((0, 0, 0), data["vector"]).normal
+        if (abs(dot(vector, self.plane.vector(original))) < 1.0 - 1e-7
+                or abs(dot(full_vector, self.plane.vector(full_original))) < 1.0 - 1e-7):
+            raise RuntimeError("Не подтверждено отражение опоры Direction системы " + str(tag))
+        return objects
+
+    def plane_direction_graph(self, tag, data):
+        self.current_mcs_object(tag, (self.nx.CartesianCoordinateSystem,), "Plane / Direction / Point")
+        graph = self.smart_graph(tag)
+        parents = graph[tag]
+        if parents is None or len(parents) != 1:
+            raise RuntimeError("Не сохранён Xform определения Plane / Direction / Point: " + str(tag))
+        xform = self.current_mcs_object(parents[0], (self.nx.Xform,), "Plane / Direction / Point")
+        inputs = graph[parents[0]]
+        others = [p for p in (inputs or ()) if p not in data["sources"]]
+        if (inputs is None or len(inputs) != 4 or len(set(inputs)) != 4
+                or not set(data["sources"]).issubset(inputs) or len(others) != 1
+                or not isinstance(self.refs[others[0]], self.nx.Scalar)
+                or graph[others[0]] is not None or float(self.refs[others[0]].Value) != 1.0
+                or float(xform.Scale) != 1.0):
+            raise RuntimeError("Изменены прямые опоры или масштаб Plane / Direction / Point: " + str(tag))
+        return graph, xform
+
+    def require_plane_direction_frame(self, tag, origin, axes):
+        actual_origin, actual_axes = self.csys_frame(tag)
+        if not (close_values(actual_origin, origin) and close_values(actual_axes, axes)):
+            raise RuntimeError("Не подтверждён перенос Plane / Direction / Point " + str(tag) +
+                "\nНачало ожидаемое: " + str(origin) + "; фактическое: " + str(actual_origin) +
+                "\nОси ожидаемые: " + str(axes) + "; фактические: " + str(actual_axes))
+
+    def transfer_plane_direction_csys(self, tag, origin, axes):
+        data = self.mcs_plane_directions[tag]
+        self.stage = "Обновление Plane / " + data["axis"] + " Direction / Point: " + str(tag)
+        plane, direction, point = self.plane_direction_supports(tag, evaluate=True)
+        graph, current_xform = self.plane_direction_graph(tag, data)
+        if graph != self.mcs_verified_definitions[tag]:
+            raise RuntimeError("Изменилось определение Plane / Direction / Point: " + str(tag))
+        csys = self.current_mcs_object(tag, (self.nx.CartesianCoordinateSystem,), "Plane / Direction / Point")
+        current_xform.Evaluate()
+        csys.Evaluate()
+        actual_origin, actual_axes = self.csys_frame(tag)
+        if not (close_values(actual_origin, origin) and close_values(actual_axes, axes)):
+            # Keep the SAME Plane, Direction and Point, including their direct
+            # selection and construction. Only the Xform's own sign flags change;
+            # never reverse a shared Direction or replace a support with numbers.
+            _, vector, normal = plane_direction_basis(self.plane_data(plane), xyz(direction.Vector), xyz(point.Coordinates))
+            target = axes[:3] if data["axis"] == "X" else axes[3:6]
+            flip_axis, flip_z = dot(vector, target) < 0.0, dot(normal, axes[6:]) < 0.0
+            factory_name = "CreateXformByPlane" + data["axis"] + "DirPoint"
+            factory = getattr(self.part.Xforms, factory_name, None)
+            if not callable(factory):
+                raise RuntimeError("Недоступна фабрика NXOpen " + factory_name + "; требуется проверка SDK 2606")
+            existing = set(self.refs)
+            xform = factory(plane, direction, point, self.nx.SmartObject.UpdateOption.AfterModeling,
+                            1.0, flip_axis, flip_z)
+            if xform is None or int(xform.Tag) in existing:
+                raise RuntimeError("NX не создал отдельный Xform для Plane / Direction / Point")
+            candidate = self.part.CoordinateSystems.CreateCoordinateSystem(xform, self.nx.SmartObject.UpdateOption.AfterModeling)
+            if candidate is None or int(candidate.Tag) in existing:
+                raise RuntimeError("NX не создал отдельную СК для Plane / Direction / Point")
+            xform.Evaluate()
+            candidate.Evaluate()
+            candidate_tag = int(candidate.Tag)
+            candidate_graph, _ = self.plane_direction_graph(candidate_tag, data)
+            self.plane_direction_supports(tag)
+            self.require_plane_direction_frame(candidate_tag, origin, axes)
+            csys.ReplaceParameters(candidate)
+            xform.Evaluate()
+            csys.Evaluate()
+            installed, _ = self.plane_direction_graph(tag, data)
+            expected = {p: parents for p, parents in candidate_graph.items() if p != candidate_tag}
+            expected[tag] = (int(xform.Tag),)
+            if installed != expected:
+                raise RuntimeError("NX не сохранил определение Plane / Direction / Point после ReplaceParameters")
+            self.mcs_verified_definitions[tag] = installed
+            self.lines.append("Plane / " + data["axis"] + " Direction / Point " + str(tag) +
+                ": прежние опоры " + str(data["sources"]) + "; Flip" + data["axis"] + "=" + str(flip_axis) + "; FlipZ=" + str(flip_z))
+        self.verify_plane_direction_csys(tag)
+
+    def verify_plane_direction_csys(self, tag):
+        data = self.mcs_plane_directions[tag]
+        self.stage = "Проверка Plane / Direction / Point: " + str(tag)
+        graph, _ = self.plane_direction_graph(tag, data)
+        if graph != self.mcs_verified_definitions[tag]:
+            raise RuntimeError("Изменилось определение Plane / Direction / Point: " + str(tag))
+        self.plane_direction_supports(tag)
+        origin, axes = self.frames[tag]
+        self.require_plane_direction_frame(tag, self.plane.point(origin), reflected_frame(axes, self.plane))
 
     def csys_definition_details(self, tag, graph):
         lines = ["  Структура определения СК " + str(tag) + ":"]
@@ -966,10 +1143,10 @@ class Trial:
                                    "Способ задания плоскости " + str(plane.Tag))
         return (method, tuple(int(obj.Tag) for obj in plane.GetGeometry()))
 
-    def require_plane_selection(self, plane, expected, context):
+    def require_plane_selection(self, plane, expected, context, definition="Three Planes"):
         actual = self.plane_selection(plane)
         if actual != expected:
-            raise RuntimeError("Изменился прямой выбор Three Planes / " + context +
+            raise RuntimeError("Изменился прямой выбор " + definition + " / " + context +
                 "\nСпособ ожидался: " + cam_value_text(expected[0]) +
                 "; фактически: " + cam_value_text(actual[0]) +
                 "\nВыбранные объекты ожидались: " + str(expected[1]) +
@@ -1020,7 +1197,7 @@ class Trial:
                     or bool(getattr(obj, "IsOccurrence", False))):
                 raise RuntimeError("Неверный тип, идентификатор или владелец объекта")
         except Exception as exc:
-            raise RuntimeError("Недоступен действующий объект Three Planes " + str(tag) +
+            raise RuntimeError("Недоступен действующий объект MCS " + str(tag) +
                                " / " + context + ": " + str(exc)) from exc
         self.refs[int(tag)] = obj
         return obj
@@ -1975,6 +2152,7 @@ class Trial:
             axes = reflected_frame(axes, self.plane)
             self.stage = "Перенос определения MCS/RCS: " + str(tag)
             graph, planes = self.mcs_definitions[tag]
+            plane_direction = getattr(self, "mcs_plane_directions", {}).get(tag)
             if planes is not None:
                 self.refresh_mcs_supports(tag, graph, planes)
             is_default = any(old == tag and self.mcs_sources[(int(node.Tag), index)][0] == PARAM_DEFAULT
@@ -1982,13 +2160,16 @@ class Trial:
             if is_default:
                 # The root's implicit default is not a user's Three Planes
                 # definition. Do not modify an NX default shared elsewhere.
-                if planes or any(old == tag and self.mcs_sources[(int(node.Tag), index)][0] == PARAM_OVERRIDDEN
+                if planes or plane_direction or any(old == tag and self.mcs_sources[(int(node.Tag), index)][0] == PARAM_OVERRIDDEN
                                  for node, index, old in self.mcs_bindings):
                     raise RuntimeError("Значение MCS по умолчанию разделяется с собственным определением")
                 matrix_tag = self.uf.Csys.CreateMatrix(axes)
                 replacement[tag] = self.uf.Csys.CreateCsys(origin, matrix_tag)
                 continue
             replacement[tag] = tag
+            if plane_direction:
+                self.transfer_plane_direction_csys(tag, origin, axes)
+                continue
             if graph[tag] is not None:
                 obj = self.refs[tag]
                 obj.Evaluate()
@@ -2032,6 +2213,8 @@ class Trial:
     def verify_mcs(self, replacement):
         verified_frames = {}
         for tag in self.mcs_definitions:
+            if tag in getattr(self, "mcs_plane_directions", {}):
+                self.verify_plane_direction_csys(tag)
             self.stage = "Итоговая проверка прямого выбора Three Planes: " + str(tag)
             self.verify_three_plane_selections(tag)
         for (tag, index), old_tag in self.mcs_expected.items():
@@ -2179,6 +2362,8 @@ class Trial:
         self.stage = "Обновление и проверка результата"
         self.native.update_model()
         self.stabilize_three_planes_after_update()
+        for tag in self.mcs_plane_directions:
+            self.verify_plane_direction_csys(tag)
         self.checkpoint_model_history("Удаление траекторий и обновление модели")
         self.transfer_custom_points(geometry)
         self.checkpoint_model_history("Перенос пользовательских точек")
@@ -2228,6 +2413,7 @@ class Trial:
         if self.body_conversions:
             self.lines.append("В этой копии эти тела редактируются без исходных Extrude/Blend; история исходного проекта не изменялась.")
         self.lines.append("Сохранены определения Three Planes: " + str(sum(bool(p) for _, p in self.mcs_definitions.values())))
+        self.lines.append("Сохранены определения Plane / Direction / Point: " + str(len(self.mcs_plane_directions)))
         self.lines.append("Распознаны CSYS с числовым Xform: " + str(len(self.mcs_fixed_xforms)))
         if getattr(self, "cam_extra_unverified", None):
             self.lines.append("\nНЕ ПРОВЕРЕНЫ полностью дополнительные данные CAM / недоступные поля Builder:")

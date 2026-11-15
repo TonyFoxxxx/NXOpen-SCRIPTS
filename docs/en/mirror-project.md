@@ -2,9 +2,13 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.22**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.23**.
 
 ## Latest release
+
+**V1.23 · 2026-11-15** — Add transfer for a recognized associative plane–X/Y direction–point CSYS after V1.22 stopped at MCS “2”. Retain the existing CSYS, Plane/Direction/Point objects and their selections; set orientation flags on a new Xform. Verify the candidate before replacement and the installed definition after replacement, model update and CAM reads. Keep Y′ = R(Y), Z′ = R(Z), X′ = Y′ × Z′. All 307 focused checks outside NX passed, including 50 using test C libraries; 22 new scenarios exercise the definition and protection failures. SDK 2606 compatibility and a complete NX result remain unconfirmed. [Definition and limits](#plane-direction-point-mcs).
+
+### V1.22
 
 **V1.22 · 2026-11-15** — Fix V1.21's false stop on an unused custom-point depth field. For Planar/Cavity, check upper_depth/lower_depth for Cut Region Start and depth for Predrill Engage; Face and valid Surface Contour points use no depth fields. Unused values are neither loaded as numbers nor compared as settings. Active nonzero depths, however small, still stop the trial. All 285 checks outside NX passed, including 50 using test C libraries. [Field applicability table](#custom-cam-points).
 
@@ -46,13 +50,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. Y/Z are reflected and X completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.22 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.22 from a healthy original project. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.23 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.23 from a healthy original project. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.22**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.23**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. Read and share the report using **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -69,6 +73,16 @@ MCS transfer retains the existing CSYS. Recognized Three Planes definitions reta
 - Removes calculated toolpaths in the copy. Does not create mirrored CAM operations, generate paths or postprocess.
 - Checks exact oriented object bounds in the selected-plane frame, geometry identifiers, available selected CAM references, operation membership and geometry parents, missing toolpaths and transferred MCS/RCS frames. Finally checks the source file checksum and modification flag.
 - On an exception after the Undo mark is created, attempts to undo changes in the copy and reports the stage, error and rollback outcome. After successful rollback, restore the source as work and displayed part. If Undo fails, attempt to restore the original and close only this invocation's copy without saving while retaining other undo marks. If closure is unavailable or unconfirmed, ask the user to close the copy manually. Restoring the source does not delete files or close other parts.
+
+## Plane-direction-point MCS
+
+V1.23 recognizes the direct `CSYS → Xform → Plane/Face/DatumPlane + Direction + Point + Scalar` structure. Require exactly one numerical Scalar equal to 1 and unit Xform scale. The original projected direction must unambiguously match the original CSYS X or Y axis, the plane normal must match Z up to sign, and the projected point must match the origin. Also check the original Xform origin and axes. This adapter does not authorize ambiguous, additional or parameterized inputs.
+
+Update supports in dependency order, including stock, before rebuilding. Check the reflected plane, full direction vector and point coordinates. Build a candidate CSYS through `CreateXformByPlaneXDirPoint` or `CreateXformByPlaneYDirPoint` using **the same** Plane/Direction/Point. Do not reverse shared directions or planes; change only the new Xform's axis flags. Retain the Plane method and ordered direct selection, Direction/Point graphs and selected faces/edges. A different coplanar selected face is rejected.
+
+The candidate must confirm the expected origin and all three axes before `ReplaceParameters`. Retain the existing CSYS tag and CAM inheritance after replacement; check its installed Xform, direct supports, ownership by the copy and numerical scale. Repeat checks after model update and final CAM reads. Late drift, missing supports or changed selections stop the trial. Old Xform/Scalar objects may be retired normally; Plane/Direction/Point must remain live. There is no Dynamic fallback.
+
+This is a limited adapter for a recognized structure, not every CSYS definition. A numerical or other direction that does not follow reflection cannot silently count as transferred. An available factory and passing API-model tests do not establish its Python DC 2606 behavior. [Methods requiring SDK verification](mirror-operations.md#items-to-verify-against-sdk-dc-2606).
 
 ## Custom CAM points
 
@@ -103,7 +117,7 @@ This is a general validation mechanism, not confirmed support for every NX comma
 
 - A model body's history in the copy may be replaced with one BREP based on common BodyFeature class, ownership and dependency checks, without a catalog of command names. Shared ownership by multiple bodies, partial replacement or external users of a removed parameter stop the trial. Stock, sketch and MCS definitions are not covered by this permission.
 - Remaining history validation checks feature identities/types, parents and expression identifiers. Formulas are diagnostic; changing a coordinate formula under the same identifier is not treated as parameter loss. This is not complete validation of all CAD values and dependencies. Replacing expression identifiers outside the permitted body history is rejected even when formulas match.
-- Three Planes rebuilding supports recognized mutually perpendicular support planes with unit scale. A CSYS backed by one numerical Xform is also supported with unit scale and matching initial origin/axes. An unconfirmed definition or damaged support stops the trial. Other associative CSYS definitions are accepted only if native updates retain their definition and produce the correct reflected frame.
+- Three Planes rebuilding supports recognized mutually perpendicular support planes with unit scale. A CSYS backed by one numerical Xform is also supported with unit scale and matching initial origin/axes. An unconfirmed definition or damaged support stops the trial. Other associative CSYS definitions are accepted only if native updates retain their definition and produce the correct reflected frame. A limited [Plane / Direction / Point adapter](#plane-direction-point-mcs) is also provided.
 - Some parametric stock cannot reach the reflected position without changing its settings. If original orientation, asymmetric offsets or dependencies prevent exact reflection, verification stops the trial. The journal does not switch stock to From Geometry or zero its offsets.
 - All model features undergo validation without a name filter. This does not guarantee that every feature reflects successfully: an unknown class receives no permission to lose its history; unavailable data and detected external parents stop the trial.
 - Components and non-associative boundaries without geometry references remain unsupported. Custom points have [separate limits](#custom-cam-points); other numerical spatial operation parameters still remain unreflected.
@@ -115,7 +129,7 @@ This is a general validation mechanism, not confirmed support for every NX comma
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 
-All 285 focused checks outside NX passed, including 50 using separately compiled test C libraries. The 10 new scenarios distinguish active and unused fields, reproduce the report's tiny value, NaN/Infinity, changing unused storage and missing active data. Verify writes without rounding meaningful values, retained points and existing protection failures. The V1.21 report contains one selected Cut Region Start point with zero upper_depth/lower_depth and a nonzero unused depth; reflection had not run. These tests do not certify SDK 2606 or the NX kernel. A complete V1.22 run, manual save/reopen and toolpath regeneration are still needed in NX.
+All 307 focused checks outside NX passed, including 50 using separately compiled test C libraries. The 22 new scenarios cover the reported lower setup, X/Y definitions, oblique reflection, point projection, shared supports and inheritance, update order, direct selections, API failures and late changes after model update/CAM reads. The V1.22 report read 35 operation editors and three Cut Region Start points, called geometry reflection, then stopped on an associative MCS. Final geometry and history checks did not complete; this release does not authorize the reported sketch/datum changes. The report records successful Undo and source checks. The test libraries and API model are not Siemens SDK or kernel components. A complete V1.23 run, manual save/reopen and toolpath regeneration are still needed in NX.
 
 ## Later stages — not implemented yet
 

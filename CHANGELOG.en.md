@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Mirrored CAM project trial V1.23
+
+Add transfer for a recognized associative plane–X/Y direction–point CSYS after V1.22 stopped at MCS “2”. Retain the existing CSYS, Plane/Direction/Point objects and their selections; set orientation flags on a new Xform. Verify the candidate before replacement and the installed definition after replacement, model update and CAM reads. Keep Y′ = R(Y), Z′ = R(Z), X′ = Y′ × Z′. All 307 focused checks outside NX passed, including 50 using test C libraries; 22 new scenarios exercise the definition and protection failures. SDK 2606 compatibility and a complete NX result remain unconfirmed.
+
+Recognition requires the exact direct-input pattern, unit numerical scale and matching original projected direction/point and axes/origin. Keep shared Plane/Direction/Point objects and selected faces/edges. Verify live supports, their graphs, plane method and direct selection; reject coplanar substitutions, incorrect candidates and late drift. Retain model-history, Tooling Box, Three Planes, custom-point, boundary, source-integrity and rollback checks.
+
+The V1.22 report passed the earlier depth check and reached geometry reflection before stopping at MCS transfer. Final history and geometry checks did not complete; observed sketch/datum changes receive no new authorization. The report records successful Undo, source checksum and modification-flag checks. Save/reopen and toolpath regeneration remain unverified.
+
 ## 2026-11-15 — Mirrored CAM project trial V1.22
 
 Fix V1.21's false stop: a Cut Region Start point had zero upper_depth/lower_depth, but validation also considered its unused depth field containing a value around 1e-310. This is not a rounding fix: determine field applicability from operation class and channel according to the available uf_camgeom.h contract. Planar/Cavity uses upper_depth/lower_depth for Cut Region Start and depth for Predrill Engage. Face and valid Surface Contour points use no depth fields.

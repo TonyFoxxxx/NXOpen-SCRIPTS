@@ -142,6 +142,7 @@ class SmartWorld:
         trial.refs, trial.lines = {}, []
         trial.mcs_definitions, trial.mcs_verified_definitions = {}, {}
         trial.mcs_fixed_xforms = {}
+        trial.mcs_plane_directions = {}
         trial.mcs_rebuilt = {}
         trial.mcs_supports = {}
         trial.mcs_plane_selections = {}
@@ -1451,6 +1452,7 @@ class HistoryTests(unittest.TestCase):
         trial.stabilize_three_planes_after_update = Mock()
         trial.operation_snapshot = lambda:[]
         trial.frames, trial.refs, trial.bounds = {},{},{}
+        trial.mcs_plane_directions = {}
         trial.custom_points, trial.current_custom_points, trial.custom_point_labels = {},{},{}
         trial.bodies, trial.protected_bodies, trial.operations = [NS(Tag=1)],set(),[]
         trial.nx = NS(Curve=type('Curve',(),{}),Point=type('Point',(),{}))

@@ -1,4 +1,4 @@
-# CAM operation coverage audit — V1.22
+# CAM operation coverage audit — V1.23
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
@@ -6,7 +6,7 @@ Audit date: **2026-11-15**. Baseline: published V1.18, commit `b7c881ce685020697
 
 ## What the catalog means
 
-The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.22 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
+The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.23 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
 
 | Level | Actual status |
 | --- | --- |
@@ -71,11 +71,15 @@ Existing custom-point query exceptions remain: `SurfaceContour` queries channel 
 8. For V1.20's general model-history admission: Python `NXOpen.Features.BodyFeature`, concrete classes from `Body.GetFeatures()`, `BodyFeature.GetBodies()`, `Feature.GetParents()`, `GetExpressions()`, `GetFeatureErrorMessages()`, `Expression.GetUsingFeatures()` and `GetReferencingExpressions()`. Verify completeness for boolean, multi-body, suppressed and user-defined features and history preservation/replacement by `UF_MODL_transform_entities`. [Rules and limits](mirror-project.md#model-feature-handling).
 9. For V1.21 points: `UF_CAMGEOM_custom_point_s`, pointer-array layout and individual-record cleanup, `UF_CAMGEOM_ask_custom_points`, `UF_CAMGEOM_delete_custom_points`, `UF_CAMGEOM_append_custom_points`; units/reference frames and zero/nonzero meanings of `upper_depth`, `lower_depth`, `depth`, retained associativity and order after replacement. In particular, verify Planar/Cavity cases where reflection changes ABS Z.
 
+10. For V1.23 CSYS: `XformCollection.CreateXformByPlaneXDirPoint` and `CreateXformByPlaneYDirPoint` — Python signatures, acceptance of a `Plane` object, point-projection and X/Y/Z flag semantics, direct parents (Plane/Direction/Point and numerical Scalar). `Direction.Vector`, `Point.Coordinates`, `Scalar.Value`, `Xform.Scale/Origin/Orientation`, `Plane.Method/GetGeometry()`, `CoordinateSystems.CreateCoordinateSystem`, `SmartObject.Evaluate/ReplaceParameters`, `UF_SO_ask_parents`: evaluation order, retained selected faces/edges and installed CSYS, old Xform lifetime. Verify after update, manual save and reopen. This is an older published contract, not a verified SDK 2606 contract.
+
 V1.22 distinguishes active, unused and unverified fields. The [applicability table](mirror-project.md#custom-cam-points) follows the older UF header and still needs SDK 2606 verification. An active-data read error is not an absent value; active nonzero depths are not rounded.
 
 SDK verification cannot replace an NX run. Each new family needs a test PRT with nonempty family-specific settings, selection/axis inspection, manual save and reopen of the copy, then normal toolpath regeneration and inspection. The source must remain unchanged; the journal neither saves automatically nor creates extra files.
 
 ## Sources and verification limits
+
+- [Siemens NXOpen XformCollection, NX 2022.1 reference mirror](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.XformCollection.html) — Plane/X(Y)Dir/Point factories; [Direction.Vector](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Direction.html). V1.23 API sources, not 2606 documentation.
 
 - [Older Siemens uf_camgeom.h reproduced by ugapi](https://www.ugapi.com/doc/UFun/uf_cam/uf_camgeom.html) describes custom-point records, ABS coordinates and list read/replacement functions. This is V1.21's contract source, not SDK DC 2606.
 
@@ -84,4 +88,4 @@ SDK verification cannot replace an NX run. Each new family needs a test PRT with
 - [Siemens SurfaceContourBuilder, older reference reproduced by ugapi](https://www.ugapi.com/doc/nxopen/a02024.html) and [deprecated API list](https://www.ugapi.com/doc/NXOpen/a10908.html) provide further reason not to transfer old signatures mechanically to 2606.
 - The [official Siemens NX documentation portal](https://docs.sw.siemens.com/en-US/product/209349590) could not be read with the available lookup tool. No SDK 2606 sources were available for exact comparison.
 
-V1.22: **285 regression checks outside NX**, including 50 using test C libraries. Add 10 active/unused-field, NaN/Infinity, tiny-nonzero-value, read/write and protection-failure scenarios. Coverage remains 21 dispatch routes / 31 Builders. The V1.21 report exposed a false stop before reflection; a complete result on the user's PRT remains unconfirmed. The test libraries are not Siemens libraries.
+V1.23: **307 regression checks outside NX**, including 50 using test C libraries. Add 22 Plane / Direction / Point scenarios, including the full processing sequence and repeated checks after model update/CAM reads. Coverage remains 21 dispatch routes / 31 Builders. The V1.22 report passed custom-point reads and reached MCS transfer after calling reflection; final geometry and history were not verified. A complete result on the user's PRT remains unconfirmed. The test libraries are not Siemens libraries.

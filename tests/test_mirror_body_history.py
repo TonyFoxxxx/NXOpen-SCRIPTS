@@ -134,6 +134,7 @@ class Fixture:
         t.uf = NS(Obj=NS(DeleteObject=Mock()))
         t.box_csys, t.moved_boundary_count, t.cam_builder_state = 99,0,{}
         t.mcs_definitions, t.mcs_fixed_xforms, t.unavailable, t.raw_spatial = {},{},set(),[]
+        t.mcs_plane_directions = {}
         return t
 
 
