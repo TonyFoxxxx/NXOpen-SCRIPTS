@@ -1,4 +1,4 @@
-# CAM operation coverage audit — V1.23
+# CAM operation coverage audit — V1.24
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
@@ -6,7 +6,7 @@ Audit date: **2026-11-15**. Baseline: published V1.18, commit `b7c881ce685020697
 
 ## What the catalog means
 
-The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.23 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
+The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.24 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
 
 | Level | Actual status |
 | --- | --- |
@@ -59,6 +59,8 @@ The catalog additionally recognizes `EdgeChamferBuilder`, `FacingBuilder`, `Faci
 
 Existing custom-point query exceptions remain: `SurfaceContour` queries channel 1, `TpMultiAxisDeburring` makes no such UF query, and other operations query channels 0 and 1. These are coverage limits, not proof that those two classes contain no other points; channel applicability requires the 2606 SDK.
 
+V1.24 adds [CAM-snapshot differences](mirror-project.md#cam-difference-diagnostics) while retaining all existing stop conditions. The V1.23 report did not record which channel changed; the last-read operation name is not an established cause. This release adds no operation families or settings transformations.
+
 ## Items to verify against SDK DC 2606
 
 1. All 21 factories above and `OperationCollection.CreateBuilder(CAMObject)`: Python availability, arguments, actual return classes and editor selection for different templates sharing an operation class. Presence in an older C++ or .NET API does not prove presence in Python 2606.
@@ -71,7 +73,7 @@ Existing custom-point query exceptions remain: `SurfaceContour` queries channel 
 8. For V1.20's general model-history admission: Python `NXOpen.Features.BodyFeature`, concrete classes from `Body.GetFeatures()`, `BodyFeature.GetBodies()`, `Feature.GetParents()`, `GetExpressions()`, `GetFeatureErrorMessages()`, `Expression.GetUsingFeatures()` and `GetReferencingExpressions()`. Verify completeness for boolean, multi-body, suppressed and user-defined features and history preservation/replacement by `UF_MODL_transform_entities`. [Rules and limits](mirror-project.md#model-feature-handling).
 9. For V1.21 points: `UF_CAMGEOM_custom_point_s`, pointer-array layout and individual-record cleanup, `UF_CAMGEOM_ask_custom_points`, `UF_CAMGEOM_delete_custom_points`, `UF_CAMGEOM_append_custom_points`; units/reference frames and zero/nonzero meanings of `upper_depth`, `lower_depth`, `depth`, retained associativity and order after replacement. In particular, verify Planar/Cavity cases where reflection changes ABS Z.
 
-10. For V1.23 CSYS: `XformCollection.CreateXformByPlaneXDirPoint` and `CreateXformByPlaneYDirPoint` — Python signatures, acceptance of a `Plane` object, point-projection and X/Y/Z flag semantics, direct parents (Plane/Direction/Point and numerical Scalar). `Direction.Vector`, `Point.Coordinates`, `Scalar.Value`, `Xform.Scale/Origin/Orientation`, `Plane.Method/GetGeometry()`, `CoordinateSystems.CreateCoordinateSystem`, `SmartObject.Evaluate/ReplaceParameters`, `UF_SO_ask_parents`: evaluation order, retained selected faces/edges and installed CSYS, old Xform lifetime. Verify after update, manual save and reopen. This is an older published contract, not a verified SDK 2606 contract.
+10. For V1.23 CSYS: `XformCollection.CreateXformByPlaneXDirPoint` and `CreateXformByPlaneYDirPoint` — Python signatures, acceptance of a `Plane` object, point-projection and X/Y/Z flag semantics, direct parents (Plane/Direction/Point and numerical Scalar). `Direction.Vector`, `Point.Coordinates`, `Scalar.Value`, `Xform.Scale/Origin/Orientation`, `Plane.Method/GetGeometry()`, `CoordinateSystems.CreateCoordinateSystem`, `SmartObject.Evaluate/ReplaceParameters`, `UF_SO_ask_parents`: evaluation order, retained selected faces/edges and installed CSYS, old Xform lifetime. Verify after update, manual save and reopen. This is an older published contract, not a verified SDK 2606 contract. In the user’s V1.23 report, the X variant with a Plane object passed the implemented checks for one CSYS after update; this does not confirm the Y variant, other definitions or the full SDK contract.
 
 V1.22 distinguishes active, unused and unverified fields. The [applicability table](mirror-project.md#custom-cam-points) follows the older UF header and still needs SDK 2606 verification. An active-data read error is not an absent value; active nonzero depths are not rounded.
 
@@ -88,4 +90,4 @@ SDK verification cannot replace an NX run. Each new family needs a test PRT with
 - [Siemens SurfaceContourBuilder, older reference reproduced by ugapi](https://www.ugapi.com/doc/nxopen/a02024.html) and [deprecated API list](https://www.ugapi.com/doc/NXOpen/a10908.html) provide further reason not to transfer old signatures mechanically to 2606.
 - The [official Siemens NX documentation portal](https://docs.sw.siemens.com/en-US/product/209349590) could not be read with the available lookup tool. No SDK 2606 sources were available for exact comparison.
 
-V1.23: **307 regression checks outside NX**, including 50 using test C libraries. Add 22 Plane / Direction / Point scenarios, including the full processing sequence and repeated checks after model update/CAM reads. Coverage remains 21 dispatch routes / 31 Builders. The V1.22 report passed custom-point reads and reached MCS transfer after calling reflection; final geometry and history were not verified. A complete result on the user's PRT remains unconfirmed. The test libraries are not Siemens libraries.
+V1.24: **328 regression checks outside NX**, including 50 using test C libraries. Add 21 diagnostic scenarios for exact CAM comparisons. Coverage remains 21 dispatch routes / 31 Builders. V1.23 passed the earlier MCS stop but failed on a CAM-snapshot mismatch; its cause requires a new detailed report. Changes to protected history receive no authorization. A complete result on the user PRT remains unconfirmed. The test libraries are not Siemens libraries.

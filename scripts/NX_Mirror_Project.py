@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.23
-SCRIPT_VERSION = "V1.23"
+# SCRIPT_VERSION: V1.24
+SCRIPT_VERSION = "V1.24"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -78,6 +78,8 @@ CAM_GEOMETRY_FIELDS = ('PartGeometry', 'BlankGeometry', 'CheckGeometry',
                        'CutAreaGeometry', 'WallGeometry', 'DriveGeometry', 'TrimGeometry')
 CUSTOM_POINT_KINDS = ("Predrill Engage", "Cut Region Start")
 CUSTOM_POINT_DEPTH_FIELDS = ("upper_depth", "lower_depth", "depth")
+BOUNDARY_SNAPSHOT_FIELDS = ("plane_type", "boundary_type", "material_side",
+                            "ignore_holes", "ignore_islands", "ignore_chamfers")
 
 
 def custom_point_depth_indices(operation_class, kind):
@@ -149,6 +151,99 @@ def cam_value_text(value):
     if value[0] == "enum":
         return (value[2] + " " if value[2] else "") + "(код " + str(value[1]) + ")"
     return str(value[1])
+
+
+def geometry_snapshot_differences(before, after, labels):
+    """Describe exact snapshot differences without re-reading mutable NX objects.
+
+    Limits affect text only. Every key and every ordered position is compared;
+    missing records, unavailable channels and readable empty lists stay distinct.
+    """
+    missing = object()
+    sequence = (tuple, list)
+    changed = [key for key in sorted(set(before) | set(after), key=repr)
+               if before.get(key, missing) != after.get(key, missing)]
+    def value_text(value):
+        if value is missing:
+            return "<записи нет>"
+        if value == "unavailable":
+            return "<недоступно: unavailable>"
+        return repr(value)
+    def describe(path, old, new):
+        if old == new:
+            return []
+        if (isinstance(old, sequence) or old is missing) and (isinstance(new, sequence) or new is missing):
+            result = [path + ": количество до=" + (str(len(old)) if old is not missing else "<записи нет>") +
+                      "; после=" + (str(len(new)) if new is not missing else "<записи нет>")]
+            old, new = (() if old is missing else old), (() if new is missing else new)
+            positions = [i for i in range(max(len(old), len(new)))
+                         if (old[i] if i < len(old) else missing) != (new[i] if i < len(new) else missing)]
+            for i in positions[:16]:
+                result.extend(describe(path + "[" + str(i+1) + "]",
+                    old[i] if i < len(old) else missing, new[i] if i < len(new) else missing))
+            if len(positions) > 16:
+                result.append(path + ": показаны первые 16 изменённых позиций из " + str(len(positions)))
+            return result
+        return [path + ": до=" + value_text(old) + "; после=" + value_text(new)]
+    def record_label(key):
+        if not isinstance(key, tuple) or len(key) < 2:
+            return "Запись " + repr(key)
+        tag, kind = key[:2]
+        label = labels.get(tag, "Узел " + str(tag)) + " (tag=" + str(tag) + ")"
+        if kind == "custom" and len(key) == 3 and key[2] in (0, 1):
+            return label + " / " + CUSTOM_POINT_KINDS[key[2]]
+        if isinstance(kind, int) and 0 <= kind < len(GEOMETRY_KINDS):
+            label += " / " + GEOMETRY_KINDS[kind]
+            if len(key) == 4 and key[2] == "boundary":
+                label += " / граница " + str(key[3]) + " / параметры"
+            return label
+        return label + " / " + repr(key[1:])
+    details = []
+    for key in changed[:80]:
+        old, new = before.get(key, missing), after.get(key, missing)
+        lines = []
+        if old is missing or new is missing:
+            lines.append("Запись снимка " + ("добавлена" if old is missing else "удалена"))
+        fields = None
+        if isinstance(key, tuple) and len(key) >= 2 and isinstance(key[1], int):
+            if len(key) == 2:
+                fields = ("Состояние элементов", "Источник элементов (tag)",
+                          "Состояние границ", "Источник границ (tag)",
+                          "CAM-ссылки: элементы, затем элементы границ", "Элементы границ по порядку")
+            elif len(key) == 4 and key[2] == "boundary":
+                fields = BOUNDARY_SNAPSHOT_FIELDS
+        if fields and all(v is missing or isinstance(v, sequence) and len(v) == len(fields) for v in (old, new)):
+            for i, name in enumerate(fields):
+                lines.extend(describe(name, old[i] if old is not missing else missing,
+                                       new[i] if new is not missing else missing))
+        elif isinstance(key, tuple) and len(key) == 3 and key[1] == "custom":
+            def state(value):
+                return ("доступно; количество=" + str(len(value)) if isinstance(value, sequence)
+                        else value_text(value))
+            lines.append("Список точек: до=" + state(old) + "; после=" + state(new))
+            old_points, new_points = (old if isinstance(old, sequence) else ()), (new if isinstance(new, sequence) else ())
+            positions = [i for i in range(max(len(old_points), len(new_points)))
+                         if (old_points[i] if i < len(old_points) else missing) !=
+                            (new_points[i] if i < len(new_points) else missing)]
+            for i in positions[:16]:
+                a = old_points[i] if i < len(old_points) else missing
+                b = new_points[i] if i < len(new_points) else missing
+                path = "Точка " + str(i+1)
+                valid = all(v is missing or isinstance(v, sequence) and len(v) == 2 and
+                            isinstance(v[1], sequence) and len(v[1]) == 3 for v in (a, b))
+                if valid:
+                    for j, name in enumerate(("Point tag",) + CUSTOM_POINT_DEPTH_FIELDS):
+                        lines.extend(describe(path + " / " + name,
+                            missing if a is missing else a[0] if j == 0 else a[1][j-1],
+                            missing if b is missing else b[0] if j == 0 else b[1][j-1]))
+                else:
+                    lines.extend(describe(path, a, b))
+            if len(positions) > 16:
+                lines.append("Показаны первые 16 изменённых точек из " + str(len(positions)))
+        else:
+            lines.extend(describe("Значение снимка", old, new))
+        details.append((record_label(key), lines))
+    return len(changed), details
 
 
 def history_feature_label(tag, record):
@@ -850,6 +945,7 @@ class Trial:
         self.history_baseline, self.history_previous = None, None
         self.body_history, self.body_conversions = {}, []
         self.boundary_planes, self.current_boundaries = {}, {}
+        self.geometry_labels, self.current_geometry_labels = {}, {}
         self.custom_points, self.current_custom_points, self.custom_point_labels = {}, {}, {}
         self.custom_point_classes = {}
         self.moved_boundary_count = 0
@@ -1874,13 +1970,19 @@ class Trial:
         result = {}
         self.current_boundaries = {}
         self.current_custom_points = {}
+        self.current_geometry_labels = {}
         if collect:
+            self.geometry_labels = {}
             self.boundary_planes = {}
             self.custom_points, self.custom_point_labels = {}, {}
             self.custom_point_classes = {}
         for node in self.nodes:
+            node_label = str(node.Name) + " [" + type(node).__name__ + "]"
+            self.current_geometry_labels[int(node.Tag)] = node_label
+            if collect:
+                self.geometry_labels[int(node.Tag)] = node_label
             for kind, label in enumerate(GEOMETRY_KINDS):
-                context = str(node.Name) + " [" + type(node).__name__ + "]/" + label
+                context = node_label + "/" + label
                 self.stage = "Чтение геометрии: " + context + " / элементы"
                 item_state, item_owner, items = self.native.channel(self.native.items, int(node.Tag), kind)
                 if collect and item_state == "unavailable":
@@ -1904,8 +2006,8 @@ class Trial:
                     data = self.native.read_boundary(handle)
                     key = (int(node.Tag), kind, number)
                     self.current_boundaries[key] = (handle, data)
-                    result[(int(node.Tag), kind, "boundary", number)] = tuple(int(getattr(data, name)) for name in
-                        ("plane_type", "boundary_type", "material_side", "ignore_holes", "ignore_islands", "ignore_chamfers"))
+                    result[(int(node.Tag), kind, "boundary", number)] = tuple(
+                        int(getattr(data, name)) for name in BOUNDARY_SNAPSHOT_FIELDS)
                     if collect and data.plane_type == 0:
                         origin, axes = list(data.origin), list(data.matrix)
                         if not all(math.isfinite(v) for v in origin):
@@ -1949,6 +2051,28 @@ class Trial:
             raise RuntimeError("Не удалось получить ни одной CAM-ссылки на геометрию. Недоступные каналы: " + "; ".join(sorted(self.unavailable)[:12]))
         return result
 
+    def check_geometry_snapshot(self, expected, context, failure):
+        # Keep the exact V1.23 equality guard. Only the diagnostic changes;
+        # never sort/normalize stored selections or rewrite the baseline.
+        actual = self.geometry_snapshot()
+        if actual == expected:
+            return
+        labels = dict(getattr(self, "current_geometry_labels", {}))
+        labels.update(getattr(self, "geometry_labels", {}))
+        count, differences = geometry_snapshot_differences(expected, actual, labels)
+        first = differences[0][0] if differences else "нераспознанная структура снимка"
+        self.stage = "Сравнение CAM-геометрии: " + context + " / " + first
+        lines = [failure, "Контрольная точка: " + context +
+                 "; изменённых записей: " + str(count),
+                 "Индексы позиций начинаются с 1; состояние read — чтение в узле, provider — у источника."]
+        for label, details in differences:
+            lines.append(label)
+            lines.extend("  " + detail for detail in details)
+        if count > len(differences):
+            lines.append("Показаны первые " + str(len(differences)) + " изменённых записей из " + str(count))
+        lines.append("Недоступное не считается пустым. Ссылки, их порядок, источники и параметры сравниваются точно.")
+        raise RuntimeError("\n".join(lines))
+
     def capture_custom_points(self, node, kind, points, context):
         operation_class = type(node).__name__
         active = custom_point_depth_indices(operation_class, kind)
@@ -1987,8 +2111,8 @@ class Trial:
         if not self.custom_points:
             return
         self.stage = "Повторное чтение пользовательских точек после геометрии и MCS"
-        if self.geometry_snapshot() != geometry:
-            raise RuntimeError("Изменились CAM-ссылки или определения пользовательских точек до переноса")
+        self.check_geometry_snapshot(geometry, "до переноса пользовательских точек",
+            "Изменились CAM-ссылки или определения пользовательских точек до переноса")
         updates = []
         for key, original in self.custom_points.items():
             context = self.custom_point_labels[key]
@@ -2010,8 +2134,8 @@ class Trial:
             self.native.replace_custom_points(tag, kind, points, self.custom_point_classes[(tag, kind)])
         if updates:
             self.native.update_model()
-        if self.geometry_snapshot() != geometry:
-            raise RuntimeError("Изменились CAM-ссылки, порядок точек или глубины после переноса")
+        self.check_geometry_snapshot(geometry, "после переноса пользовательских точек",
+            "Изменились CAM-ссылки, порядок точек или глубины после переноса")
         self.verify_custom_points()
 
     def verify_custom_points(self):
@@ -2032,8 +2156,8 @@ class Trial:
             return
         # Reacquire handles after modelling/MCS update; never reuse old pointers.
         self.stage = "Повторное чтение границ перед переносом плоскостей"
-        if self.geometry_snapshot() != geometry:
-            raise RuntimeError("Изменились CAM-ссылки или настройки границ до переноса плоскостей")
+        self.check_geometry_snapshot(geometry, "до переноса плоскостей границ",
+            "Изменились CAM-ссылки или настройки границ до переноса плоскостей")
         updates = {}
         for key, (origin, axes) in self.boundary_planes.items():
             handle, data = self.current_boundaries[key]
@@ -2392,8 +2516,8 @@ class Trial:
                 raise RuntimeError("Не подтверждено отражение объекта " + str(tag) +
                                    "\nОжидалось в СК плоскости: " + str(reflected_box(box, 0, 0.0)) +
                                    "\nПолучено: " + str(actual))
-        if self.geometry_snapshot() != geometry:
-            raise RuntimeError("Изменились ссылки на выбранную CAM-геометрию/границы")
+        self.check_geometry_snapshot(geometry, "итоговая проверка после чтения CAM",
+            "Изменились ссылки на выбранную CAM-геометрию/границы")
         self.verify_custom_points()
         self.stage = "Проверка плоскостей границ"
         self.verify_boundary_planes()

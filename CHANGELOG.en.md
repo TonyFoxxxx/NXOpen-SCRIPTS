@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Mirrored CAM project trial V1.24
+
+Diagnostic revision after V1.23 stopped while comparing CAM references. Replace the generic error and last-read operation label with the actual changed node, channel, field and before/after values. Keep the existing exact snapshot comparisons; add no tolerance, normalization or skipped differences. All 328 focused checks outside NX passed, including 50 using test C libraries and 21 new diagnostic scenarios. The cause of the user PRT’s CAM-data change remains unknown; a V1.24 report is needed.
+
+The V1.23 report passed the earlier MCS “2” stop and both Three Planes rebuilds, then stopped before custom-point transfer on a general CAM-snapshot mismatch. The message lacked differences, while the stage incorrectly named the last-read operation/Drive channel. That does not establish a fault in that operation or a change specifically to custom points.
+
+Describe channel availability/providers, reference and boundary-member positions/order, six boundary parameters and point references/active depths. Distinguish missing, unavailable and empty. The 80-record/16-changed-position limits abbreviate only text with explicit counts; exact comparisons of all data remain. Build diagnostics from memory snapshots, preserve read errors and create no extra files. MCS, geometry, history, Tooling Box, rollback and source-integrity behavior remain unchanged.
+
 ## 2026-11-15 — Mirrored CAM project trial V1.23
 
 Add transfer for a recognized associative plane–X/Y direction–point CSYS after V1.22 stopped at MCS “2”. Retain the existing CSYS, Plane/Direction/Point objects and their selections; set orientation flags on a new Xform. Verify the candidate before replacement and the installed definition after replacement, model update and CAM reads. Keep Y′ = R(Y), Z′ = R(Z), X′ = Y′ × Z′. All 307 focused checks outside NX passed, including 50 using test C libraries; 22 new scenarios exercise the definition and protection failures. SDK 2606 compatibility and a complete NX result remain unconfirmed.
