@@ -4,7 +4,9 @@
 
 Audit date: **2026-11-15**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
 
-V1.25.02 queries modeling parents of curves/points when selecting direct reflection targets. Operation coverage is unchanged; resolution of the dependency damage in the repeated V1.25.01 PRT report remains unconfirmed. [Change and limitations](mirror-project.md#modeling-parents-of-curves-and-points--v12502).
+V1.25.02 queries modeling parents of curves/points when selecting direct reflection targets. Operation coverage is unchanged. The user V1.25.02 report confirms the same failure after the common transform of three bodies and 23 points; target-selection changes did not preserve dependent history. [Report analysis](mirror-project.md#v125-result-in-nx).
+
+Initial builder reads in this report succeeded for 35 operations: SurfaceContour — 4, VolumeBased25DMillingOperation — 4, PlanarMilling — 13, CavityMilling — 2, HoleDrilling — 1, CylinderMilling — 5, ZLevelMilling — 2, TpMultiAxisDeburring — 4. Both CavityMilling operations opened through `CreateCavityMillingBuilder` as `CavityMillingBuilder`. These are observed API classes in this PRT, not a UI-template inventory or confirmation of correctly mirrored settings. The run did not reach final reference checks or operation regeneration.
 
 ## What the catalog means
 
@@ -105,3 +107,5 @@ V1.25: **368 regression checks outside NX**, including 53 using test C libraries
 Additional report regressions: **371 focused checks**, including 53 with test C libraries. Three synthetic scenarios preserve rejection of the observed V1.25 failure. V1.25.01 changes only the journal version and corresponding catalog version/SHA-256; the algorithm is unchanged.
 
 V1.25.02: **394 focused checks**, including 61 using C fixtures. The 23 added scenarios cover target selection, modeling-parent reads and dependent-geometry position checks; they provide no new evidence of CAM-family compatibility with actual NX.
+
+After the V1.25.02 report: **395 checks**, with an additional protective-stop regression using three bodies and 23 points whose parent queries return empty. Journal version and catalog are unchanged. Final CAM-boundary retention and operation regeneration remain unconfirmed.

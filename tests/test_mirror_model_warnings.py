@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import Mock
 
-from test_mirror_body_history import M, Fixture, Feature, Expression
+from test_mirror_body_history import M, Fixture, Feature, Expression, Body, BodyFeature
 
 
 PARENT_WARNING = 'Parent of the point is either suppressed or modeled away.'
@@ -448,6 +448,42 @@ class ReportedV125HistoryTests(unittest.TestCase):
         self.assertEqual(set(t.history_baseline[damaged[0].Tag]['expressions']), {500, 501})
         self.assertEqual(set(t.history_baseline[damaged[3].Tag]['expressions']), {502, 503})
         self.assertNotIn('ПРОЙДЕНО', '\n'.join(t.lines))
+
+    def test_v12502_three_bodies_and_23_parentless_points_still_reject_history_damage(self):
+        # V1.25.02 reports these input categories/counts, not which individual
+        # target caused the damage. Synthetic tags/history below exercise the
+        # guard with that selection; they do not reproduce the NX kernel.
+        t, datums, damaged, _ = self.workflow()
+        for body_tag, feature_tag in ((1100,80),(1200,81)):
+            body = Body(body_tag)
+            feature = BodyFeature(feature_tag,'BREP',bodies=[body])
+            feature.OwningPart = t.part
+            body.features = [feature]
+            t.bodies.append(body)
+            t.part.Bodies.append(body)
+            t.part.Features.append(feature)
+        points = list(range(200,223))
+        for tag in points:
+            point = t.nx.Point()
+            point.Tag = tag
+            t.refs[tag] = point
+        t.native.sketch_of_geometry.side_effect = lambda tag: 700 if tag in (101,102) else 0
+        t.native.smart_parents = Mock(return_value=None)
+        t.native.entity_parents.return_value = ()
+        with self.assertRaisesRegex(RuntimeError, 'сохраняемые модельные элементы; элементов: 8') as caught:
+            t.run_in_absolute_wcs()
+        t.native.transform_entities.assert_called_once_with([1000,1100,1200]+points, [0]*16)
+        self.assertEqual([c.args[0] for c in t.native.entity_parents.call_args_list],points)
+        self.assertEqual(t.model_geometry,{tag:() for tag in points})
+        self.assertEqual(t.sketch_geometry,{101:700,102:700})
+        self.assertEqual(set(t.bounds),set(points)|{101,102})
+        self.assertIn('Прямые цели UF_MODL_transform_entities: 26',t.lines)
+        for feature in datums + list(damaged):
+            self.assertIn('элемент ' + str(feature.Tag),str(caught.exception))
+        for query in (t.transfer_mcs_and_stock,t.setup.DeleteToolPath,t.native.update_model,
+                      t.transfer_custom_points,t.transfer_boundary_planes):
+            query.assert_not_called()
+        self.assertNotIn('ПРОЙДЕНО','\n'.join(t.lines))
 
     def test_datum_parent_changes_are_not_the_only_rejection_reason(self):
         t, datums, damaged, _, _ = self.run_failed()

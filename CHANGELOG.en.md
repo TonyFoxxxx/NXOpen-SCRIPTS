@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — V1.25.02 report analysis; journal unchanged
+
+The user run confirms the same eight damaged retained features after the common transformation of three bodies and 23 points. All those points returned no modeling parents; both sketch arcs were excluded. V1.25.02 target-selection changes did not resolve the failure. Record the evidence limits: no individual culprit has been isolated, final CAM boundaries were not checked, and a successful empty UF result does not verify the nonempty-array branch in DC 2606.
+
+Add a regression using these target categories/counts; all 395 focused checks outside NX pass, including the previous 61 using C fixtures. Preserve rejection before MCS/stock transfer and toolpath deletion. Journal source, V1.25.02 and catalog SHA-256 are unchanged. Dependency-history transfer has no ready fix; rerunning the same revision is unnecessary. [Details](docs/en/mirror-project.md#v125-result-in-nx).
+
 ## 2026-11-15 — Mirrored CAM project trial V1.25.02
 
 Query modeling parents with `UF_MODL_ask_entity_parents` before separately transforming curves/points outside sketches and UF Smart Objects. Exclude dependent geometry from direct targets while retaining position, parent and CAM-reference checks. Selected Smart curves/points also require position verification. Report exact input tags and classes for the common transform. Read errors never mean no parents; authorized history changes are not expanded.

@@ -41,7 +41,7 @@ Each guide covers features, use, settings, output files and limitations. See the
 
 Query modeling parents for curves/points outside sketches and UF Smart Objects. Exclude dependent objects from direct transformation while retaining position, parent and CAM-reference checks. Report exact transformation inputs. [Details](docs/en/mirror-project.md#latest-release).
 
-**NX test result:** the V1.25.01 report repeats the same eight damaged history features. A complete fix in V1.25.02 remains unconfirmed; protective stops remain. All 394 focused checks outside NX pass, including 61 using test C libraries. [Report analysis and limitations](docs/en/mirror-project.md#v125-result-in-nx).
+**NX test result:** V1.25.02 also failed. The common call with three bodies and 23 points damaged the same eight retained features; both sketch arcs were excluded. Target-selection changes did not resolve the failure. With the added regression, 395 focused checks outside NX pass, including 61 using test C libraries; these verify protective rejection, not NX functionality. No new journal revision was issued for this report. [Report analysis and limitations](docs/en/mirror-project.md#v125-result-in-nx).
 
 In updater **V1.20**, run Check and update **«Зеркальная копия CAM-проекта — тест» to V1.25.02**. If your updater is older, update and restart it first. [Test workflow](docs/en/mirror-project.md).
 
