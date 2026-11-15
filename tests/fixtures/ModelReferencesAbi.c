@@ -8,7 +8,9 @@ typedef uint32_t tag_t;
 typedef struct { tag_t tag; int count; } *uf_list_p_t;
 static int mode, invalid_free, string_free_calls, string_free_count;
 static int compare_calls, topology_calls, list_delete_calls, parameter_calls;
+static int face_body_calls, edge_body_calls;
 static tag_t last_feature, first_object, second_object, parameter_tag;
+static tag_t reference_tag;
 static double last_facet, last_distance;
 static void *allocated[16];
 static int allocation_kind[16]; /* 1 plain, 2 names array, 3 name, 4 linked list */
@@ -37,18 +39,19 @@ void fixture_reset(int value) {
     for (int i=0;i<16;++i) if (allocated[i]) abort();
     mode=value; invalid_free=string_free_calls=string_free_count=0;
     compare_calls=topology_calls=list_delete_calls=parameter_calls=0;
+    face_body_calls=edge_body_calls=0; reference_tag=0;
     last_feature=first_object=second_object=parameter_tag=0;
     last_facet=last_distance=0;
 }
 int fixture_stat(int index) {
     int outstanding=0; for (int i=0;i<16;++i) outstanding+=allocated[i]!=NULL;
     const int values[]={outstanding,invalid_free,string_free_calls,string_free_count,
-        compare_calls,topology_calls,list_delete_calls,parameter_calls};
-    return index>=0 && index<8 ? values[index] : -1;
+        compare_calls,topology_calls,list_delete_calls,parameter_calls,face_body_calls,edge_body_calls};
+    return index>=0 && index<10 ? values[index] : -1;
 }
 tag_t fixture_tag(int index) {
-    const tag_t values[]={last_feature,first_object,second_object,parameter_tag};
-    return index>=0 && index<4 ? values[index] : 0;
+    const tag_t values[]={last_feature,first_object,second_object,parameter_tag,reference_tag};
+    return index>=0 && index<5 ? values[index] : 0;
 }
 double fixture_tolerance(int index) { return index==0 ? last_facet : last_distance; }
 
@@ -93,6 +96,19 @@ int UF_MODL_compare_topology(tag_t a, tag_t b, double facet, double distance, in
     if (mode==16) return 780;
     if (mode!=17) *status=mode==18 ? 99 : 5;
     return 0;
+}
+static int reference_body(tag_t reference, tag_t *body) {
+    reference_tag=reference;
+    if (mode==31) return 630003; /* Suppressed: no promise that UF can read it. */
+    if (mode==32) return 0; /* Unwritten output must not become an absent owner. */
+    *body=mode==33 ? 0 : UINT32_C(0xe0000042);
+    return mode==34 ? 630003 : 0; /* Even a nonnull output cannot override an error. */
+}
+int UF_MODL_ask_face_body(tag_t face, tag_t *body) {
+    ++face_body_calls; return reference_body(face,body);
+}
+int UF_MODL_ask_edge_body(tag_t edge, tag_t *body) {
+    ++edge_body_calls; return reference_body(edge,body);
 }
 int UF_MODL_create_list(uf_list_p_t *list) {
     if (mode==19) { *list=NULL; return 0; }

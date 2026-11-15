@@ -2,7 +2,22 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.26.01**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.26.02**.
+
+<a id="reference-ownership-v12602"></a>
+## V1.26.02: geometric reference ownership
+
+The V1.26.01 report confirms lookup of the previous revision's ten UF exports, successful nonempty reference/name-array reads, and membership reads for four sketches. Then `Face/Edge.GetBody()` failed with **630003 — Operation forbidden on suppressed object**. The failing face or edge was not recorded: the stale stage named the last inspected `CAM_MAIN`, so that group cannot be blamed. Candidate creation, reflection and history replacement had not started. The report records successful Undo, source restoration, an unchanged checksum and a clear modification flag.
+
+Ownership is now checked first by exact tags and types from the captured `Body.GetFaces()` / `GetEdges()` topology of **all bodies in the copy**. A match needs no repeated `GetBody()` call. Ambiguous ownership or a Face/Edge type mismatch is an error. References absent from the index use `UF_MODL_ask_face_body` / `UF_MODL_ask_edge_body`; these exports join the preflight before body changes. The older published C contract specifies `int (tag_t, tag_t*)` but **does not guarantee access to suppressed geometry in DC 2606**. UF errors, including 630003, and null/unwritten outputs remain failures.
+
+Inspect all readable direct Face/Edge references of retained features. Query each repeated tag once, but list every consumer and role in the failure. Distinguish unknown bodies, owner-read failures, and references to the selected body absent from its final topology. The latter require a separate exact intermediate-support map; a final-body copy does not provide it. Readable references to another known body retain the previous allowance without remapping and remain subject to subsequent exact comparison. No automatic unsuppression, feature-history timestamp change or coplanar face/edge substitution is introduced. Complete indirect Section/ScCollector definitions and sketch constraints remain unproven.
+
+The stage now identifies the actual consumer, tag and role; the aggregated failure preserves the primary UF error, code and traceback. These ownership problems are reported **before candidate creation**. This repairs ownership reading and diagnostics; **it does not establish reconstruction of missing intermediate supports or a completed CAM copy**. The prototype still requires rollback, with no subsequent MCS/stock transfer or toolpath deletion.
+
+All **463 focused checks outside NX** pass, including **91 using separately compiled C fixtures**. The 16 new regressions cover exact ownership without `GetBody()`, complete failure enumeration, preserved error codes/causes, distinct Face/Edge C exports, unsigned tags and unreadable outputs. They neither reproduce the NX kernel nor prove 2606 compatibility. Next, run V1.26.02 on the saved source and share the complete report to establish which supports are accessible and which need additional implementation. [SDK verification checklist](#replacement-probe-sdk-2606).
+
+New C-signature source: [older Siemens uf_modl.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl.html). Intermediate-object correspondence and owner-query behavior on suppressed objects require actual NX 2606 checks.
 
 <a id="uf-api-v12601"></a>
 ## V1.26.01: UF C API replaces unavailable Python methods
@@ -15,7 +30,7 @@ V1.26.01 calls the DLL export `UF_MODL_ask_references_of_features` through the e
 
 The other UF operations introduced by the V1.26 prototype also use C contracts: `UF_MODL_compare`, `UF_MODL_compare_topology`, `UF_MODL_delete_object_parms`. The latter receives an actual `uf_list`; verify its single entry is the new independent body's tag and release the list itself, not geometry. Existing independence and external-consumer guards remain mandatory before parameter removal. Check all ten required exports **before changing bodies**. Missing exports stop the experiment; unknown data is never accepted. This does not claim the other Python methods are absent on the user's installation; they are no longer required.
 
-The prototype still requires rollback, with no subsequent MCS/stock transfer or toolpath deletion. **447 focused checks outside NX** pass, including **86 using C fixtures**. New cases cover pointer levels, ownership, errors/partial outputs, comparisons and the candidate list. These do not test DC 2606 DLLs or its kernel. Run V1.26.01 on the saved source and share the complete report. SDK 2606, body extraction/replacement and final dependent-sketch preservation remain unconfirmed.
+The prototype still requires rollback, with no subsequent MCS/stock transfer or toolpath deletion. **447 focused checks outside NX** pass, including **86 using C fixtures**. New cases cover pointer levels, ownership, errors/partial outputs, comparisons and the candidate list. These do not test DC 2606 DLLs or its kernel. The subsequent run is analyzed above under V1.26.02. SDK 2606, body extraction/replacement and final dependent-sketch preservation remain unconfirmed.
 
 C signature sources: [older Siemens uf_modl.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl.html), [uf_modl_utilities.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl_utilities.html), [uf.h / UF_free_string_array](https://www.ugapi.com/doc/UFun/uf/uf.html). A published .NET method is not evidence of Python availability.
 
@@ -30,7 +45,7 @@ C signature sources: [older Siemens uf_modl.h](https://www.ugapi.com/doc/UFun/uf
 4. `ReplaceFeatureBuilder` uses the checked explicit map, disabled automatic matching and `MapOnlyObjectsWithModelingDependencies`. After Commit, check original body/face/edge tags, geometric references, retained features and expressions, sketch membership, dependent-curve positions, new warnings, CAM selections, stock settings and MCS reference selections. The API documentation **does not guarantee tag preservation**; changed tags cause rejection.
 5. Success and failure both enter the existing copy-only rollback path, restore the source and verify its integrity. This branch does not transfer MCS/stock or delete toolpaths. Even a successful prototype **is not left for saving or CAM regeneration**. If Undo fails, retain the existing attempt to close only this invocation's copy without saving and report the actual outcome.
 
-Curves upstream of the replaced body may remain at their original positions in this limited experiment. Complete sketch constraints, all associative definitions and whole-project transfer remain unproven. The next NX step is to run V1.26.01 on the saved source without components and share the complete report; do not save the experimental branch's result. The disk file remains the initial PRT copy.
+Curves upstream of the replaced body may remain at their original positions in this limited experiment. Complete sketch constraints, all associative definitions and whole-project transfer remain unproven. The next NX step is to run V1.26.02 on the saved source without components and share the complete report; do not save the experimental branch's result. The disk file remains the initial PRT copy.
 
 ### Part Boundary: groove centerlines
 
@@ -43,6 +58,7 @@ V1.26 reads application data for the boundary and **each member**, using `UF_CAM
 
 | Methods / definitions | Outstanding verification |
 | --- | --- |
+| `Body.GetFaces/GetEdges`, `UF_MODL_ask_face_body`, `UF_MODL_ask_edge_body` | Completeness of current topology and C owner-query behavior for intermediate/suppressed references. An exact indexed tag replaces a redundant GetBody; an absent tag requires separate evidence, not substituted geometry. |
 | `UF_MODL_ask_references_of_features`, `UF_free`, `UF_free_string_array` | Windows 2606 ABI, complete intermediate-history references, part ownership and names/allocator ownership. The missing Python method is no longer required. |
 | `SketchFeature.Sketch`, `Feature.GetEntities`, `Sketch.GetAllGeometry/GetAllExpressions` | Actual classes/results, associative geometry and complete dependencies; this snapshot does not establish every sketch constraint. |
 | `CreateExtractFaceBuilder(None)`, `CreateRuleBodyDumb`, `ExtractBodyCollector.ReplaceRules`, `CommitFeature` | Non-associative extraction without changing originals, independent history, solid/sheet support. |
@@ -89,7 +105,9 @@ Sources: [older Siemens `uf_modl.h` header](https://github.com/feifeiwang/NXOPEN
 
 ## Latest release
 
-Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.26.01**. [Updater upgrade](updater.md#upgrading-to-v120).
+Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.26.02**. [Updater upgrade](updater.md#upgrading-to-v120).
+
+**V1.26.02 · 2026-11-16** — Resolve reference ownership by exact final-topology tags without redundant GetBody calls. Other faces/edges use UF owner queries; report all failures with consumers. Do not substitute intermediate supports; preserve guards and mandatory rollback. [Error 630003 and correction limits](#reference-ownership-v12602).
 
 **V1.26.01 · 2026-11-15** — Replace the unavailable Python UF reference reader with its C export. Preflight all UF prototype exports; use C comparison and candidate-list parameter removal as well. Guards and mandatory rollback remain. [Report and correction](#uf-api-v12601).
 
@@ -161,7 +179,7 @@ MCS transfer retains the existing CSYS. Recognized Three Planes definitions reta
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.26.01**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.26.02**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. **If the one-body prototype ran, it must roll back; share the report and do not save an experimental result.** The following inspection/save steps apply only to a successful full-project branch. Read and share the report using **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -281,7 +299,7 @@ The V1.23 report passed the previous MCS “2” stop and both Three Planes rebu
 
 ## Files and validation
 
-V1.26.01: **447 focused checks outside NX**, including **86 C-fixture checks**. The new C bridge is exercised without a Python UF wrapper: array/string ownership, partial errors, unsigned tags, comparison outputs and exact single-body list readback. Existing mapping, history, MCS/stock, boundary and rollback guards pass. This is not a real NX/SDK 2606 compatibility test.
+V1.26.02: **463 focused checks outside NX**, including **91 C-fixture checks**. Coverage includes exact ownership from final topology, Face/Edge C queries, unsigned tags, unreadable outputs, all affected consumers, and preservation of the primary error through rollback. Existing mapping, history, MCS/stock and boundary guards pass. This is not a real NX/SDK 2606 compatibility test.
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 

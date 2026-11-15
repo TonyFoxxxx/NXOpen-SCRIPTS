@@ -202,9 +202,9 @@
       "file": "NX_Mirror_Project.py",
       "version": "V1.26",
       "path": "scripts/NX_Mirror_Project.py",
-      "sha256": "60aa6557d7ebd58d757bb63a05a33d8ee42bb646f72829829d19bcdf694b3545",
+      "sha256": "1fe030d8a59b50ec2ba6c02e01e1c4ae84f1488b816ced7a8eb38bed6efc47b2",
       "description": "Тест без компонентов. При зависимой истории — прототип замены одного тела с явной картой опор и обязательным откатом. Проверяются выбранные CAM-объекты и Tool Position элементов границ. Работа в NX 2606 не подтверждена; без автосохранения.",
-      "release_version": "V1.26.01"
+      "release_version": "V1.26.02"
     },
     {
       "id": "NX_Update_Scripts",

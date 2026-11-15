@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from test_mirror_replacement_probe import M, ProbeWorld
 
@@ -87,10 +87,54 @@ class ReplacementAbiTests(unittest.TestCase):
     def test_bind_preflight_checks_every_export_before_any_call(self):
         self.native.bind=Mock(wraps=self.native.bind)
         self.native.prepare_replacement_api()
-        self.assertEqual(self.native.bind.call_count,10)
+        self.assertEqual(self.native.bind.call_count,12)
         self.native.prepare_replacement_api()
-        self.assertEqual(self.native.bind.call_count,10)
-        self.assertEqual([self.stat(i) for i in (4,5,6,7)],[0,0,0,0])
+        self.assertEqual(self.native.bind.call_count,12)
+        self.assertEqual([self.stat(i) for i in (4,5,6,7,8,9)],[0,0,0,0,0,0])
+
+    def test_owner_queries_use_distinct_face_edge_exports_and_unsigned_tags(self):
+        for kind,counters in (('Face',(1,0)),('Edge',(0,1))):
+            self.reset(0)
+            with self.subTest(kind=kind):
+                self.assertEqual(self.native.reference_body(0xf0000017,kind),0xe0000042)
+                self.assertEqual(self.tag(4),0xf0000017)
+                self.assertEqual((self.stat(8),self.stat(9)),counters)
+
+    def test_owner_query_missing_or_null_output_is_not_an_empty_reference(self):
+        for kind in ('Face','Edge'):
+            for mode in (32,33):
+                self.reset(mode)
+                with self.subTest(kind=kind,mode=mode), self.assertRaisesRegex(RuntimeError,'не прочитано тело опоры'):
+                    self.native.reference_body(17,kind)
+
+    def test_owner_query_preserves_suppressed_code_even_with_nonnull_output(self):
+        for kind in ('Face','Edge'):
+            for mode in (31,34):
+                self.reset(mode)
+                with self.subTest(kind=kind,mode=mode), self.assertRaises(M.NativeApiError) as caught:
+                    self.native.reference_body(17,kind)
+                self.assertEqual(caught.exception.code,630003)
+                self.assertEqual(caught.exception.context,'UF_MODL_ask_'+kind.lower()+'_body')
+
+    def test_owner_query_invalid_tag_or_kind_never_calls_c(self):
+        for tag in (0,-1,0x100000000,True,1.0,'8'):
+            with self.subTest(tag=tag), self.assertRaises(RuntimeError): self.native.reference_body(tag,'Face')
+        for kind in ('Body','Curve','face',None):
+            with self.subTest(kind=kind), self.assertRaises(ValueError): self.native.reference_body(8,kind)
+        self.assertEqual((self.stat(8),self.stat(9)),(0,0))
+
+    def test_missing_owner_export_stops_before_reference_read_or_candidate(self):
+        for missing in ('UF_MODL_ask_face_body','UF_MODL_ask_edge_body'):
+            original=self.native.bind
+            def bind(name,*args):
+                if name==missing: raise RuntimeError('missing '+name)
+                return original(name,*args)
+            with patch.object(self.native,'bind',side_effect=bind):
+                w=ProbeWorld();w.t.native=self.native
+                with self.subTest(missing=missing), self.assertRaisesRegex(RuntimeError,missing): w.probe.run()
+            self.assertFalse(hasattr(self.native,'_replacement_api'))
+            self.assertEqual(w.events,[])
+            self.assertEqual(self.tag(0),0)
 
     def test_missing_export_does_not_complete_preflight_or_start_prototype(self):
         original=self.native.bind

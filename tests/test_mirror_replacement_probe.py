@@ -91,6 +91,7 @@ class ProbeWorld:
             sketch_of_geometry=Mock(return_value=self.sketch.Sketch.Tag))
         t.native.prepare_replacement_api = Mock()
         t.native.feature_references = Mock(side_effect=self.ask_references)
+        t.native.reference_body = Mock(side_effect=lambda tag,kind:self.objects[tag].body.Tag)
         t.native.delete_candidate_parameters = Mock(side_effect=self.remove_copy_parameters)
         t.native.compare_geometry = Mock(return_value=1)
         t.native.compare_topology = Mock(side_effect=lambda a,b,*args:5 if isinstance(self.objects[a],Edge) and not isinstance(self.objects[a],Face) else 1)
@@ -220,6 +221,120 @@ class ProbeReaderTests(unittest.TestCase):
             with self.assertRaises(RuntimeError): M.unique_probe_mapping([1,2],[10,20],predicate,'faces')
 
 
+class ReferenceOwnershipTests(unittest.TestCase):
+    def assert_before_candidate(self, w):
+        self.assertEqual(w.events,[])
+        w.t.part.Features.CreateExtractFaceBuilder.assert_not_called()
+        w.t.native.delete_candidate_parameters.assert_not_called()
+        w.t.native.transform_entities.assert_not_called()
+
+    def test_exact_final_topology_allows_protocol_without_suppressed_get_body(self):
+        w=ProbeWorld()
+        class Suppressed(RuntimeError): ErrorCode=630003
+        for obj in w.body.faces+w.body.edges:
+            obj.GetBody=Mock(side_effect=Suppressed('Operation forbidden on suppressed object'))
+        with self.assertRaises(M.ReplacementProbeComplete): w.probe.run()
+        for obj in w.body.faces+w.body.edges: obj.GetBody.assert_not_called()
+        w.t.native.reference_body.assert_not_called()
+        self.assertEqual(w.probe.map[1001],4001)
+        self.assertEqual(w.probe.map[1003],4003)
+        self.assertEqual(w.cam[(900,0)][4],(602,))
+        self.assertEqual(w.cam[(900,0,'boundary_app',1,1)][-2:],(1,1))
+
+    def test_exact_owner_index_includes_other_captured_bodies(self):
+        w=ProbeWorld(); other=w.make_body(2000)
+        w.references[22]=((2001,b'other face'),(2003,b'other edge'))
+        w.freeze()
+        for obj in other.faces+other.edges: obj.GetBody=Mock(side_effect=AssertionError('redundant query'))
+        w.probe.snapshot()
+        w.t.native.reference_body.assert_not_called()
+        self.assertIn('тело=2000','\n'.join(w.t.lines))
+        self.assert_before_candidate(w)
+
+    def test_nonfinal_reference_to_other_known_unchanged_body_keeps_original_tag(self):
+        w=ProbeWorld(); other=w.make_body(2000); w.register(Edge(2999,other))
+        w.references[22]=((2999,b'historical external edge'),)
+        w.freeze(); w.probe.snapshot()
+        w.t.native.reference_body.assert_called_once_with(2999,'Edge')
+        self.assertEqual(w.probe.initial_refs[22],((2999,b'historical external edge'),))
+        self.assertIn('Опора другого тела сохранена','\n'.join(w.t.lines))
+        self.assert_before_candidate(w)
+
+    def test_unknown_owner_body_is_rejected_before_extraction(self):
+        w=ProbeWorld(); w.register(Face(1999,Body(9999)))
+        w.references[22]=((1999,b'unknown body'),)
+        with self.assertRaisesRegex(M.UnresolvedProbeReferences,'тело 9999, которого нет'): w.probe.run()
+        self.assert_before_candidate(w)
+
+    def test_suppressed_reference_lists_every_consumer_and_queries_each_tag_once(self):
+        w=ProbeWorld(); w.register(Face(1999,w.body)); w.register(Edge(1998,w.body))
+        w.references[22]=((1999,b'attachment'),(1999,b'orientation'))
+        w.references[23]=((1999,b'projection face'),(1998,b'projection edge'))
+        failure=M.NativeApiError(630003,'UF_MODL_ask_face_body','Operation forbidden on suppressed object')
+        def owner(tag,kind):
+            if tag==1999: raise failure
+            return 1000
+        w.t.native.reference_body.side_effect=owner
+        # Last feature/curve-state stage must not be blamed for the bad support.
+        group=Feature(90,'FSET','CAM_MAIN'); w.add_feature(group); w.freeze()
+        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.run()
+        message=str(caught.exception)
+        for role in ('attachment','orientation','projection face','projection edge'):
+            self.assertIn(role,message)
+        self.assertEqual(w.t.native.reference_body.call_count,2)
+        self.assertIn('SKETCH_22 [SKETCH] (элемент 22) / опора tag=1999 / attachment',w.t.stage)
+        self.assertNotIn('CAM_MAIN',w.t.stage)
+        self.assertIn('неподтверждённых ссылок 4','\n'.join(w.t.lines))
+        self.assertIn('опора промежуточной истории тела 1000',message)
+        self.assertEqual(caught.exception.code,630003)
+        self.assertIs(caught.exception.__cause__,failure)
+        self.assert_before_candidate(w)
+
+    def test_owner_error_later_in_scan_remains_chained_after_earlier_map_failure(self):
+        w=ProbeWorld(); w.register(Face(1999,w.body)); w.register(Edge(1998,w.body))
+        w.references[22]=((1999,b'missing final face'),)
+        w.references[23]=((1998,b'unreadable edge'),)
+        failure=M.NativeApiError(630003,'UF_MODL_ask_edge_body','suppressed edge')
+        w.t.native.reference_body.side_effect=[1000,failure]
+        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.run()
+        self.assertIs(caught.exception.__cause__,failure)
+        self.assertEqual(caught.exception.code,630003)
+        self.assertIn('missing final face',str(caught.exception))
+        self.assertIn('unreadable edge',str(caught.exception))
+        self.assert_before_candidate(w)
+
+    def test_owner_runtime_error_cannot_be_accepted_as_an_empty_reference(self):
+        w=ProbeWorld(); w.register(Face(1999,w.body)); w.references[22]=((1999,b'attachment'),)
+        failure=RuntimeError('owner output was NULL')
+        w.t.native.reference_body.side_effect=failure
+        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.run()
+        self.assertIn('owner output was NULL',str(caught.exception))
+        self.assertIs(caught.exception.__cause__,failure)
+        self.assert_before_candidate(w)
+
+    def test_duplicate_topology_ownership_or_kind_is_rejected(self):
+        for bad in (((1001,),()),((),(1001,))):
+            w=ProbeWorld(); w.probe.topology[2000]=bad
+            with self.subTest(topology=bad), self.assertRaisesRegex(RuntimeError,'Неоднозначная принадлежность/тип'):
+                w.probe.run()
+            w.t.native.reference_body.assert_not_called()
+            self.assert_before_candidate(w)
+
+    def test_nxopen_type_must_match_exact_topology_kind(self):
+        w=ProbeWorld(); w.register(Edge(1001,w.body))
+        with self.assertRaisesRegex(M.UnresolvedProbeReferences,'Тип NXOpen Edge.*топологией Face'):
+            w.probe.run()
+        w.t.native.reference_body.assert_not_called()
+        self.assert_before_candidate(w)
+
+    def test_reference_object_access_failure_identifies_consumer_and_role(self):
+        w=ProbeWorld(); w.objects[1001].OwningPart=None
+        with self.assertRaisesRegex(RuntimeError,'Не подтверждена опора текущей копии: 1001'):
+            w.probe.run()
+        self.assertIn('Объект опоры / SKETCH_22 [SKETCH] (элемент 22) / tag=1001 / attachment face',w.t.stage)
+        self.assert_before_candidate(w)
+
+
 class ProbeRoutingTests(unittest.TestCase):
     def test_dependency_graph_not_feature_names_selects_one_body(self):
         f = Fixture(); t = f.workflow(legacy_branch=False)
@@ -296,8 +411,11 @@ class ReplacementProtocolTests(unittest.TestCase):
 
     def test_intermediate_history_face_requires_exact_support_not_coplanar_substitute(self):
         w = ProbeWorld(); w.register(Face(1999,w.body)); w.references[22] = ((1999,b'old attachment'),)
-        with self.assertRaisesRegex(RuntimeError,'промежуточной истории.*\n22 / old attachment: Face 1999'):
+        with self.assertRaises(M.UnresolvedProbeReferences) as caught:
             w.probe.run()
+        self.assertIn('опора промежуточной истории тела 1000',str(caught.exception))
+        self.assertIn('SKETCH_22 [SKETCH] (элемент 22) / опора tag=1999 / old attachment',str(caught.exception))
+        w.t.native.reference_body.assert_called_once_with(1999,'Face')
         self.assertEqual(w.events,[])
 
     def test_candidate_preparation_cannot_damage_original_sketch(self):

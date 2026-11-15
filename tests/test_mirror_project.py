@@ -732,6 +732,23 @@ class TransactionTests(unittest.TestCase):
         self.assertIn('Traceback (most recent call last)', report)
         self.assertIn('builder initialization failed', report)
 
+    def test_aggregated_support_failure_keeps_native_cause_and_copy_rollback(self):
+        def fail():
+            try:
+                raise M.NativeApiError(630003,'UF_MODL_ask_edge_body','Operation forbidden on suppressed object')
+            except M.NativeApiError as primary:
+                raise M.UnresolvedProbeReferences(['SKETCH_001 / tag=73067 / attachment'],primary) from primary
+        events,report=self.run_with_trial(fail)
+        self.assertIn(('undo',55),events)
+        self.assertIn(('active',1,1),events)
+        self.assertIn('Код NX/API (code): 630003',report)
+        self.assertIn('UF_MODL_ask_edge_body',report)
+        self.assertIn('SKETCH_001 / tag=73067 / attachment',report)
+        self.assertIn('The above exception was the direct cause',report)
+        self.assertIn('Создание кандидата и замена истории не начинались',report)
+        self.assertIn('контрольная сумма не изменилась',report)
+        self.assertIn('признак изменения не установлен',report)
+
     def test_failed_custom_point_append_after_deletion_uses_copy_undo_and_restores_source(self):
         native = object.__new__(M.NativeCam)
         delete, append = Mock(return_value=0), Mock(return_value=7755)

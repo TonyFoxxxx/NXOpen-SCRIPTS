@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.26.02
+
+Repair geometric-reference ownership reading after GetBody error 630003: exact tags/types from all bodies' captured final topology replace the redundant owner call. Other objects use preflighted UF_MODL_ask_face_body/ask_edge_body exports. Errors, null outputs, unknown bodies and intermediate supports without candidate correspondence stop the trial before candidate creation. List every affected consumer and role together; retain the primary UF error, code and traceback. Correct the stale stage that incorrectly named CAM_MAIN.
+
+Add 16 regressions; all 463 focused checks outside NX pass, including 91 using C fixtures. The V1.26.01 report confirmed nonempty UF references and four sketch memberships but never reached body creation/replacement. This does not promise suppressed-geometry access or intermediate-support reconstruction in DC 2606. Preserve exact selections, history, MCS/stock, boundaries and mandatory rollback; a complete mirrored CAM project remains unconfirmed. Align the suffixed version, SHA-256 and bilingual documentation. [Details and SDK checklist](docs/en/mirror-project.md#reference-ownership-v12602).
+
 ## 2026-11-15 — Mirrored CAM project trial V1.26.01
 
 Fix the observed AttributeError before candidate creation: read references using `UF_MODL_ask_references_of_features`, with separate tag/string-array ownership and raw-name identity. The other UF prototype calls also use their C contracts; check all exports before changing bodies. Parameter removal takes a verified single-candidate linked list. Missing outputs, invalid counts, partial errors and cleanup failures remain errors; no geometry/history guard is disabled.

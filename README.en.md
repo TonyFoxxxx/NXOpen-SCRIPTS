@@ -32,18 +32,18 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.26.01 | CAM-copy trial; dependent history uses a one-body prototype with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.26.02 | CAM-copy trial; dependent history uses a one-body prototype with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.20 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.26.01 · 2026-11-15
+### Latest update — Mirrored CAM project trial V1.26.02 · 2026-11-16
 
-The V1.26 NX run stopped before body changes because Python Modl lacks `AskReferencesOfFeatures`. V1.26.01 reads references through the UF C export and uses C contracts for the prototype's comparisons and candidate parameter removal. Required exports are checked before body changes. Exact geometry/sketch/MCS/stock guards and mandatory rollback remain. [Report and correction](docs/en/mirror-project.md#uf-api-v12601).
+The V1.26.01 run read UF C references and four sketches, then stopped at `GetBody()` with code 630003. V1.26.02 resolves ownership by exact tags from the captured topology of all bodies, with separate UF owner queries for remaining faces/edges. Unreadable or missing intermediate supports are listed with their consumers and roles before candidate creation. [Report, correction and limits](docs/en/mirror-project.md#reference-ownership-v12602).
 
-All **447 focused checks outside NX** pass, including **86 using test C libraries**. The report confirms initial Tool Position On reads for the four R1 boundaries; body replacement and final CAM preservation in NX remain unconfirmed.
+All **463 focused checks outside NX** pass, including **91 using test C libraries**. This repairs ownership reading; it does not establish intermediate-support reconstruction or a completed CAM copy. Exact geometry/sketch/MCS/stock guards and mandatory rollback remain.
 
-In updater **V1.20**, run Check and install **V1.26.01**. Run on the saved source without components and share the complete report; the experimental branch still requires rollback.
+In updater **V1.20**, run Check and install **V1.26.02**. Run on the saved source without components and share the complete report; the experimental branch still requires rollback.
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 

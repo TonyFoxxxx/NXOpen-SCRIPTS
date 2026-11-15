@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.26.01
-SCRIPT_VERSION = "V1.26.01"
+# SCRIPT_VERSION: V1.26.02
+SCRIPT_VERSION = "V1.26.02"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -625,7 +625,7 @@ class NativeCam:
 
         DC 2606's Python Modl lacks AskReferencesOfFeatures. Published .NET
         wrappers are not evidence of Python coverage; use the documented C
-        contracts for all four UF operations introduced by this prototype.
+        contracts for the UF operations required by this prototype.
         Missing exports fail here, not after an original/candidate mutation.
         """
         if hasattr(self, "_replacement_api"):
@@ -637,6 +637,8 @@ class NativeCam:
             ("UF_free_string_array", (i, p), None),
             ("UF_MODL_compare", (u, u, i, ip), i),
             ("UF_MODL_compare_topology", (u, u, ctypes.c_double, ctypes.c_double, ip), i),
+            ("UF_MODL_ask_face_body", (u, up), i),
+            ("UF_MODL_ask_edge_body", (u, up), i),
             ("UF_MODL_create_list", (pp,), i),
             ("UF_MODL_put_list_item", (p, u), i),
             ("UF_MODL_ask_list_count", (p, ip), i),
@@ -691,6 +693,18 @@ class NativeCam:
         if value.value not in (0, 1):
             raise RuntimeError("UF_MODL_compare: не прочитан результат")
         return value.value
+
+    def reference_body(self, tag, kind):
+        tag = probe_tag(tag, "Тело опоры")
+        if kind not in ("Face", "Edge"):
+            raise ValueError("Запрос тела разрешён только для Face или Edge")
+        self.prepare_replacement_api()
+        name = "UF_MODL_ask_face_body" if kind == "Face" else "UF_MODL_ask_edge_body"
+        owner = ctypes.c_uint32()
+        self.check(self._replacement_api[name](tag, ctypes.byref(owner)), name)
+        if not owner.value:
+            raise RuntimeError(name + ": не прочитано тело опоры " + str(tag))
+        return int(owner.value)
 
     def compare_topology(self, first, second, facet_tolerance, distance_tolerance):
         first, second = probe_tag(first, "CompareTopology / first"), probe_tag(second, "CompareTopology / second")
@@ -1154,6 +1168,16 @@ class ReplacementProbeComplete(Exception):
     """The isolated experiment must use the normal copy-only rollback path."""
 
 
+class UnresolvedProbeReferences(RuntimeError):
+    """All unresolved supports are reported; none is accepted as an empty one."""
+    def __init__(self, details, first_error=None):
+        super().__init__("Не подтверждена принадлежность или карта геометрических опор:\n" +
+            "\n".join(details) + "\nСоздание кандидата и замена истории не начинались. " +
+            "Промежуточные опоры нельзя пропускать или заменять другой гранью/ребром.")
+        if first_error is not None:
+            self.code = getattr(first_error, "code", getattr(first_error, "ErrorCode", None))
+
+
 def probe_array(value, context):
     if not isinstance(value, (tuple, list)) or len(value) > MAX_OBJECTS:
         raise RuntimeError(context + ": не прочитан ограниченный массив NX")
@@ -1228,6 +1252,8 @@ class BodyReplacementProbe:
                 self.t.lines.append("Опоры " + history_feature_label(tag, self.t.history_baseline[tag]) +
                                     "; количество " + str(len(refs)))
             for parent, name in refs:
+                self.stage("Объект опоры / " + history_feature_label(tag, self.t.history_baseline[tag]) +
+                           " / tag=" + str(parent) + " / " + reference_name(name))
                 obj = self.object(parent)
                 if report:
                     self.t.lines.append("  " + reference_name(name) + ": tag=" + str(parent) + "; класс=" + type(obj).__name__)
@@ -1275,7 +1301,7 @@ class BodyReplacementProbe:
     def snapshot(self):
         self.check_ownership()
         self.initial_refs = self.references(self.features, report=True)
-        kept = {tag: self.features[tag] for tag in self.retained}
+        kept = {tag: self.features[tag] for tag in sorted(self.retained)}
         self.sketches, self.curves, self.curves_by_feature = self.curve_state(kept, report=True)
         self.initial_boxes = dict(self.t.bounds)
         self.initial_boxes.update(self.curves)
@@ -1288,22 +1314,76 @@ class BodyReplacementProbe:
             if updated == self.dependents:
                 break
             self.dependents = updated
-        # A face/edge used at an earlier feature timestamp may be absent from
-        # the final body. It cannot silently be mapped to another planar face.
-        final_entities = {self.body_tag} | set(self.topology[self.body_tag][0]) | set(self.topology[self.body_tag][1])
-        missing = []
+        self.inspect_reference_supports()
+
+    def inspect_reference_supports(self):
+        # Body.GetFaces/GetEdges already established exact ownership at the
+        # captured timestamp. Calling GetBody again on a historical wrapper can
+        # raise 630003 even though the reference reader returned a valid tag.
+        # Unknown/nonfinal tags still need evidence; they are never skipped.
+        self.stage("Индекс граней/рёбер конечной топологии всех тел")
+        owners = {}
+        for body, (faces, edges) in self.topology.items():
+            for kind, tags in (("Face", faces), ("Edge", edges)):
+                for tag in tags:
+                    if tag in owners:
+                        raise RuntimeError("Неоднозначная принадлежность/тип объекта в топологии: " + str(tag))
+                    owners[tag] = (body, kind)
+        issues, first_context, first_error, queried = [], None, None, {}
+        verified = set()
         for tag in sorted(self.retained):
             for parent, name in self.initial_refs[tag]:
+                context = (history_feature_label(tag, self.t.history_baseline[tag]) +
+                           " / опора tag=" + str(parent) + " / " + reference_name(name))
+                self.stage("Принадлежность опоры / " + context)
                 obj = self.object(parent)
-                if isinstance(obj, (self.t.nx.Face, self.t.nx.Edge)):
-                    owner = obj.GetBody()
-                    if owner is None:
-                        raise RuntimeError("Не прочитано тело опоры " + str(parent))
-                    if int(owner.Tag) == self.body_tag and parent not in final_entities:
-                        missing.append(str(tag) + " / " + reference_name(name) + ": " + type(obj).__name__ + " " + str(parent))
-        if missing:
-            raise RuntimeError("Опоры промежуточной истории отсутствуют в конечном теле; " +
-                "копия конечного тела не даёт проверенного соответствия:\n" + "\n".join(missing))
+                kind = "Face" if isinstance(obj, self.t.nx.Face) else "Edge" if isinstance(obj, self.t.nx.Edge) else None
+                if kind is None:
+                    continue
+                problem, error = None, None
+                if parent in owners:
+                    owner, actual_kind = owners[parent]
+                    if actual_kind != kind:
+                        problem = "Тип NXOpen " + kind + " не совпал с конечной топологией " + actual_kind
+                    else:
+                        verified.add(parent)
+                        self.t.lines.append("Опора подтверждена конечной топологией: " + context +
+                                            "; " + kind + "; тело=" + str(owner))
+                else:
+                    key = (parent, kind)
+                    if key not in queried:
+                        try:
+                            owner = self.t.native.reference_body(parent, kind)
+                            queried[key] = (owner, None)
+                        except Exception as failure:
+                            queried[key] = (None, failure)
+                    owner, error = queried[key]
+                    if error is not None:
+                        problem = (kind + " отсутствует в конечной топологии всех тел; тело не прочитано: " +
+                                   type(error).__name__ + ": " + str(error))
+                    elif owner not in self.topology:
+                        problem = kind + ": прочитано тело " + str(owner) + ", которого нет в снимке тел копии"
+                    elif owner == self.body_tag:
+                        problem = (kind + ": опора промежуточной истории тела " + str(owner) +
+                                   " отсутствует в его конечной топологии; соответствие кандидату не построено")
+                    else:
+                        # Same allowance as the prior GetBody check: a readable
+                        # reference to another untouched body is not remapped.
+                        verified.add(parent)
+                        self.t.lines.append("Опора другого тела сохранена: " + context + "; " + kind +
+                                            "; тело=" + str(owner) + "; принадлежность прочитана через UF")
+                if problem is not None:
+                    first_context = first_context or context
+                    if first_error is None:
+                        first_error = error
+                    detail = context + "\n  " + problem
+                    issues.append(detail)
+                    self.t.lines.append("Неподтверждённая опора: " + detail)
+        self.t.lines.append("Чтение опор завершено: подтверждено уникальных граней/рёбер " + str(len(verified)) +
+                            "; неподтверждённых ссылок " + str(len(issues)))
+        if issues:
+            self.stage("Проверка карты опор до создания кандидата / " + first_context)
+            raise UnresolvedProbeReferences(issues, first_error) from first_error
 
     def check_stock_and_frames(self, unchanged_positions):
         for tag, (feature, bodies, state, _) in self.t.stock_features.items():
