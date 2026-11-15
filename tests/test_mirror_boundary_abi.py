@@ -49,6 +49,8 @@ class BoundaryAbiTests(unittest.TestCase):
         self.native.so_parents = self.native.bind('UF_SO_ask_parents', (u,i,ip,pp))
         self.native.so_error = self.native.bind('UF_SO_ask_update_error_code', (u,ip))
         self.native.sketch_owner = self.native.bind('UF_SKET_ask_sketch_of_geom', (u,ctypes.POINTER(u)))
+        self.native.model_parents = self.native.bind('UF_MODL_ask_entity_parents',
+            (i,ctypes.POINTER(u),ctypes.POINTER(ctypes.c_ubyte),ip,pp))
         dp = ctypes.POINTER(ctypes.c_double)
         self.native.xform_point = self.native.bind('UF_SO_set_point_of_xform', (u,dp))
         self.native.xform_axes = self.native.bind('UF_SO_set_xy_direction_of_xform', (u,dp,dp))
@@ -154,6 +156,53 @@ class BoundaryAbiTests(unittest.TestCase):
         for tag in (0, -1, 0x100000000):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 self.native.sketch_of_geometry(tag)
+
+    def test_model_parent_tags_are_unsigned_and_repetitions_survive_c(self):
+        self.assertEqual(self.native.entity_parents(0xf0000051), (0xf0000001,29,0xf0000001))
+        self.assertEqual(self.stat(0), 1)
+
+    def test_model_parent_false_ignores_unowned_and_unspecified_array_outputs(self):
+        self.assertEqual(self.native.entity_parents(200), ())
+        self.assertEqual(self.native.entity_parents(201), ())
+        self.assertEqual(self.stat(0), 0)
+
+    def test_model_parent_unwritten_and_invalid_logical_are_not_empty(self):
+        for tag in (202,203):
+            with self.subTest(tag=tag), self.assertRaisesRegex(RuntimeError, 'флаг'):
+                self.native.entity_parents(tag)
+        self.assertEqual(self.stat(0), 0)
+
+    def test_model_parent_nonempty_flag_requires_valid_count_and_storage(self):
+        for tag in (205,206,207,208):
+            with self.subTest(tag=tag), self.assertRaisesRegex(RuntimeError, 'массив'):
+                self.native.entity_parents(tag)
+        self.assertEqual(self.stat(0), 3)
+
+    def test_model_parent_null_and_self_tags_are_fatal_and_storage_is_freed(self):
+        for tag in (209,210):
+            with self.subTest(tag=tag), self.assertRaisesRegex(RuntimeError, 'tag'):
+                self.native.entity_parents(tag)
+        self.assertEqual(self.stat(0), 2)
+
+    def test_model_parent_api_errors_preserve_code_and_free_owned_output_only(self):
+        for tag,code in ((204,90019),(211,90021)):
+            with self.subTest(tag=tag), self.assertRaises(M.NativeApiError) as caught:
+                self.native.entity_parents(tag)
+            self.assertEqual(caught.exception.context, 'UF_MODL_ask_entity_parents')
+            self.assertEqual(caught.exception.code, code)
+        self.assertEqual(self.stat(0), 1)
+
+    def test_model_parent_invalid_input_stops_before_c(self):
+        self.native.model_parents = Mock(wraps=self.native.model_parents)
+        for tag in (0,-1,0x100000000):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                self.native.entity_parents(tag)
+        self.native.model_parents.assert_not_called()
+
+    def test_missing_model_parent_export_cannot_be_assumed_empty(self):
+        self.native.libs = []
+        with self.assertRaisesRegex(RuntimeError, 'UF_MODL_ask_entity_parents'):
+            self.native.bind('UF_MODL_ask_entity_parents', ())
 
     def test_cavity_geometry_checks_both_custom_point_kinds(self):
         trial = self.trial()

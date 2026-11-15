@@ -131,6 +131,7 @@ class Fixture:
         t.nx.Curve, t.nx.Point = type('Curve',(),{}),type('Point',(),{})
         t.native = NS(reflection_matrix=lambda plane:[0]*16,transform_entities=Mock(side_effect=self.convert),update_model=Mock())
         t.native.sketch_of_geometry = Mock(return_value=0)
+        t.native.entity_parents = Mock(return_value=())
         t.plane = M.MirrorPlane([0,0,0],[1,0,0])
         t.transfer_mcs, t.update_stock = Mock(return_value={}),Mock()
         t.mcs_stock_order = Mock(return_value=[])

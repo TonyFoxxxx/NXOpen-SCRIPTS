@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.25.01
-SCRIPT_VERSION = "V1.25.01"
+# SCRIPT_VERSION: V1.25.02
+SCRIPT_VERSION = "V1.25.02"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -570,6 +570,8 @@ class NativeCam:
         self.so_parents = self.bind("UF_SO_ask_parents", (u, i, ip, pp))
         self.so_error = self.bind("UF_SO_ask_update_error_code", (u, ip))
         self.sketch_owner = self.bind("UF_SKET_ask_sketch_of_geom", (u, ctypes.POINTER(u)))
+        self.model_parents = self.bind("UF_MODL_ask_entity_parents",
+            (i, ctypes.POINTER(u), ctypes.POINTER(ctypes.c_ubyte), ip, pp))
         dp = ctypes.POINTER(ctypes.c_double)
         self.xform_point = self.bind("UF_SO_set_point_of_xform", (u, dp))
         self.xform_axes = self.bind("UF_SO_set_xy_direction_of_xform", (u, dp, dp))
@@ -650,6 +652,37 @@ class NativeCam:
         # A successful query with NULL_TAG is the documented 'no sketch'.
         # An absent function or any NX error must not become that answer.
         return int(sketch.value)
+
+    def entity_parents(self, tag):
+        """Read modeling parents, independently of UF_SO and sketch ownership.
+
+        uf_trns.h only defines the count/array and transfers ownership when
+        found_parent is true. A successful false is the explicit empty case;
+        unreadable flags, inconsistent nonempty results and API errors fail.
+        """
+        tag = int(tag)
+        if not 0 < tag <= 0xffffffff:
+            raise ValueError("Некорректный tag для проверки модельных родителей")
+        entity = (ctypes.c_uint32 * 1)(tag)
+        found = ctypes.c_ubyte(255)  # UF logical, not C int; detect unwritten output.
+        count, data = ctypes.c_int(-1), ctypes.c_void_p()
+        try:
+            self.check(self.model_parents(1, entity, ctypes.byref(found),
+                ctypes.byref(count), ctypes.byref(data)), "UF_MODL_ask_entity_parents")
+            if found.value not in (0, 1):
+                raise RuntimeError("Некорректный флаг UF_MODL_ask_entity_parents")
+            if not found.value:
+                return ()
+            if not 0 < count.value <= MAX_OBJECTS or not data.value:
+                raise RuntimeError("Некорректный массив модельных родителей")
+            values = ctypes.cast(data, ctypes.POINTER(ctypes.c_uint32))
+            result = tuple(int(values[i]) for i in range(count.value))
+            if any(not parent or parent == tag for parent in result):
+                raise RuntimeError("Пустой или собственный tag в модельных родителях")
+            return result
+        finally:
+            if found.value == 1 and data.value:
+                self.free(data)
 
     def bounding_box_exact(self, tag, csys):
         corner, distances = (ctypes.c_double * 3)(), (ctypes.c_double * 3)()
@@ -2534,6 +2567,7 @@ class Trial:
             ("Curve", "Point", "Plane", "DatumPlane") if hasattr(self.nx, name))
         edge_class = getattr(self.nx, "Edge", None)
         self.sketch_geometry = {}
+        self.model_geometry = {}
         for tag, obj in list(self.refs.items()):
             # An edge moves with its body; it is never a separate curve target.
             if edge_class is not None and isinstance(obj, edge_class):
@@ -2541,12 +2575,15 @@ class Trial:
             if not isinstance(obj, transformable):
                 continue
             self.stage = "Выбор объектов отражения: " + type(obj).__name__ + " " + str(tag)
-            if isinstance(obj, (self.nx.Curve, self.nx.Point)):
+            curve_or_point = isinstance(obj, (self.nx.Curve, self.nx.Point))
+            if curve_or_point:
+                # Following a sketch/model/smart parent never exempts a selected
+                # curve or point from the final reflected-position check.
+                self.bounds[tag] = self.bounding_box(tag)
                 self.stage += " / UF_SKET_ask_sketch_of_geom"
                 sketch = self.native.sketch_of_geometry(tag)
                 if sketch:
                     self.sketch_geometry[tag] = sketch
-                    self.bounds[tag] = self.bounding_box(tag)
                     self.lines.append("Геометрия эскиза: tag=" + str(tag) + "; класс=" + type(obj).__name__ +
                         "; эскиз=" + str(sketch) + ". Ожидается обновление через модель; отдельно не преобразуется. " +
                         "Итоговые положение, принадлежность эскизу и CAM-ссылки подлежат проверке.")
@@ -2555,9 +2592,18 @@ class Trial:
             # smart plane explicitly would also transform its parent stock.
             if self.native.smart_parents(tag) is not None:
                 continue
+            if curve_or_point:
+                self.stage = ("Выбор объектов отражения: " + type(obj).__name__ + " " + str(tag) +
+                              " / UF_MODL_ask_entity_parents")
+                parents = self.native.entity_parents(tag)
+                self.model_geometry[tag] = parents
+                self.lines.append("Модельные родители геометрии: tag=" + str(tag) +
+                    "; класс=" + type(obj).__name__ + "; родители=" + str(parents) +
+                    (". Отдельно не преобразуется; положение и родители подлежат проверке."
+                     if parents else ". Родители не найдены; допускается отдельное преобразование."))
+                if parents:
+                    continue
             targets[tag] = obj
-            if isinstance(obj, (self.nx.Curve, self.nx.Point)):
-                self.bounds[tag] = self.bounding_box(tag)
         return targets
 
     def verify_sketch_geometry(self):
@@ -2567,6 +2613,16 @@ class Trial:
             if actual != expected:
                 raise RuntimeError("Изменилась принадлежность геометрии эскизу: " + str(tag) +
                     "; исходный эскиз " + str(expected) + "; после " + str(actual))
+
+    def verify_model_geometry(self):
+        for tag, expected in self.model_geometry.items():
+            self.stage = "Проверка модельных родителей геометрии: " + str(tag) + " / UF_MODL_ask_entity_parents"
+            actual = self.native.entity_parents(tag)
+            # This API reports parents, not an ordered X/Y/Z selection. Do not
+            # invent an order requirement, but do preserve multiplicity.
+            if Counter(actual) != Counter(expected):
+                raise RuntimeError("Изменились модельные родители геометрии " + str(tag) +
+                    "; до " + str(expected) + "; после " + str(actual))
 
     def run_in_absolute_wcs(self):
         self.lines.append("Режим: геометрия и CAM. В копии допускается замена истории модельных тел на BREP; заготовки и MCS защищены отдельно.")
@@ -2595,6 +2651,9 @@ class Trial:
         self.stage = "Создание матрицы отражения"
         matrix = self.native.reflection_matrix(self.plane)
         self.stage = "Отражение геометрии и её модельных родителей"
+        self.lines.append("Прямые цели UF_MODL_transform_entities: " + str(len(targets)))
+        for tag, obj in targets.items():
+            self.lines.append("  tag=" + str(tag) + "; класс=" + type(obj).__name__)
         self.native.transform_entities(list(targets), matrix)
         self.checkpoint_model_history("Отражение геометрии и её модельных родителей")
         self.verify_retained_model_history()
@@ -2643,6 +2702,7 @@ class Trial:
         self.verify_boundary_planes()
         self.verify_mcs(replacement)
         self.verify_sketch_geometry()
+        self.verify_model_geometry()
         self.stage = "Удаление временной системы проверки"
         self.uf.Obj.DeleteObject(self.box_csys)
         self.box_csys = None

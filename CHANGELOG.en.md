@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Mirrored CAM project trial V1.25.02
+
+Query modeling parents with `UF_MODL_ask_entity_parents` before separately transforming curves/points outside sketches and UF Smart Objects. Exclude dependent geometry from direct targets while retaining position, parent and CAM-reference checks. Selected Smart curves/points also require position verification. Report exact input tags and classes for the common transform. Read errors never mean no parents; authorized history changes are not expanded.
+
+All 394 focused checks outside NX pass, including 61 using test C libraries; 23 scenarios were added. The repeated V1.25.01 report shows the same eight damaged retained features. This release fixes a target-selection gap; resolution of that damage on the user PRT remains unconfirmed. SDK 2606 is unavailable; methods requiring verification and test limits are listed in the [guide](docs/en/mirror-project.md#modeling-parents-of-curves-and-points--v12502). Journal, catalog version and SHA-256 agree; the updater remains V1.20.
+
 ## 2026-11-15 — Updater V1.20: suffixed releases
 
 Support suffixed releases such as V1.25.01. The full version drives table labels, update highlighting and downloaded-source validation. The catalog remains readable by the old updater: update the updater to V1.20 first, then restart to update the journal. SHA-256 checks, downgrade prevention and local-edit protection remain in place.

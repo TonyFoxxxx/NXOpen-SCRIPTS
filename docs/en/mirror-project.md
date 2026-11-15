@@ -2,9 +2,11 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.25.01**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.25.02**.
 
 ## V1.25 result in NX
+
+The repeated **V1.25.01** report dated 2026-11-15 (`MIRROR_TEST_010.prt`) shows the same failure: eight changed retained features and three sketches with new warnings. Release .01 only changed publication numbering. V1.25.02 addresses another direct-target selection gap described below; a complete fix on this PRT remains unconfirmed.
 
 **The user PRT still fails.** In the 15 November 2026 report, both selected `Arc` objects were recognized as members of one sketch and excluded from separate transformation. The common `UF_MODL_transform_entities` call nevertheless changed eight retained features: four Datum CSYS parent references, three sketch definitions and one CPROJ definition. Two sketches lost expressions; other parent dependencies were removed. New warnings include lost point parents, under-constrained sketches and failed associative curves. One sketch acquired a warning without a structural snapshot change.
 
@@ -34,7 +36,11 @@ Sources: [older Siemens `uf_modl.h` header](https://github.com/feifeiwang/NXOPEN
 
 ## Latest release
 
-First update the updater to **V1.20**, close its window and restart it; then check the catalog and install **V1.25.01**. [Updater upgrade](updater.md#upgrading-to-v120).
+Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.25.02**. [Updater upgrade](updater.md#upgrading-to-v120).
+
+**V1.25.02 · 2026-11-15** — Address curve/point selection outside sketches and UF Smart Objects: query modeling parents through `UF_MODL_ask_entity_parents` before separate transformation. Exclude dependent geometry from direct input while retaining position, parent and CAM-reference checks. Selected Smart curves/points now also require reflected-position verification. Report the exact direct transformation targets. All **394 focused checks outside NX** pass, including 61 using test C libraries; 23 scenarios were added. This is a limited target-selection correction, not a confirmed fix for the history damage reported in V1.25.01.
+
+### V1.25.01
 
 **V1.25.01 · 2026-11-15** — Release V1.25.01 so the updater recognizes an update from V1.25. Align the journal header and version constant, catalog and SHA-256. The mirroring algorithm is unchanged; the known sketch/projection dependency damage reported for V1.25 is not fixed. Small publications within the same main revision use .01, .02 and subsequent suffixes; the working filename remains NX_Mirror_Project.py.
 
@@ -169,6 +175,27 @@ This is a general validation mechanism, not confirmed support for every NX comma
 
 ## Sketch curves and NX warnings
 
+### Modeling parents of curves and points — V1.25.02
+
+Absence of sketch membership and UF Smart Object status is insufficient to authorize a separate transformation. Such curves/points now use `UF_MODL_ask_entity_parents`. Objects with returned parents are expected to follow model updates and are excluded from direct input to `UF_MODL_transform_entities`. An unavailable function, API error or invalid result stops the trial; it never means no parents. Modeling-command names do not control this decision.
+
+Every selected curve/point, including Smart Objects, remains in reflected-bounds verification. For objects read by the new query, parent tags are checked again after final CAM/MCS reads; repetitions matter, while array order is not treated as an axis selection. Lost/replaced parents and newly acquired parents on previously independent objects fail. Parents are not automatically remapped to a new BREP. Existing exact CAM-object and ordered MCS-selection checks remain.
+
+Immediately before the common transformation, the report lists the exact input tags and NXOpen classes. These are call inputs, not a complete list of affected modeling parents. Without them, the previous report cannot isolate the object responsible for the history damage. Excluding a dependent curve does not establish that transforming its body is safe: the early stop for the eight changes reported in V1.25/V1.25.01 remains. Geometry that fails to move through the model also fails verification.
+
+**Items requiring the SDK and actual DC 2606:**
+
+| Method / definition | Required verification |
+| --- | --- |
+| `UF_MODL_ask_entity_parents` in `uf_trns.h` | Export, 32-bit `tag_t`, one-byte `logical`, `int` count and `tag_t*` array. Meaning and completeness of parents for projected curves, points and intermediate-feature geometry. |
+| `found_parent` / `UF_free` | The available contract only defines the count/array and transfers ownership when `found_parent=true`. On successful false, neither is read or freed. The C fixture tests this contract implementation, not the installed NX ABI. |
+| `UF_SO_is_so`, `UF_SKET_ask_sketch_of_geom` | Combined coverage of this PRT's geometry; absence of one dependency kind does not exclude another. |
+| `UF_MODL_transform_entities`, dependency update | Transformation of remaining direct targets while retaining history, warnings, CAM boundaries and reflected positions of every excluded curve/point. The new query does not reconstruct sketch definitions. |
+
+New-query source: [copy of Siemens `uf_trns.h`](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_trns.h). This is an older contract; the development environment lacks SDK 2606. No `RemoveParametersBuilder`, sketch-associativity break or replacement of selected curves with new ones is introduced.
+
+### Retained V1.25 checks
+
 The V1.24 report showed lost Part boundaries in four PlanarMilling operations. The user confirmed sketch-curve selections; model-edge selections remain an intended case too. History snapshots immediately after reflection showed lost sketch parents and expressions, and the NX update report warned about lost point parents and an under-constrained sketch. These are unacceptable retained-history changes. V1.25 confirmed exclusion of both selected arcs, but this was insufficient: the common transformation still damaged dependencies. The individual input object responsible for that damage has not been isolated.
 
 `UF_SKET_ask_sketch_of_geom` is queried for selected curves and points before the general transform. A successful `NULL_TAG` means no sketch; an unavailable function or API error stops the trial. `UF_SO_is_so` alone does not establish independence. A sketch curve/point is expected to follow model updates, retains its tag and remains in reflected-bounds verification. Its original sketch membership is checked after final CAM/MCS reads. Unmoved geometry, lost membership or transfer to another sketch fails. Edges are excluded from separate targets; existing body/face/edge and exact CAM-selection checks remain.
@@ -194,6 +221,8 @@ Build diagnostics in memory from captured snapshots and names, without querying 
 The V1.23 report passed the previous MCS “2” stop and both Three Planes rebuild checks, then found a CAM-snapshot mismatch. It contains no actual differences, so the affected operation cannot be established and the last deburring-operation Drive read cannot be blamed. V1.24 repairs this diagnostic gap; **it does not establish that the CAM-data change itself is fixed**. Retain geometry/MCS transfer, stock/history protection, rollback rules and the absence of automatic saving.
 
 ## Files and validation
+
+V1.25.02: **394 focused checks**, including **61 checks using C fixtures**. The 23 new scenarios exercise modeling parents, returned-memory ownership, read errors, direct-target selection and mandatory position verification for dependent geometry. All run outside NX. DC 2606 testing still needs a V1.25.02 run on the PRT and verification of history/selected boundaries, MCS and stock; only after a successful trial should manual save/reopen and normal toolpath regeneration be tested.
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 

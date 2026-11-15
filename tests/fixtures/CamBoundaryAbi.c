@@ -196,6 +196,37 @@ int UF_SO_ask_parents(uint32_t tag, int options, int *count, uint32_t **parents)
     return 90002;
 }
 
+/* Separate modeling-parent contract from uf_trns.h, not UF_SO_ask_parents.
+ * Only found_parent=true makes the array caller-owned. No NX kernel here. */
+int UF_MODL_ask_entity_parents(int size, uint32_t *entities, unsigned char *found,
+                             int *count, uint32_t **parents) {
+    static uint32_t unused[] = {42};
+    if (size != 1 || !entities) return 90018;
+    uint32_t tag = entities[0];
+    if (tag == 200) { *found = 0; return 0; }
+    if (tag == 201) { *found = 0; *count = 1234; *parents = unused; return 0; }
+    if (tag == 202) return 0; /* Missing required flag output. */
+    if (tag == 203) { *found = 2; return 0; }
+    if (tag == 204) return 90019;
+    if (tag == 205) { *found = 1; *count = 3; *parents = NULL; return 0; }
+    if (tag != UINT32_C(0xf0000051) && (tag < 206 || tag > 211)) return 90020;
+    for (int i = 0; i < 8; ++i) {
+        if (!allocations[i]) {
+            uint32_t *array = malloc(3 * sizeof(uint32_t));
+            if (!array) return 90001;
+            array[0] = tag == 209 ? 0 : tag == 210 ? tag : UINT32_C(0xf0000001);
+            array[1] = 29;
+            array[2] = UINT32_C(0xf0000001); /* Preserve repetitions in the reader. */
+            allocations[i] = array;
+            *found = 1;
+            *count = tag == 206 ? 0 : tag == 207 ? -1 : tag == 208 ? 20001 : 3;
+            *parents = array;
+            return tag == 211 ? 90021 : 0;
+        }
+    }
+    return 90002;
+}
+
 void fixture_xform_read(double values[9]) { memcpy(values, xform_values, sizeof(xform_values)); }
 int fixture_xform_calls(int step) { return xform_calls[step]; }
 void fixture_xform_failure(int step, int error) { xform_error_step = step; xform_error = error; }

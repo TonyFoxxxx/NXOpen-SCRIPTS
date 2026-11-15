@@ -202,9 +202,9 @@
       "file": "NX_Mirror_Project.py",
       "version": "V1.25",
       "path": "scripts/NX_Mirror_Project.py",
-      "sha256": "d34f360eb0ece3acf9e00dabd5bce610746fa0d843bcc2ecb48b0eb3b3bad89c",
+      "sha256": "db7e16caa2c5269985f7b1014966537f782a1e5874fde121a6c45291b8c1ad41",
       "description": "Геометрия и CAM без компонентов: копия PRT, выбор плоскости щелчком, перенос MCS и границ. История модельного тела в копии может заменяться на BREP. Без расчёта траекторий и автосохранения; прочие числовые пространственные настройки не отражаются.",
-      "release_version": "V1.25.01"
+      "release_version": "V1.25.02"
     },
     {
       "id": "NX_Update_Scripts",

@@ -1,14 +1,14 @@
-# CAM operation coverage audit — V1.25.01
+# CAM operation coverage audit — V1.25.02
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-15**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
 
-V1.25.01 updates the release number and SHA-256 for updater detection; operation coverage, the algorithm and the known V1.25 failure remain unchanged.
+V1.25.02 queries modeling parents of curves/points when selecting direct reflection targets. Operation coverage is unchanged; resolution of the dependency damage in the repeated V1.25.01 PRT report remains unconfirmed. [Change and limitations](mirror-project.md#modeling-parents-of-curves-and-points--v12502).
 
 ## What the catalog means
 
-The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.25.01 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
+The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.25.02 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
 
 | Level | Actual status |
 | --- | --- |
@@ -103,3 +103,5 @@ SDK verification cannot replace an NX run. Each new family needs a test PRT with
 V1.25: **368 regression checks outside NX**, including 53 using test C libraries; 40 new scenarios. Coverage remains 21 dispatch routes / 31 Builders. The user identified the V1.24 boundary members as sketch curves. This release does not certify repaired sketch dependencies, a complete mirrored PRT or SDK 2606 compatibility. The test libraries are not Siemens libraries.
 
 Additional report regressions: **371 focused checks**, including 53 with test C libraries. Three synthetic scenarios preserve rejection of the observed V1.25 failure. V1.25.01 changes only the journal version and corresponding catalog version/SHA-256; the algorithm is unchanged.
+
+V1.25.02: **394 focused checks**, including 61 using C fixtures. The 23 added scenarios cover target selection, modeling-parent reads and dependent-geometry position checks; they provide no new evidence of CAM-family compatibility with actual NX.

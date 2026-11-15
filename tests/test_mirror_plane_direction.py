@@ -368,6 +368,7 @@ class PlaneDirectionTests(unittest.TestCase):
                 t.geometry_snapshot = Mock(return_value={})
                 t.native.reflection_matrix = Mock(return_value=[0]*16)
                 t.native.sketch_of_geometry = Mock(return_value=0)
+                t.native.entity_parents = Mock(return_value=())
                 t.native.transform_entities = Mock(side_effect=lambda *args:w.reflect(t))
                 t.setup = NS(DeleteToolPath=Mock())
                 t.custom_points, t.boundary_planes = {},{}
