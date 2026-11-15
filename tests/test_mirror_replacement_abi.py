@@ -110,7 +110,7 @@ class ReplacementAbiTests(unittest.TestCase):
     def test_v12602_two_ownerless_edges_report_all_six_links_before_candidate(self):
         w=ownerless_support_report_world();self.reset(33)  # C returns success + NULL_TAG.
         w.t.native.reference_body=self.native.reference_body
-        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.run()
+        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.snapshot()
         message=str(caught.exception)
         self.assertEqual(message.count('опора tag=64791 /'),2)
         self.assertEqual(message.count('опора tag=73591 /'),4)
@@ -133,6 +133,38 @@ class ReplacementAbiTests(unittest.TestCase):
         w.t.native.transform_entities.assert_not_called()
         w.t.transfer_mcs_and_stock.assert_not_called()
         w.t.setup.DeleteToolPath.assert_not_called()
+
+    def test_history_readers_preserve_unsigned_tags_and_absolute_box(self):
+        self.assertEqual(self.native.current_feature(0xf0000017),0xe0000042)
+        self.assertEqual(self.tag(5),0xf0000017)
+        self.assertEqual(self.native.history_bounding_box(0xf0000028),(-12.5,2.25,3.,4.5,5.75,6.))
+        self.assertEqual(self.tag(6),0xf0000028)
+
+    def test_history_current_feature_null_unwritten_and_api_errors_fail(self):
+        for mode in (35,36,37):
+            self.reset(mode)
+            with self.subTest(mode=mode), self.assertRaises(RuntimeError): self.native.current_feature(9)
+
+    def test_history_box_unwritten_nonfinite_inverted_and_api_errors_fail(self):
+        for mode in (38,39,40,41):
+            self.reset(mode)
+            with self.subTest(mode=mode), self.assertRaises(RuntimeError): self.native.history_bounding_box(9)
+
+    def test_history_exports_are_preflighted_atomically_before_either_call(self):
+        original=self.native.bind
+        def bind(name,*args):
+            if name=='UF_MODL_ask_bounding_box': raise RuntimeError('missing historical box reader')
+            return original(name,*args)
+        with patch.object(self.native,'bind',side_effect=bind):
+            with self.assertRaisesRegex(RuntimeError,'historical box reader'): self.native.current_feature(9)
+        self.assertFalse(hasattr(self.native,'_history_probe_api'))
+        self.assertEqual((self.stat(10),self.stat(11)),(0,0))
+
+    def test_history_readers_reject_invalid_tags_before_c(self):
+        for method in (self.native.current_feature,self.native.history_bounding_box):
+            for tag in (0,-1,0x100000000,True,'8',1.0):
+                with self.subTest(method=method.__name__,tag=tag), self.assertRaises(RuntimeError): method(tag)
+        self.assertEqual((self.stat(10),self.stat(11)),(0,0))
 
     def test_owner_query_preserves_suppressed_code_even_with_nonnull_output(self):
         for kind in ('Face','Edge'):

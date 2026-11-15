@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.27
+
+After V1.26.02 stopped on two intermediate edges, add a separate EditWithRollbackManager access check. External direct consumers open with their own Undo marks; read exact tags, owners, current topology, ABS bounds and edge endpoints. Internal features are not edited separately, but their references remain checked. After Stop/Destroy and local Undo, verify the current feature, history/expression state, selected objects, sketches, CAM, MCS and stock. Failed restoration blocks the next context; loss of Work/Display prevents Undo in another part.
+
+Even successful access ends with outer copy rollback. Complete curves/surfaces, sketch constraints and reflected correspondence are not yet built; body replacement, MCS/stock transfer and toolpath deletion do not follow this branch. Preserve existing guards, file behavior and no automatic saving. Align V1.27, SHA-256 and documentation so the updater detects the new revision.
+
+All 499 focused checks outside NX pass, including 97 using C fixtures; add 35 regressions for reading, transitions, restoration and failure paths. These do not test Siemens DLLs, SDK 2606 or the real PRT. The next check is a user V1.27 run and complete report; successful CAM mirroring remains unconfirmed. [Experiment and SDK checklist](docs/en/mirror-project.md#historical-probe-v127).
+
 ## 2026-11-16 — V1.26.02 report analysis; journal unchanged
 
 Confirm two inaccessible Edge supports with six links from three Datum CSYS and three sketches. They are absent from final topology; after UF_MODL_ask_edge_body the owner tag remains zero without a nonzero UF error. Do not attribute the preceding GetBody 630003 code to this failure. Both R1 arcs belong to SKETCH_000 and read as Tool Position On; they remain untested after reflection because candidate creation was never reached. The report records Undo and successful source checks.

@@ -606,7 +606,7 @@ class TransactionTests(unittest.TestCase):
 
     def run_with_trial(self, fails, rollback_fails=False, display_fails=False, delete_mark_fails=False,
                        close_supported=True, close_fails=False, close_noop=False,
-                       source_modified=False, source_check_error=False, unverified=()):
+                       source_modified=False, source_check_error=False, unverified=(), active_copy_lost=False):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.prt"
             source.write_bytes(b"prt-binary")
@@ -663,6 +663,9 @@ class TransactionTests(unittest.TestCase):
                     self.assert_copy()
                     events.append('run')
                     original.IsModified = source_modified
+                    if active_copy_lost:
+                        session.Parts.Work = original
+                        session.Parts.Display = original
                     if callable(fails):
                         fails()
                     elif isinstance(fails, Exception):
@@ -714,6 +717,25 @@ class TransactionTests(unittest.TestCase):
         self.assertIn(('active',1,1),events)
         self.assertIn('это не успешный Undo',report)
         self.assertNotIn('Изменения теста в копии отменены через Undo',report)
+
+    def test_completed_historical_probe_has_own_caption_and_mandatory_rollback(self):
+        events,report = self.run_with_trial(M.HistoricalProbeComplete('historical access only'))
+        self.assertIn(('undo',55),events)
+        self.assertIn(('active',1,1),events)
+        self.assertIn('ПРОТОТИП ИСТОРИЧЕСКИХ ОПОР',report)
+        self.assertIn('обязательный откат',report)
+        self.assertIn('historical access only',report)
+        self.assertNotIn('РЕЗУЛЬТАТ ОТКРЫТ В NX',report)
+        self.assertNotIn('сохраните открытую копию',report)
+
+    def test_lost_active_copy_skips_outer_undo_and_closes_only_created_copy(self):
+        events,report = self.run_with_trial(RuntimeError('historical context lost'),active_copy_lost=True)
+        self.assertNotIn(('undo',55),events)
+        self.assertNotIn(('delete-mark',55),events)
+        self.assertIn(('close',2,0,1,None),events)
+        self.assertIn(('active',1,1),events)
+        self.assertIn('Undo в другой детали не вызывается',report)
+        self.assertIn('это не успешный Undo',report)
 
     def test_probe_completion_cannot_hide_failed_source_checks_or_discard(self):
         events,report = self.run_with_trial(M.ReplacementProbeComplete('checked'),rollback_fails=True,

@@ -305,7 +305,7 @@ class ReferenceOwnershipTests(unittest.TestCase):
     def test_unknown_owner_body_is_rejected_before_extraction(self):
         w=ProbeWorld(); w.register(Face(1999,Body(9999)))
         w.references[22]=((1999,b'unknown body'),)
-        with self.assertRaisesRegex(M.UnresolvedProbeReferences,'тело 9999, которого нет'): w.probe.run()
+        with self.assertRaisesRegex(M.UnresolvedProbeReferences,'тело 9999, которого нет'): w.probe.snapshot()
         self.assert_before_candidate(w)
 
     def test_suppressed_reference_lists_every_consumer_and_queries_each_tag_once(self):
@@ -319,7 +319,7 @@ class ReferenceOwnershipTests(unittest.TestCase):
         w.t.native.reference_body.side_effect=owner
         # Last feature/curve-state stage must not be blamed for the bad support.
         group=Feature(90,'FSET','CAM_MAIN'); w.add_feature(group); w.freeze()
-        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.run()
+        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.snapshot()
         message=str(caught.exception)
         for role in ('attachment','orientation','projection face','projection edge'):
             self.assertIn(role,message)
@@ -338,7 +338,7 @@ class ReferenceOwnershipTests(unittest.TestCase):
         w.references[23]=((1998,b'unreadable edge'),)
         failure=M.NativeApiError(630003,'UF_MODL_ask_edge_body','suppressed edge')
         w.t.native.reference_body.side_effect=[1000,failure]
-        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.run()
+        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.snapshot()
         self.assertIs(caught.exception.__cause__,failure)
         self.assertEqual(caught.exception.code,630003)
         self.assertIn('missing final face',str(caught.exception))
@@ -349,7 +349,7 @@ class ReferenceOwnershipTests(unittest.TestCase):
         w=ProbeWorld(); w.register(Face(1999,w.body)); w.references[22]=((1999,b'attachment'),)
         failure=RuntimeError('owner output was NULL')
         w.t.native.reference_body.side_effect=failure
-        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.run()
+        with self.assertRaises(M.UnresolvedProbeReferences) as caught: w.probe.snapshot()
         self.assertIn('owner output was NULL',str(caught.exception))
         self.assertIs(caught.exception.__cause__,failure)
         self.assert_before_candidate(w)
@@ -358,21 +358,21 @@ class ReferenceOwnershipTests(unittest.TestCase):
         for bad in (((1001,),()),((),(1001,))):
             w=ProbeWorld(); w.probe.topology[2000]=bad
             with self.subTest(topology=bad), self.assertRaisesRegex(RuntimeError,'Неоднозначная принадлежность/тип'):
-                w.probe.run()
+                w.probe.snapshot()
             w.t.native.reference_body.assert_not_called()
             self.assert_before_candidate(w)
 
     def test_nxopen_type_must_match_exact_topology_kind(self):
         w=ProbeWorld(); w.register(Edge(1001,w.body))
         with self.assertRaisesRegex(M.UnresolvedProbeReferences,'Тип NXOpen Edge.*топологией Face'):
-            w.probe.run()
+            w.probe.snapshot()
         w.t.native.reference_body.assert_not_called()
         self.assert_before_candidate(w)
 
     def test_reference_object_access_failure_identifies_consumer_and_role(self):
         w=ProbeWorld(); w.objects[1001].OwningPart=None
         with self.assertRaisesRegex(RuntimeError,'Не подтверждена опора текущей копии: 1001'):
-            w.probe.run()
+            w.probe.snapshot()
         self.assertIn('Объект опоры / SKETCH_22 [SKETCH] (элемент 22) / tag=1001 / attachment face',w.t.stage)
         self.assert_before_candidate(w)
 
@@ -454,7 +454,7 @@ class ReplacementProtocolTests(unittest.TestCase):
     def test_intermediate_history_face_requires_exact_support_not_coplanar_substitute(self):
         w = ProbeWorld(); w.register(Face(1999,w.body)); w.references[22] = ((1999,b'old attachment'),)
         with self.assertRaises(M.UnresolvedProbeReferences) as caught:
-            w.probe.run()
+            w.probe.snapshot()
         self.assertIn('опора промежуточной истории тела 1000',str(caught.exception))
         self.assertIn('SKETCH_22 [SKETCH] (элемент 22) / опора tag=1999 / old attachment',str(caught.exception))
         w.t.native.reference_body.assert_called_once_with(1999,'Face')

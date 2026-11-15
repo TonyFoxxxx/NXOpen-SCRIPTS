@@ -3,14 +3,17 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 typedef uint32_t tag_t;
 typedef struct { tag_t tag; int count; } *uf_list_p_t;
 static int mode, invalid_free, string_free_calls, string_free_count;
 static int compare_calls, topology_calls, list_delete_calls, parameter_calls;
 static int face_body_calls, edge_body_calls;
+static int current_calls, box_calls;
 static tag_t last_feature, first_object, second_object, parameter_tag;
 static tag_t reference_tag;
+static tag_t current_part, box_tag;
 static double last_facet, last_distance;
 static void *allocated[16];
 static int allocation_kind[16]; /* 1 plain, 2 names array, 3 name, 4 linked list */
@@ -40,18 +43,19 @@ void fixture_reset(int value) {
     mode=value; invalid_free=string_free_calls=string_free_count=0;
     compare_calls=topology_calls=list_delete_calls=parameter_calls=0;
     face_body_calls=edge_body_calls=0; reference_tag=0;
+    current_calls=box_calls=0; current_part=box_tag=0;
     last_feature=first_object=second_object=parameter_tag=0;
     last_facet=last_distance=0;
 }
 int fixture_stat(int index) {
     int outstanding=0; for (int i=0;i<16;++i) outstanding+=allocated[i]!=NULL;
     const int values[]={outstanding,invalid_free,string_free_calls,string_free_count,
-        compare_calls,topology_calls,list_delete_calls,parameter_calls,face_body_calls,edge_body_calls};
-    return index>=0 && index<10 ? values[index] : -1;
+        compare_calls,topology_calls,list_delete_calls,parameter_calls,face_body_calls,edge_body_calls,current_calls,box_calls};
+    return index>=0 && index<12 ? values[index] : -1;
 }
 tag_t fixture_tag(int index) {
-    const tag_t values[]={last_feature,first_object,second_object,parameter_tag,reference_tag};
-    return index>=0 && index<5 ? values[index] : 0;
+    const tag_t values[]={last_feature,first_object,second_object,parameter_tag,reference_tag,current_part,box_tag};
+    return index>=0 && index<7 ? values[index] : 0;
 }
 double fixture_tolerance(int index) { return index==0 ? last_facet : last_distance; }
 
@@ -109,6 +113,22 @@ int UF_MODL_ask_face_body(tag_t face, tag_t *body) {
 }
 int UF_MODL_ask_edge_body(tag_t edge, tag_t *body) {
     ++edge_body_calls; return reference_body(edge,body);
+}
+int UF_MODL_ask_current_feature(tag_t part, tag_t *feature) {
+    ++current_calls; current_part=part;
+    if (mode==35) return 791;
+    if (mode!=36) *feature=mode==37 ? 0 : UINT32_C(0xe0000042);
+    return 0;
+}
+int UF_MODL_ask_bounding_box(tag_t object, double box[6]) {
+    ++box_calls; box_tag=object;
+    if (mode==38) return 792;
+    if (mode==39) return 0;
+    const double values[6]={-12.5,2.25,3.0,4.5,5.75,6.0};
+    memcpy(box,values,sizeof(values));
+    if (mode==40) box[1]=INFINITY;
+    if (mode==41) box[0]=100.0;
+    return 0;
 }
 int UF_MODL_create_list(uf_list_p_t *list) {
     if (mode==19) { *list=NULL; return 0; }

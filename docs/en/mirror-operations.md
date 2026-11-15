@@ -1,10 +1,12 @@
-# CAM operation coverage audit — V1.26.02
+# CAM operation coverage audit — V1.27
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-16**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
 
-The latest V1.26.02 report identifies two inaccessible supports with six Datum CSYS/sketch links; execution stops before candidate creation. Initial R1 arc selections and Tool Position On are readable, but their post-reflection state is untested. Available operation builders do not resolve intermediate model-history transfer. The executable and catalog are unchanged. [Report analysis](mirror-project.md#result-v12602).
+V1.27 adds only a separate EditWithRollbackManager historical-access experiment with local restoration checks and mandatory outer rollback. Operation coverage and spatial-data limitations are unchanged. Even successful owner/bounds/endpoint reads do not prove sketch or CAM transfer. [Experiment and additional SDK 2606 methods](mirror-project.md#historical-probe-v127).
+
+The latest V1.26.02 report identifies two inaccessible supports with six Datum CSYS/sketch links; execution stops before candidate creation. Initial R1 arc selections and Tool Position On are readable, but their post-reflection state is untested. Available operation builders do not resolve intermediate model-history transfer. The executable and catalog were unchanged when that V1.26.02 analysis was published. [Report analysis](mirror-project.md#result-v12602).
 
 V1.26.02 repairs reference-ownership reading after GetBody error 630003: exact final topology, separate UF queries for other faces/edges, and all unresolved links listed before candidate creation. The V1.26.01 report confirms nonempty UF reference reads and four sketches, not body replacement. Complete intermediate supports, Section/ScCollector definitions and sketch constraints remain unverified; operation coverage is unchanged. [Correction limits and SDK methods](mirror-project.md#reference-ownership-v12602).
 

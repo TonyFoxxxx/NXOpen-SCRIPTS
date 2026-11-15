@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.26.02
-SCRIPT_VERSION = "V1.26.02"
+# SCRIPT_VERSION: V1.27
+SCRIPT_VERSION = "V1.27"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -694,6 +694,32 @@ class NativeCam:
             raise RuntimeError("UF_MODL_compare: не прочитан результат")
         return value.value
 
+    def prepare_history_probe_api(self):
+        if not hasattr(self, "_history_probe_api"):
+            u, d = ctypes.c_uint32, ctypes.c_double
+            api = {
+                "current": self.bind("UF_MODL_ask_current_feature", (u, ctypes.POINTER(u))),
+                "box": self.bind("UF_MODL_ask_bounding_box", (u, ctypes.POINTER(d))),
+            }
+            self._history_probe_api = api
+
+    def current_feature(self, part):
+        part = probe_tag(part, "Текущий элемент / деталь")
+        self.prepare_history_probe_api()
+        tag = ctypes.c_uint32()
+        self.check(self._history_probe_api["current"](part, ctypes.byref(tag)), "UF_MODL_ask_current_feature")
+        return probe_tag(tag.value, "Не прочитан текущий элемент")
+
+    def history_bounding_box(self, tag):
+        tag = probe_tag(tag, "Габариты исторической опоры")
+        self.prepare_history_probe_api()
+        box = (ctypes.c_double * 6)(*[float("nan")] * 6)
+        self.check(self._history_probe_api["box"](tag, box), "UF_MODL_ask_bounding_box")
+        values = tuple(box)
+        if not all(math.isfinite(v) for v in values) or any(values[i] > values[i+3] for i in range(3)):
+            raise RuntimeError("Не прочитаны корректные габариты ABS опоры " + str(tag))
+        return values
+
     def reference_body(self, tag, kind):
         tag = probe_tag(tag, "Тело опоры")
         if kind not in ("Face", "Edge"):
@@ -1168,12 +1194,17 @@ class ReplacementProbeComplete(Exception):
     """The isolated experiment must use the normal copy-only rollback path."""
 
 
+class HistoricalProbeComplete(ReplacementProbeComplete):
+    """Historical access was tested, not geometry replacement or mirroring."""
+
+
 class UnresolvedProbeReferences(RuntimeError):
     """All unresolved supports are reported; none is accepted as an empty one."""
-    def __init__(self, details, first_error=None):
+    def __init__(self, details, first_error=None, supports=()):
         super().__init__("Не подтверждена принадлежность или карта геометрических опор:\n" +
             "\n".join(details) + "\nСоздание кандидата и замена истории не начинались. " +
             "Промежуточные опоры нельзя пропускать или заменять другой гранью/ребром.")
+        self.supports = tuple(supports)
         if first_error is not None:
             self.code = getattr(first_error, "code", getattr(first_error, "ErrorCode", None))
 
@@ -1330,6 +1361,7 @@ class BodyReplacementProbe:
                         raise RuntimeError("Неоднозначная принадлежность/тип объекта в топологии: " + str(tag))
                     owners[tag] = (body, kind)
         issues, first_context, first_error, queried = [], None, None, {}
+        historical = []
         verified = set()
         for tag in sorted(self.retained):
             for parent, name in self.initial_refs[tag]:
@@ -1373,6 +1405,8 @@ class BodyReplacementProbe:
                         self.t.lines.append("Опора другого тела сохранена: " + context + "; " + kind +
                                             "; тело=" + str(owner) + "; принадлежность прочитана через UF")
                 if problem is not None:
+                    if parent not in owners:
+                        historical.append((tag, parent, kind))
                     first_context = first_context or context
                     if first_error is None:
                         first_error = error
@@ -1383,7 +1417,11 @@ class BodyReplacementProbe:
                             "; неподтверждённых ссылок " + str(len(issues)))
         if issues:
             self.stage("Проверка карты опор до создания кандидата / " + first_context)
-            raise UnresolvedProbeReferences(issues, first_error) from first_error
+            # Only missing final-topology references can enter the separate
+            # historical-access experiment. A type/ownership-index mismatch
+            # never grants permission to move through history.
+            supports = historical if len(historical) == len(issues) else ()
+            raise UnresolvedProbeReferences(issues, first_error, supports) from first_error
 
     def check_stock_and_frames(self, unchanged_positions):
         for tag, (feature, bodies, state, _) in self.t.stock_features.items():
@@ -1705,7 +1743,14 @@ class BodyReplacementProbe:
         self.t.native.prepare_replacement_api()
         self.t.lines.append("UF C API прототипа: функции чтения опор, сравнения и списка кандидата найдены. " +
                             "Наличие функций не подтверждает результат их выполнения.")
-        self.snapshot()
+        try:
+            self.snapshot()
+        except UnresolvedProbeReferences as failure:
+            if not failure.supports:
+                raise
+            self.t.lines.append("Замена конечного тела заблокирована. Начинается отдельная проверка доступа к историческим опорам.")
+            HistoricalReferenceProbe(self, failure.supports).run()
+            raise RuntimeError("Проверка исторических опор должна завершаться обязательным откатом")
         self.independent_copy()
         self.match_topology()
         self.reflect_candidate()
@@ -1715,6 +1760,235 @@ class BodyReplacementProbe:
         self.verify_replacement()
         raise ReplacementProbeComplete("Замена одного тела и перечисленные проверки завершены. " +
             "Эксперимент отменяется. Полный перенос CAM, всех ограничений эскизов и пространственных настроек не подтверждён.")
+
+
+class HistoricalReferenceProbe:
+    """Read exact historical supports, restore each context, then outer Undo.
+
+    No extraction, feature edits, reference remapping or reflection. Bounding
+    boxes/endpoints establish access only, not a complete geometric definition.
+    """
+    def __init__(self, replacement, supports):
+        self.p, self.t = replacement, replacement.t
+        self.supports = tuple(supports)
+
+    def stage(self, text):
+        self.t.stage = "Прототип исторических опор / " + text
+
+    def require_copy(self):
+        parts = self.t.session.Parts
+        if any(obj is None or int(obj.Tag) != int(self.t.part.Tag) for obj in (parts.Work, parts.Display)):
+            raise RuntimeError("Для проверки истории текущая копия должна оставаться рабочей и отображаемой")
+
+    def record_error(self, heading, stage, error):
+        self.t.lines.append(heading + " / " + stage + ": " + type(error).__name__ + ": " + str(error))
+        for attribute in ("ErrorCode", "code"):
+            try:
+                code = getattr(error, attribute, None)
+            except Exception:
+                continue
+            if isinstance(code, int) and not isinstance(code, bool):
+                self.t.lines.append("Код NX/API (" + attribute + "): " + str(code))
+        self.t.lines.append("".join(traceback.format_exception(type(error), error, error.__traceback__)))
+
+    def feature_states(self):
+        result = {}
+        for feature in self.t.part.Features:
+            tag = probe_tag(feature.Tag, "Состояние истории")
+            self.stage("Состояние элемента " + str(tag))
+            stamp, suppressed, internal = feature.Timestamp, feature.Suppressed, feature.IsInternal
+            if (type(stamp) is not int or stamp < 0 or type(suppressed) is not bool or
+                    type(internal) is not bool or tag in result):
+                raise RuntimeError("Не прочитаны Timestamp/Suppressed/IsInternal элемента " + str(tag))
+            result[tag] = (stamp, suppressed, internal)
+        if set(result) != set(self.p.features):
+            raise RuntimeError("Изменился состав элементов при проверке исторических опор")
+        return result
+
+    def expression_state(self):
+        result = {}
+        expressions = list(self.t.part.Expressions)
+        if len(expressions) > MAX_OBJECTS:
+            raise RuntimeError("Слишком много выражений для проверки истории")
+        for expression in expressions:
+            tag = probe_tag(expression.Tag, "Выражение детали")
+            self.stage("Определение выражения " + str(tag))
+            name, rhs, kind = expression.Name, expression.RightHandSide, str(expression.Type)
+            units = expression.Units if kind.lower() == "number" else None
+            unit_name = units.Name if units is not None else None
+            if (not isinstance(name, str) or not isinstance(rhs, str) or not kind or
+                    unit_name is not None and not isinstance(unit_name, str) or tag in result):
+                raise RuntimeError("Не прочитано определение выражения " + str(tag))
+            result[tag] = (name, kind, rhs, unit_name)
+        return result
+
+    def preflight(self):
+        self.stage("Проверка API до перехода по истории")
+        self.require_copy()
+        self.t.native.prepare_history_probe_api()
+        self.t.lines.append("UF-функции чтения текущего элемента и габаритов исторических опор найдены.")
+        manager_class = self.t.nx.Features.EditWithRollbackManager
+        required = [self.t.part.Features.StartEditWithRollbackManager,
+                    self.t.session.SetUndoMark, self.t.session.UndoToMark, self.t.session.DeleteUndoMark]
+        required.extend(getattr(manager_class, name) for name in ("UpdateFeature", "Stop", "Destroy"))
+        if any(not callable(method) for method in required):
+            raise RuntimeError("Не подтверждён API EditWithRollbackManager/Undo")
+        self.t.lines.append("Методы EditWithRollbackManager/Undo найдены; результат их работы ещё не проверен.")
+        self.visibility = self.t.nx.Session.MarkVisibility.Invisible
+        self.states = self.feature_states()
+        self.expressions = self.expression_state()
+        self.stage("Снимок истории до перехода")
+        self.history = self.t.model_history("до проверки исторических опор", check_errors=True)
+        self.stage("Чтение текущего элемента до перехода / UF_MODL_ask_current_feature")
+        self.current = self.t.native.current_feature(int(self.t.part.Tag))
+        if self.current not in self.states:
+            raise RuntimeError("Текущий элемент не найден в истории копии: " + str(self.current))
+        contexts, covered, expected = {}, set(), {parent for _, parent, _ in self.supports}
+        kinds = {}
+        for consumer, parent, kind in self.supports:
+            if consumer not in self.p.retained or kind not in ("Face", "Edge"):
+                raise RuntimeError("Неверный контекст исторической опоры")
+            if parent in kinds and kinds[parent] != kind:
+                raise RuntimeError("Неоднозначный тип исторической опоры " + str(parent))
+            kinds[parent] = kind
+            stamp, suppressed, internal = self.states[consumer]
+            if internal:
+                self.t.lines.append("Внутренний потребитель опоры " + str(parent) + ": элемент " + str(consumer) +
+                                    ". Отдельное редактирование внутреннего элемента не выполняется.")
+                continue
+            if suppressed or consumer in self.t.stock_features:
+                raise RuntimeError("Контекст подавлен или относится к защищённой заготовке: " + str(consumer))
+            contexts.setdefault(consumer, {})[parent] = kind
+            covered.add(parent)
+        if expected != covered:
+            raise RuntimeError("Для опор нет внешнего прямого потребителя, пригодного для проверки: " + str(sorted(expected-covered)))
+        self.contexts = sorted(contexts.items(), key=lambda pair: (self.states[pair[0]][0], pair[0]))
+        if not self.contexts:
+            raise RuntimeError("Не найдены контексты исторических опор")
+        self.t.lines.append("Проверка доступа: уникальных опор " + str(len(expected)) +
+                            "; внешних контекстов " + str(len(self.contexts)) + "; текущий элемент " + str(self.current))
+
+    def verify_restored(self, phase):
+        self.stage("Проверка возврата / " + phase)
+        self.require_copy()
+        if self.t.native.current_feature(int(self.t.part.Tag)) != self.current:
+            raise RuntimeError("Не восстановлен текущий элемент после " + phase)
+        if self.feature_states() != self.states:
+            raise RuntimeError("Изменились Timestamp/Suppressed/IsInternal после " + phase)
+        if self.expression_state() != self.expressions:
+            raise RuntimeError("Изменились определения выражений после " + phase)
+        if self.t.model_history("возврат истории / " + phase, check_errors=True) != self.history:
+            raise RuntimeError("Не восстановлена точная история/предупреждения после " + phase)
+        # Reacquire wrappers by the same feature tags after rolling/Undo.
+        self.p.features = {int(f.Tag): f for f in self.t.part.Features}
+        self.p.check_originals()
+        self.stage("Возврат проверен / " + phase)
+
+    def read_support(self, tag, kind):
+        obj = self.p.object(tag)
+        expected_class = self.t.nx.Face if kind == "Face" else self.t.nx.Edge
+        if not isinstance(obj, expected_class):
+            raise RuntimeError("Историческая опора изменила тип: " + str(tag))
+        owner = self.t.native.reference_body(tag, kind)
+        body = self.p.object(owner)
+        if not isinstance(body, self.t.nx.Body) or owner not in {int(b.Tag) for b in self.t.part.Bodies}:
+            raise RuntimeError("Тело исторической опоры не находится в копии: " + str(owner))
+        entities = list(body.GetFaces() if kind == "Face" else body.GetEdges())
+        tags = [int(entity.Tag) for entity in entities]
+        if tags.count(tag) != 1 or len(tags) != len(set(tags)):
+            raise RuntimeError("Точный tag исторической опоры не найден в топологии её тела: " + str(tag))
+        box = self.t.native.history_bounding_box(tag)
+        vertices = None
+        if kind == "Edge":
+            points = probe_array(obj.GetVertices(), "Edge.GetVertices")
+            if len(points) != 2:
+                raise RuntimeError("Не прочитаны две точки GetVertices ребра " + str(tag))
+            vertices = tuple(tuple(xyz(point)) for point in points)
+            if not all(math.isfinite(v) for point in vertices for v in point):
+                raise RuntimeError("Нечисловые координаты GetVertices ребра " + str(tag))
+        return owner, box, vertices
+
+    def inspect_context(self, consumer, supports):
+        label = history_feature_label(consumer, self.t.history_baseline[consumer])
+        self.stage("Начало EditWithRollback / " + label)
+        self.require_copy()
+        mark = self.t.session.SetUndoMark(self.visibility, TITLE + " / история " + str(consumer))
+        manager, primary, primary_trace, failure_stage = None, None, None, None
+        readings, read_errors, cleanup_errors = [], [], []
+        try:
+            manager = self.t.part.Features.StartEditWithRollbackManager(self.p.object(consumer), mark)
+            if manager is None or any(not callable(getattr(manager, name, None)) for name in ("UpdateFeature", "Stop", "Destroy")):
+                raise RuntimeError("Не получен корректный EditWithRollbackManager")
+            self.require_copy()
+            current = self.t.native.current_feature(int(self.t.part.Tag))
+            self.t.lines.append("Исторический контекст: " + label + "; Timestamp=" + str(self.states[consumer][0]) +
+                                "; текущий элемент внутри=" + str(current))
+            for tag, kind in sorted(supports.items()):
+                self.stage(label + " / чтение " + kind + " " + str(tag))
+                try:
+                    value = self.read_support(tag, kind)
+                    readings.append((consumer, tag, kind, value))
+                    self.t.lines.append("Историческая опора прочитана: " + str(tag) + "; " + kind +
+                        "; тело=" + str(value[0]) + "; габариты ABS=" + str(value[1]) +
+                        "; точки GetVertices ABS=" + str(value[2]))
+                except Exception as error:
+                    read_errors.append((self.t.stage, error))
+                    self.record_error("Не прочитана историческая опора", self.t.stage, error)
+        except Exception as error:
+            primary, primary_trace, failure_stage = error, error.__traceback__, self.t.stage
+        finally:
+            if manager is not None:
+                for name, args in (("UpdateFeature", (primary is not None or bool(read_errors),)), ("Stop", ()), ("Destroy", ())):
+                    self.stage(label + " / " + name)
+                    try:
+                        self.require_copy()
+                        getattr(manager, name)(*args)
+                    except Exception as error:
+                        cleanup_errors.append((self.t.stage, error))
+            if primary is None and not cleanup_errors:
+                try:
+                    self.verify_restored("Stop / " + label)
+                except Exception as error:
+                    primary, primary_trace, failure_stage = error, error.__traceback__, self.t.stage
+            # Undo even after a successful Stop: the experiment owns this mark
+            # only. Failure here is left for execute's outer copy-only rollback.
+            try:
+                self.stage(label + " / локальный Undo")
+                self.require_copy()
+                self.t.session.UndoToMark(mark, None)
+                self.verify_restored("локальный Undo / " + label)
+                self.t.lines.append("Локальный Undo выполнен; возврат модели и текущего элемента проверен: " + label)
+                self.stage(label + " / удаление локальной метки Undo")
+                self.t.session.DeleteUndoMark(mark, None)
+            except Exception as error:
+                cleanup_errors.append((self.t.stage, error))
+        for stage, error in cleanup_errors:
+            self.record_error("Ошибка завершения проверки", stage, error)
+        if primary is not None:
+            self.t.stage = failure_stage
+            raise primary.with_traceback(primary_trace)
+        if cleanup_errors:
+            self.t.stage, error = cleanup_errors[0]
+            raise error
+        return readings, read_errors
+
+    def run(self):
+        self.t.lines.append("ПРОВЕРКА ИСТОРИЧЕСКИХ ОПОР: чтение через EditWithRollbackManager; " +
+            "без создания геометрии, правки элементов, замены истории и отражения. В конце обязателен откат.")
+        self.preflight()
+        readings, errors = [], []
+        for consumer, supports in self.contexts:
+            self.verify_restored("перед новым контекстом")
+            values, failures = self.inspect_context(consumer, supports)
+            readings.extend(values)
+            errors.extend(failures)
+        self.t.lines.append("Результат чтения истории: успешно " + str(len(readings)) + "; ошибок " + str(len(errors)))
+        if errors:
+            self.t.stage, first = errors[0]
+            raise UnresolvedProbeReferences([stage + ": " + str(error) for stage, error in errors], first) from first
+        raise HistoricalProbeComplete("Доступ к указанным историческим опорам и возврат модели проверены. " +
+            "Прочитаны владельцы, габариты и точки GetVertices рёбер. Полные кривые/поверхности, ограничения эскизов " +
+            "и карта отражения ещё не построены. Эксперимент отменяется.")
 
 
 class Trial:
@@ -3562,7 +3836,8 @@ def execute(session, nx, uf, plane, native=None):
         probe_complete = isinstance(exc, ReplacementProbeComplete)
         failure_traceback = None if probe_complete else traceback.format_exc()
         if probe_complete:
-            lines.append("\nПРОТОТИП ОДНОГО ТЕЛА: проверки завершены, выполняется обязательный откат.")
+            caption = "ПРОТОТИП ИСТОРИЧЕСКИХ ОПОР" if isinstance(exc, HistoricalProbeComplete) else "ПРОТОТИП ОДНОГО ТЕЛА"
+            lines.append("\n" + caption + ": проверки завершены, выполняется обязательный откат.")
             lines.append(str(exc))
         else:
             lines.append("\nТЕСТ НЕ ПРОЙДЕН. Этап: " + (trial.stage if trial else stage))
@@ -3577,6 +3852,9 @@ def execute(session, nx, uf, plane, native=None):
         if mark is not None:
             rolled_back = False
             try:
+                if any(active is None or int(active.Tag) != int(part.Tag)
+                       for active in (session.Parts.Work, session.Parts.Display)):
+                    raise RuntimeError("Тестовая копия перестала быть рабочей/отображаемой; Undo в другой детали не вызывается")
                 session.UndoToMark(mark, None)
                 rolled_back = True
                 session.DeleteUndoMark(mark, None)
