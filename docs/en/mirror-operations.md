@@ -1,4 +1,4 @@
-# CAM operation coverage audit — V1.20
+# CAM operation coverage audit — V1.21
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
@@ -6,13 +6,13 @@ Audit date: **2026-11-15**. Baseline: published V1.18, commit `b7c881ce685020697
 
 ## What the catalog means
 
-The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.20 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
+The template name in Create Operation, the `NXOpen.CAM.Operation` object class and its Builder class are different things. A template name cannot determine a factory name, and one operation class does not mean one template. V1.21 reports the object name, actual Python class, selected factory and actual Builder class. A user-assigned object name is not presented as its original template name.
 
 | Level | Actual status |
 | --- | --- |
 | Common project transformation | Transfers checked geometry, supported MCS/RCS, parametric stock and specified boundary planes. References, identities and reflected positions have separate checks. |
 | Accessible operation data | Calls `Geometry.InitializeData(True)` and `Validate()` on admitted editors. Reads accessible Part, Blank, Check, Trim, Cut Area, Wall and Drive channels, collectors and boundaries through UF. This is shared processing, without complete family-specific adapters. |
-| Editor recognition | Retains 21 operation-class dispatch routes and 31 recognized Builders. Falls back to checked `CreateBuilder` when the specific method is absent. The other 10 editors are recognized only from the generic call's result. |
+| Editor recognition | Retains 21 operation-class dispatch routes and 31 recognized Builders. Falls back to checked `CreateBuilder` when the specific method is absent. Another 10 editors are recognized by their actual returned class; a specialized factory may return one of them too. |
 | Complete reflection of a family's settings | **Confirmed for no family.** In particular, obtaining `CavityMillingBuilder` does not establish that all Cavity Milling levels, directions and moves were transferred. |
 | Unknown/excluded families | An unknown Builder stops the trial. The catalog does not admit turning, WEDM, additive, inspection or user-defined motion. |
 
@@ -46,7 +46,7 @@ This table describes the code, **not signatures verified against SDK 2606**. Met
 | `TpMultiAxisWallFinishing` | `CreateMultiAxisWallFinishingBuilder` |
 | `MwBLDeburringOperation` | `CreateMwBldeburringOperationBuilder` |
 
-The generic route additionally recognizes `EdgeChamferBuilder`, `FacingBuilder`, `FacingZigZagBuilder`, `MultiAxisRoughingBuilder`, `PlanarRoughingBuilder`, `PointToPointBuilder`, `RotaryRoughingBuilder`, `SwarfBuilder`, `WallProfilingBuilder` and `ZlevelUndercutBuilder`. Their mapping to actual object classes and DC 2606 templates still needs investigation. Admitted editors undergo the same common checks, not just a name check.
+The catalog additionally recognizes `EdgeChamferBuilder`, `FacingBuilder`, `FacingZigZagBuilder`, `MultiAxisRoughingBuilder`, `PlanarRoughingBuilder`, `PointToPointBuilder`, `RotaryRoughingBuilder`, `SwarfBuilder`, `WallProfilingBuilder` and `ZlevelUndercutBuilder`. In the user's V1.20 report, specialized `CreateSurfaceContourBuilder` returned `PlanarRoughingBuilder` for a `SurfaceContour` object; reading and Validate passed. Complete mappings to actual object classes and DC 2606 templates still need verification. Admitted editors undergo the same common checks, not just a name check.
 
 ## Data still needing transformation or verification
 
@@ -55,7 +55,7 @@ The generic route additionally recognizes `EdgeChamferBuilder`, `FacingBuilder`,
 | Cavity / Planar / Face / Z-level / Plunge and related | Editor opening, accessible geometry, boundaries, MCS/RCS; both custom-point channels for newly admitted families | Manual cut levels/planes, numerical directions and points, engage/retract and transfer moves; meaning of settings after reflection |
 | Surface Contour, multi-axis, Swarf, Rotary, Deburring | The same common processing and accessible Drive/Wall/Check references | Complete tool-axis definitions, orientation/tilt, drive geometry outside the read channels, local directions and moves |
 | HoleMaking / HoleDrilling / Thread / Cylinder / FeatureMilling / GenericFeature | Common references and editors; full hole/FBM definitions explicitly remain unverified, including generic dispatch without `GetFeatureGeometry` | Feature/hole membership and order, axes and depths, local CSYS, control points, attributes and machining-feature data |
-| All 31 Builders | Detected custom start/predrill points stop the trial; unavailable channels returning 1345005 are reported separately | Other numerical spatial settings are not reflected. The local nonzero 3D parameter list does not cover every coordinate, inherited value or family-specific setting |
+| All 31 Builders | Read accessible custom points; transfer is limited to four classes and cases described in the [guide](mirror-project.md#custom-cam-points). Code 1345005 still marks an unverified channel | Nonzero depths and other point definitions remain unsupported. Other numerical spatial settings are not reflected; the local 3D-parameter inventory is incomplete |
 
 Existing custom-point query exceptions remain: `SurfaceContour` queries channel 1, `TpMultiAxisDeburring` makes no such UF query, and other operations query channels 0 and 1. These are coverage limits, not proof that those two classes contain no other points; channel applicability requires the 2606 SDK.
 
@@ -69,14 +69,17 @@ Existing custom-point query exceptions remain: `SurfaceContour` queries channel 
 6. Declarations/applicability of `UF_CAMGEOM_ask_items`, `UF_CAMGEOM_ask_geom_provider`, `UF_CAMGEOM_ask_collector_items`, `UF_CAMGEOM_ask_custom_points`; `UF_CAMBND_ask_boundaries`, `UF_CAMBND_ask_boundary_data`, `UF_CAMBND_ask_boundary_items`, `UF_CAMBND_set_boundary_plane`; structures, sizes, ownership and code 1345005 in 2606 headers. Check custom-point channels for SurfaceContour and TpMultiAxisDeburring separately.
 7. `UF_PARAM_ask_required_params` / Python `AskRequiredParams`, `AskParamAttributes`, 3D/3DLength/tag/VLA-tag types, `UF_PARAM_ask_param_status`, `UF_PARAM_ask_param_definer`, MCS/RCS indices 59/60 and link index 41. Each transformed parameter needs verified meaning and frame, not just a type.
 8. For V1.20's general model-history admission: Python `NXOpen.Features.BodyFeature`, concrete classes from `Body.GetFeatures()`, `BodyFeature.GetBodies()`, `Feature.GetParents()`, `GetExpressions()`, `GetFeatureErrorMessages()`, `Expression.GetUsingFeatures()` and `GetReferencingExpressions()`. Verify completeness for boolean, multi-body, suppressed and user-defined features and history preservation/replacement by `UF_MODL_transform_entities`. [Rules and limits](mirror-project.md#model-feature-handling).
+9. For V1.21 points: `UF_CAMGEOM_custom_point_s`, pointer-array layout and individual-record cleanup, `UF_CAMGEOM_ask_custom_points`, `UF_CAMGEOM_delete_custom_points`, `UF_CAMGEOM_append_custom_points`; units/reference frames and zero/nonzero meanings of `upper_depth`, `lower_depth`, `depth`, retained associativity and order after replacement. In particular, verify Planar/Cavity cases where reflection changes ABS Z.
 
 SDK verification cannot replace an NX run. Each new family needs a test PRT with nonempty family-specific settings, selection/axis inspection, manual save and reopen of the copy, then normal toolpath regeneration and inspection. The source must remain unchanged; the journal neither saves automatically nor creates extra files.
 
 ## Sources and verification limits
+
+- [Older Siemens uf_camgeom.h reproduced by ugapi](https://www.ugapi.com/doc/UFun/uf_cam/uf_camgeom.html) describes custom-point records, ABS coordinates and list read/replacement functions. This is V1.21's contract source, not SDK DC 2606.
 
 - [Siemens NXOpen OperationCollection, 2023 reference reproduced by Tech PLM](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a50101.html) — V1.18's catalog source, not 2606 documentation.
 - [CavityMillingBuilder](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a48265.html) and [HoleDrillingBuilder](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a49073.html) from that reference expose separate CutLevel and FBM definitions. Search excerpts were available during this audit; full Tech PLM pages returned 502.
 - [Siemens SurfaceContourBuilder, older reference reproduced by ugapi](https://www.ugapi.com/doc/nxopen/a02024.html) and [deprecated API list](https://www.ugapi.com/doc/NXOpen/a10908.html) provide further reason not to transfer old signatures mechanically to 2606.
 - The [official Siemens NX documentation portal](https://docs.sw.siemens.com/en-US/product/209349590) could not be read with the available lookup tool. No SDK 2606 sources were available for exact comparison.
 
-V1.20: **244 regression checks outside NX**, including 32 using a separately compiled C library. Retain V1.19 editor-catalog checks; the 16 new tests cover general model-history admission and protection failures. Operation coverage remains 21 dispatch routes / 31 Builders. The C library is a test implementation of the contract, not a Siemens library. These results do not establish NX compatibility or machining correctness.
+V1.21: **275 regression checks outside NX**, including 43 using test C libraries. Add 31 custom-point, memory-ownership, selection/order, protection-failure and rollback scenarios. Coverage remains 21 dispatch routes / 31 Builders. The user's V1.20 report confirms only initial reads of 35 editors before stopping on a point; reflection had not run. The test libraries are not Siemens libraries and do not establish NX compatibility.

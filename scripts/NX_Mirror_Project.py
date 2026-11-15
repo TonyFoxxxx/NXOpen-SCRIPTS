@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.20
-SCRIPT_VERSION = "V1.20"
+# SCRIPT_VERSION: V1.21
+SCRIPT_VERSION = "V1.21"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -76,6 +76,7 @@ FEATURE_DEFINITION_BUILDERS = frozenset((
 ))
 CAM_GEOMETRY_FIELDS = ('PartGeometry', 'BlankGeometry', 'CheckGeometry',
                        'CutAreaGeometry', 'WallGeometry', 'DriveGeometry', 'TrimGeometry')
+CUSTOM_POINT_KINDS = ("Predrill Engage", "Cut Region Start")
 
 
 def cam_enum_snapshot(value, domain, label):
@@ -363,6 +364,16 @@ class _BoundaryData(ctypes.Structure):
     ]
 
 
+class _CustomPointData(ctypes.Structure):
+    # uf_camgeom.h: point_acs uses ABS coordinates in part units. The returned
+    # list contains separately allocated record pointers, not inline records.
+    _fields_ = [("point_tag", ctypes.c_uint32),
+                ("point_acs", ctypes.c_double * 3),
+                ("upper_depth", ctypes.c_double),
+                ("lower_depth", ctypes.c_double),
+                ("depth", ctypes.c_double)]
+
+
 class NativeCam:
     """Documented UF C calls, including methods absent from Python UF.Modl.
 
@@ -616,22 +627,56 @@ class NativeCam:
             if data.value:
                 self.free(data)
 
-    def custom_count(self, tag, kind):
+    def read_custom_points(self, tag, kind):
         count, data = ctypes.c_int(), ctypes.c_void_p()
         try:
             self.check(self.custom(tag, kind, ctypes.byref(count), ctypes.byref(data)), "UF_CAMGEOM_ask_custom_points")
-            if count.value < 0 or count.value > MAX_OBJECTS:
-                raise RuntimeError("Некорректное количество пользовательских точек")
-            return count.value
+            if count.value < 0 or count.value > MAX_OBJECTS or (count.value and not data.value):
+                raise RuntimeError("Некорректный массив пользовательских точек")
+            entries = ctypes.cast(data, ctypes.POINTER(ctypes.c_void_p))
+            result, seen = [], set()
+            for n in range(count.value):
+                address = entries[n]
+                if not address or address in seen:
+                    raise RuntimeError("Пустая или повторная запись пользовательской точки: " + str(n + 1))
+                seen.add(address)
+                record = ctypes.cast(address, ctypes.POINTER(_CustomPointData)).contents
+                point = tuple(record.point_acs)
+                depths = (record.upper_depth, record.lower_depth, record.depth)
+                if not all(math.isfinite(v) for v in point + depths):
+                    raise RuntimeError("Некорректные координаты/глубины пользовательской точки: " + str(n + 1))
+                result.append((int(record.point_tag), point, depths))
+            return tuple(result)
         finally:
             if data.value:
                 # Unlike ask_items, this API allocates every point record too.
                 if 0 <= count.value <= MAX_OBJECTS:
                     entries = ctypes.cast(data, ctypes.POINTER(ctypes.c_void_p))
+                    freed = set()
                     for n in range(count.value):
-                        if entries[n]:
+                        if entries[n] and entries[n] not in freed:
+                            freed.add(entries[n])
                             self.free(ctypes.c_void_p(entries[n]))
                 self.free(data)
+
+    def replace_custom_points(self, tag, kind, points):
+        # Resolve BOTH entry points and validate the entire list before deleting
+        # anything. A failed append propagates to the copy's existing Undo path.
+        if kind not in (0, 1) or not points or len(points) > MAX_OBJECTS:
+            raise RuntimeError("Некорректный список для переноса пользовательских точек")
+        records = []
+        for point_tag, point, depths in points:
+            if (not isinstance(point_tag, int) or not 0 <= point_tag <= 0xffffffff or
+                    len(point) != 3 or len(depths) != 3 or
+                    not all(math.isfinite(v) for v in tuple(point) + tuple(depths))):
+                raise RuntimeError("Некорректная запись для переноса пользовательской точки")
+            records.append(_CustomPointData(point_tag, (ctypes.c_double * 3)(*point), *depths))
+        pointers = (ctypes.POINTER(_CustomPointData) * len(records))(*(ctypes.pointer(r) for r in records))
+        u, i = ctypes.c_uint32, ctypes.c_int
+        delete = self.bind("UF_CAMGEOM_delete_custom_points", (u, i))
+        append = self.bind("UF_CAMGEOM_append_custom_points", (u, i, i, ctypes.POINTER(ctypes.POINTER(_CustomPointData))))
+        self.check(delete(tag, kind), "UF_CAMGEOM_delete_custom_points")
+        self.check(append(tag, kind, len(records), pointers), "UF_CAMGEOM_append_custom_points")
 
     def reflection_matrix(self, plane):
         origin = (ctypes.c_double * 3)(*plane.origin)
@@ -753,6 +798,7 @@ class Trial:
         self.history_baseline, self.history_previous = None, None
         self.body_history, self.body_conversions = {}, []
         self.boundary_planes, self.current_boundaries = {}, {}
+        self.custom_points, self.current_custom_points, self.custom_point_labels = {}, {}, {}
         self.moved_boundary_count = 0
         if not self.bodies or not self.operations:
             raise RuntimeError("В копии должны быть тела и CAM-операции")
@@ -1613,8 +1659,10 @@ class Trial:
     def geometry_snapshot(self, collect=False):
         result = {}
         self.current_boundaries = {}
+        self.current_custom_points = {}
         if collect:
             self.boundary_planes = {}
+            self.custom_points, self.custom_point_labels = {}, {}
         for node in self.nodes:
             for kind, label in enumerate(GEOMETRY_KINDS):
                 context = str(node.Name) + " [" + type(node).__name__ + "]/" + label
@@ -1664,21 +1712,97 @@ class Trial:
                 # UF channel is recorded as unverified, never assumed empty.
                 kinds = {"SurfaceContour": (1,), "TpMultiAxisDeburring": ()}.get(type(node).__name__, (0, 1))
                 for kind in kinds:
-                    self.stage = "Чтение пользовательских точек: " + str(node.Name) + " / " + str(kind)
+                    context = str(node.Name) + " / " + CUSTOM_POINT_KINDS[kind]
+                    self.stage = "Чтение пользовательских точек: " + context
                     try:
-                        count = self.native.custom_count(int(node.Tag), kind)
+                        points = self.native.read_custom_points(int(node.Tag), kind)
                     except NativeApiError as exc:
                         if exc.code != 1345005:
                             raise
-                        count = "unavailable"
+                        points = None
                         if collect:
-                            self.unavailable.add(str(node.Name) + " / пользовательские точки " + str(kind))
-                    result[(int(node.Tag), "custom", kind)] = count
-                    if isinstance(count, int) and count:
-                        raise RuntimeError(str(node.Name) + ": пользовательские стартовые/предсверлильные точки пока не поддерживаются в этой версии")
+                            self.unavailable.add(context + " / пользовательские точки")
+                    key = (int(node.Tag), kind)
+                    self.current_custom_points[key] = points
+                    # Coordinates are checked against the frozen reflection,
+                    # separately from ordered references and depth values.
+                    result[(int(node.Tag), "custom", kind)] = ("unavailable" if points is None else
+                        tuple((point_tag, depths) for point_tag, _, depths in points))
+                    if collect and points:
+                        self.capture_custom_points(node, kind, points, context)
         if collect and not self.refs:
             raise RuntimeError("Не удалось получить ни одной CAM-ссылки на геометрию. Недоступные каналы: " + "; ".join(sorted(self.unavailable)[:12]))
         return result
+
+    def capture_custom_points(self, node, kind, points, context):
+        self.lines.append("Пользовательские точки: " + context + "; количество " + str(len(points)))
+        for number, (tag, point, depths) in enumerate(points, 1):
+            self.lines.append("  Точка " + str(number) + ": tag=" + str(tag) + "; ABS=" + str(point) +
+                              "; upper_depth/lower_depth/depth=" + str(depths))
+        # The old public UF contract describes these four operation classes.
+        # Nonzero depth semantics have not been verified against SDK 2606;
+        # do not silently preserve or zero them as a substitute for reflection.
+        if type(node).__name__ not in ("PlanarMilling", "CavityMilling", "FaceMilling", "SurfaceContour"):
+            raise RuntimeError(context + ": перенос пользовательских точек этого класса операции не подтверждён")
+        if any(any(v != 0.0 for v in depths) for _, _, depths in points):
+            raise RuntimeError(context + ": ненулевые глубины пользовательских точек требуют проверки по SDK 2606; значения приведены выше")
+        # A zero depth may still be a level rather than an inactive field.
+        # Until its reference frame is verified, Planar/Cavity points are only
+        # admitted when reflection preserves ABS Z as well as local MCS Z.
+        if type(node).__name__ in ("PlanarMilling", "CavityMilling") and self.plane.normal[2] != 0.0:
+            raise RuntimeError(context + ": плоскость меняет ABS Z; смысл даже нулевых глубин Planar/Cavity требует проверки по SDK 2606")
+        for tag, point, _ in points:
+            if tag:
+                self.reference(tag)
+                obj = self.refs[tag]
+                if not isinstance(obj, self.nx.Point) or not close_values(xyz(obj.Coordinates), point):
+                    raise RuntimeError(context + ": не подтверждена ссылка на Point и его координаты: " + str(tag))
+        key = (int(node.Tag), kind)
+        self.custom_points[key], self.custom_point_labels[key] = points, context
+
+    def transfer_custom_points(self, geometry):
+        if not self.custom_points:
+            return
+        self.stage = "Повторное чтение пользовательских точек после геометрии и MCS"
+        if self.geometry_snapshot() != geometry:
+            raise RuntimeError("Изменились CAM-ссылки или определения пользовательских точек до переноса")
+        updates = []
+        for key, original in self.custom_points.items():
+            context = self.custom_point_labels[key]
+            self.stage = "Подготовка переноса пользовательских точек: " + context
+            current = self.current_custom_points[key]
+            expected, needs_write = [], False
+            for number, ((tag, point, depths), (_, actual, _)) in enumerate(zip(original, current), 1):
+                reflected = tuple(self.plane.point(point))
+                if not close_values(actual, reflected):
+                    if tag or not close_values(actual, point):
+                        raise RuntimeError(context + ": неожиданное положение точки " + str(number) +
+                                           "; ожидалось " + str(reflected) + "; получено " + str(actual))
+                    needs_write = True
+                expected.append((tag, reflected, depths))
+            if needs_write:
+                updates.append((key, tuple(expected)))
+        for (tag, kind), points in updates:
+            self.stage = "Перенос числовых пользовательских точек: " + self.custom_point_labels[(tag, kind)]
+            self.native.replace_custom_points(tag, kind, points)
+        if updates:
+            self.native.update_model()
+        if self.geometry_snapshot() != geometry:
+            raise RuntimeError("Изменились CAM-ссылки, порядок точек или глубины после переноса")
+        self.verify_custom_points()
+
+    def verify_custom_points(self):
+        for key, original in self.custom_points.items():
+            context = self.custom_point_labels[key]
+            self.stage = "Проверка пользовательских точек: " + context
+            current = self.current_custom_points.get(key)
+            if current is None or len(current) != len(original):
+                raise RuntimeError(context + ": потерян список пользовательских точек")
+            for number, (old, new) in enumerate(zip(original, current), 1):
+                tag, point, depths = old
+                if (new[0] != tag or new[2] != depths or
+                        not close_values(new[1], self.plane.point(point))):
+                    raise RuntimeError(context + ": не подтверждены отражение, ссылка или глубины точки " + str(number))
 
     def transfer_boundary_planes(self, geometry):
         if not self.boundary_planes:
@@ -2010,6 +2134,8 @@ class Trial:
         self.native.update_model()
         self.stabilize_three_planes_after_update()
         self.checkpoint_model_history("Удаление траекторий и обновление модели")
+        self.transfer_custom_points(geometry)
+        self.checkpoint_model_history("Перенос пользовательских точек")
         self.stage = "Перенос заданных плоскостей границ"
         self.transfer_boundary_planes(geometry)
         self.checkpoint_model_history("Перенос заданных плоскостей границ")
@@ -2037,6 +2163,7 @@ class Trial:
                                    "\nПолучено: " + str(actual))
         if self.geometry_snapshot() != geometry:
             raise RuntimeError("Изменились ссылки на выбранную CAM-геометрию/границы")
+        self.verify_custom_points()
         self.stage = "Проверка плоскостей границ"
         self.verify_boundary_planes()
         self.verify_mcs(replacement)
@@ -2047,6 +2174,8 @@ class Trial:
         self.lines.append("доступных ссылок CAM-геометрии, состава операций и переноса MCS/RCS.")
         self.lines.append("Рассчитанные траектории удалены; зеркальные операции не создавались.")
         self.lines.append("Перенесены и проверены заданные плоскости границ: " + str(self.moved_boundary_count))
+        self.lines.append("Проверены пользовательские точки начала/предсверления: " +
+                          str(sum(len(points) for points in self.custom_points.values())))
         self.lines.append("Проверены данные редакторов Workpiece/MCS/операций: " + str(len(self.cam_builder_state)))
         self.lines.append("Параметрические заготовки сохранены: " + str(len(self.stock_features)))
         self.lines.append("Модельные тела с заменой истории построения на BREP: " + str(len(self.body_conversions)))

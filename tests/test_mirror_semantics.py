@@ -1451,6 +1451,7 @@ class HistoryTests(unittest.TestCase):
         trial.stabilize_three_planes_after_update = Mock()
         trial.operation_snapshot = lambda:[]
         trial.frames, trial.refs, trial.bounds = {},{},{}
+        trial.custom_points, trial.current_custom_points, trial.custom_point_labels = {},{},{}
         trial.bodies, trial.protected_bodies, trial.operations = [NS(Tag=1)],set(),[]
         trial.nx = NS(Curve=type('Curve',(),{}),Point=type('Point',(),{}))
         trial.native = NS(reflection_matrix=lambda plane:[0]*16,transform_entities=Mock(),update_model=Mock())

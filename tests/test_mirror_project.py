@@ -232,7 +232,7 @@ class NativeArrayTests(unittest.TestCase):
             ctypes.cast(data, ctypes.POINTER(ctypes.c_void_p))[0] = ctypes.addressof(array)
             return 0
         reader.custom = ask
-        self.assertEqual(reader.custom_count(123, 1), 2)
+        self.assertEqual(reader.read_custom_points(123, 1), ((0,(0.0,0.0,0.0),(0.0,0.0,0.0)),) * 2)
         self.assertEqual(reader.freed, [ctypes.addressof(x) for x in records] + [ctypes.addressof(array)])
 
     def test_native_matrix_must_pass_independent_point_validation(self):
@@ -663,9 +663,11 @@ class TransactionTests(unittest.TestCase):
                     self.assert_copy()
                     events.append('run')
                     original.IsModified = source_modified
-                    if isinstance(fails, Exception):
+                    if callable(fails):
+                        fails()
+                    elif isinstance(fails, Exception):
                         raise fails
-                    if fails:
+                    elif fails:
                         raise RuntimeError("kernel rejected reflection")
                 def assert_copy(self):
                     if self.part.Tag != 2:
@@ -699,6 +701,20 @@ class TransactionTests(unittest.TestCase):
         self.assertIn('Код NX/API (ErrorCode): 98765', report)
         self.assertIn('Traceback (most recent call last)', report)
         self.assertIn('builder initialization failed', report)
+
+    def test_failed_custom_point_append_after_deletion_uses_copy_undo_and_restores_source(self):
+        native = object.__new__(M.NativeCam)
+        delete, append = Mock(return_value=0), Mock(return_value=7755)
+        native.bind = lambda name,*args: delete if 'delete_custom' in name else append
+        native.fail_message = lambda code,buffer:setattr(buffer,'value',b'append custom points failed')
+        events,report = self.run_with_trial(lambda:native.replace_custom_points(
+            200,1,((0,(-20.0,3.0,4.0),(0.0,0.0,0.0)),)))
+        delete.assert_called_once(); append.assert_called_once()
+        self.assertIn(('undo',55),events)
+        self.assertIn(('active',1,1),events)
+        self.assertIn('UF_CAMGEOM_append_custom_points',report)
+        self.assertIn('7755',report)
+        self.assertIn('контрольная сумма не изменилась',report)
 
     def test_source_modification_flag_is_checked_even_after_operation_failure(self):
         _, report = self.run_with_trial(True, source_modified=True)

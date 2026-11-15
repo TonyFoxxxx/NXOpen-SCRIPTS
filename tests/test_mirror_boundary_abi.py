@@ -126,13 +126,13 @@ class BoundaryAbiTests(unittest.TestCase):
             ctypes.cast(data, ctypes.POINTER(ctypes.c_void_p))[0] = None
             return 0
         self.native.items = empty_items
-        self.native.custom_count = lambda *a: 0
+        self.native.read_custom_points = lambda *a: ()
         trial = object.__new__(M.Trial)
         trial.native, trial.nodes = self.native, [PlanarMilling()]
         trial.plane = M.MirrorPlane((2,4,6),(1,2,3))
         trial.boundary_planes, trial.current_boundaries = {}, {}
         trial.moved_boundary_count = 0
-        trial.refs, trial.unavailable = {}, set()
+        trial.refs, trial.unavailable, trial.lines = {}, set(), []
         trial.reference = lambda tag: trial.refs.setdefault(tag, 'edge')
         trial.nx = types.SimpleNamespace(CAM=types.SimpleNamespace(Operation=Operation))
         trial.uf = types.SimpleNamespace(Cambnd=types.SimpleNamespace(
@@ -143,12 +143,14 @@ class BoundaryAbiTests(unittest.TestCase):
         trial = self.trial()
         operation = trial.nx.CAM.Operation
         trial.nodes = [type('CavityMilling',(operation,),{'Tag':100,'Name':'CAVITY_MILL'})()]
-        trial.native.custom_count = Mock(return_value=0)
+        trial.native.read_custom_points = Mock(return_value=())
         trial.geometry_snapshot(collect=True)
-        self.assertEqual([c.args for c in trial.native.custom_count.call_args_list],[(100,0),(100,1)])
-        trial.native.custom_count = Mock(side_effect=[0,1])
-        with self.assertRaisesRegex(RuntimeError,'точки пока не поддерживаются'):
-            trial.geometry_snapshot(collect=False)
+        self.assertEqual([c.args for c in trial.native.read_custom_points.call_args_list],[(100,0),(100,1)])
+        points = ((0,(1.0,2.0,3.0),(0.0,0.0,0.0)),)
+        trial.plane = M.MirrorPlane((2,4,6),(1,0,0))
+        trial.native.read_custom_points = Mock(side_effect=[(),points])
+        trial.geometry_snapshot(collect=True)
+        self.assertEqual(trial.custom_points[(100,1)],points)
 
     def test_structure_size_offsets_and_outputs_match_compiled_c(self):
         self.assertEqual(ctypes.sizeof(M._BoundaryData), self.layout(0))

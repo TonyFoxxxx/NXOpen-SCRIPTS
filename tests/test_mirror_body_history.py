@@ -86,6 +86,7 @@ class Fixture:
         t.protected_bodies, t.stock_features = {2000,3000},{20:None,21:None}
         t.history_baseline, t.history_previous = None,None
         t.body_history, t.body_conversions, t.lines = {},[],[]
+        t.custom_points, t.current_custom_points, t.custom_point_labels = {},{},{}
 
     def initialize(self):
         operation = NS(Tag=900,IsMirror=lambda:False)

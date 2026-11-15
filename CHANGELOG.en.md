@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Mirrored CAM project trial V1.21
+
+V1.20 completed initial reads of 35 operation editors, including CavityMilling, then stopped before reflection on a PlanarMilling Cut Region Start point. V1.21 reads full UF records instead of only their count: tag, ABS coordinates, upper_depth, lower_depth and depth. Referenced Points retain their selection and follow the geometry transfer; shared points transform once. Reflect numerical points by replacing the same channel's list with order and references preserved. Do not reflect coordinates twice when NX has already moved them; unexpected motion, lost references, changed depths or late movement stop the trial.
+
+Limited admission covers PlanarMilling, CavityMilling, FaceMilling and SurfaceContour with zero depth fields only. Planar/Cavity requires a plane preserving ABS Z: even zero depth cannot be assumed inactive without documentation. Nonzero depths, nonempty lists on other classes and unverified definitions stop with recorded values. Other spatial operation parameters remain unreflected. SDK 2606 is unavailable; the implementation uses the published older uf_camgeom.h contract, not proof of 2606 compatibility.
+
+Add record/pointer-array validation, correct memory cleanup, and verification after model updates and final CAM reads. Resolve both write functions before deleting the list; append failure reaches the existing copy Undo. Retain model-history, geometry, MCS, face-selection, stock and source-integrity checks. All 275 focused checks outside NX passed, including 43 using test C libraries; add 31 scenarios. These are API simulations. A complete V1.21 run, save/reopen and toolpath regeneration still require NX.
+
 ## 2026-11-15 — Mirrored CAM project trial V1.20
 
 The user's V1.19 test stopped before reflection on the DELETE FACE model feature. Remove both modeling-name allowlists: initialization and history-to-BREP validation. Every Part.Features item undergoes common validation; permitted history replacement uses NXOpen.Features.BodyFeature membership, Body.GetFeatures, exclusive single-body ownership through GetBodies and a frozen expression-consumer snapshot. New modeling command names need no catalog entry. Unavailable ownership/dependency APIs stop the trial, as does an expression-inventory change before reflection.
