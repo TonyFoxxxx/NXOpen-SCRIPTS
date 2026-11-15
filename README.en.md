@@ -32,18 +32,18 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.26 | CAM-copy trial; dependent history uses a one-body prototype with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.26.01 | CAM-copy trial; dependent history uses a one-body prototype with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.20 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.26 · 2026-11-15
+### Latest update — Mirrored CAM project trial V1.26.01 · 2026-11-15
 
-Add an isolated one-body history replacement prototype for models with retained dependencies. It checks an explicit face/edge map, sketch references and selected geometry, then **always rolls back**. It does not leave a completed CAM result. Also check boundary/member application data, including Tool Position On separately from Tool Side. [Prototype workflow and limits](docs/en/mirror-project.md#replacement-probe-v126).
+The V1.26 NX run stopped before body changes because Python Modl lacks `AskReferencesOfFeatures`. V1.26.01 reads references through the UF C export and uses C contracts for the prototype's comparisons and candidate parameter removal. Required exports are checked before body changes. Exact geometry/sketch/MCS/stock guards and mandatory rollback remain. [Report and correction](docs/en/mirror-project.md#uf-api-v12601).
 
-All **427 focused checks outside NX** pass, including **67 using test C libraries**. The V1.25.02 working-PRT failure is confirmed; successful V1.26 execution in NX is not. SDK 2606 and complete sketch-constraint/CAM transfer remain unverified.
+All **447 focused checks outside NX** pass, including **86 using test C libraries**. The report confirms initial Tool Position On reads for the four R1 boundaries; body replacement and final CAM preservation in NX remain unconfirmed.
 
-In updater **V1.20**, run Check and update the mirror journal to **V1.26**; this version is newer than V1.25.02. Run on the saved source without components and share the complete report. The prototype's result is rolled back, not saved.
+In updater **V1.20**, run Check and install **V1.26.01**. Run on the saved source without components and share the complete report; the experimental branch still requires rollback.
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 

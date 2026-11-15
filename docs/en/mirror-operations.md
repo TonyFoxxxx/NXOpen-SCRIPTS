@@ -1,8 +1,10 @@
-# CAM operation coverage audit — V1.26
+# CAM operation coverage audit — V1.26.01
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-15**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
+
+V1.26.01 fixes a confirmed API-selection error: Python Modl has no `AskReferencesOfFeatures` on the user installation. The prototype now reads references and calls its other UF operations through C exports, with preflight and unchanged guards. The V1.26 run established initial On values for all four R1 boundaries but stopped before body changes. No additional operation family is approved. [Evidence and C contracts](mirror-project.md#uf-api-v12601).
 
 V1.26 adds an isolated one-body replacement prototype with mandatory rollback and boundary/member application-data checks, including Tool Position On. The 21 dispatch routes and 31 recognized builders are unchanged. It does not establish full CAM transfer. [Prototype and additional SDK methods](mirror-project.md#replacement-probe-v126).
 

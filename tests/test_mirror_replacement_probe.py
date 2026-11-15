@@ -68,8 +68,8 @@ class ProbeWorld:
         for feature in (self.sketch0,self.sketch):
             e = Expression(feature.Tag+800, feature)
             feature.Sketch.expressions = [e]
-        self.references[22] = ((1001,'attachment face'),(11,'owning feature'))
-        self.references[23] = ((1003,'projected edge'),)
+        self.references[22] = ((1001,b'attachment face'),(11,b'owning feature'))
+        self.references[23] = ((1003,b'projected edge'),)
         self.original_features = t.part.Features[:]
         self.original_boxes = copy.deepcopy(self.boxes)
         self.extract_type = NS(ExtractType=NS(Body=1),ParentPartType=NS(WorkPart=2))
@@ -82,15 +82,18 @@ class ProbeWorld:
                         ExtractFaceBuilder=self.extract_type,ReplaceFeatureBuilder=replace_type),
             UF=NS(UFConstants=constants), BasePart=NS(Units=NS(Millimeters=1,Inches=2)),
             TaggedObjectManager=NS(GetTaggedObject=lambda tag:self.objects[tag]))
-        t.uf = NS(Modl=NS(AskReferencesOfFeatures=Mock(side_effect=self.ask_references),
-            DeleteObjectParms=Mock(side_effect=self.remove_copy_parameters),
-            Compare=Mock(return_value=1),CompareTopology=Mock(side_effect=lambda a,b,*args:5 if isinstance(self.objects[a],Edge) and not isinstance(self.objects[a],Face) else 1)))
+        t.uf = NS(Modl=NS())  # Deliberately no .NET-only UF wrapper methods.
         t.part.Features.CreateExtractFaceBuilder = Mock(side_effect=self.extract_builder)
         t.part.Features.CreateReplaceFeatureBuilder = Mock(side_effect=self.replace_builder)
         t.part.ScRuleFactory = NS(CreateRuleBodyDumb=Mock(side_effect=lambda b,s:('body-rule',tuple(o.Tag for o in b),s)))
         t.native = NS(reflection_matrix=Mock(return_value=[0]*16),
             transform_entities=Mock(side_effect=self.reflect),update_model=Mock(),
             sketch_of_geometry=Mock(return_value=self.sketch.Sketch.Tag))
+        t.native.prepare_replacement_api = Mock()
+        t.native.feature_references = Mock(side_effect=self.ask_references)
+        t.native.delete_candidate_parameters = Mock(side_effect=self.remove_copy_parameters)
+        t.native.compare_geometry = Mock(return_value=1)
+        t.native.compare_topology = Mock(side_effect=lambda a,b,*args:5 if isinstance(self.objects[a],Edge) and not isinstance(self.objects[a],Face) else 1)
         t.bodies = t.part.Bodies[:]
         t.bounds = dict(self.boxes)
         t.refs, t.frames, t.mcs_definitions, t.stock_features, t.protected_bodies = {},{},{},{},set()
@@ -142,10 +145,8 @@ class ProbeWorld:
         t.capture_body_history(self.topology)
         self.probe = M.BodyReplacementProbe(t,self.body,self.topology,copy.deepcopy(self.cam),t.operation_snapshot())
 
-    def ask_references(self, tags, count):
-        assert count == len(tags) == 1
-        pairs = self.references[tags[0]]
-        return [p for p,n in pairs],[n for p,n in pairs],len(pairs)
+    def ask_references(self, tag):
+        return self.references[tag]
 
     def extract_builder(self, old):
         assert old is None
@@ -161,9 +162,9 @@ class ProbeWorld:
                           CommitFeature=Mock(side_effect=commit),Destroy=Mock())
         return self.extract
 
-    def remove_copy_parameters(self, tags):
-        self.events.append(('remove-parameters',tuple(tags)))
-        assert tags == [4000]
+    def remove_copy_parameters(self, tag):
+        self.events.append(('remove-parameters',(tag,)))
+        assert tag == 4000
         old = self.candidate.features[0]
         self.t.part.Features.remove(old)
         f = BodyFeature(41,'BREP',bodies=[self.candidate])
@@ -205,15 +206,11 @@ class ProbeWorld:
 
 
 class ProbeReaderTests(unittest.TestCase):
-    def test_references_preserve_roles_order_duplicates_and_large_unsigned_tags(self):
-        uf = NS(Modl=NS(AskReferencesOfFeatures=Mock(return_value=([0xf0000001,9,9],['face','start','end'],3))))
-        self.assertEqual(M.probe_feature_references(uf,NS(Tag=7)),((0xf0000001,'face'),(9,'start'),(9,'end')))
-        uf.Modl.AskReferencesOfFeatures.assert_called_once_with([7],1)
-
-    def test_unreadable_reference_contract_never_becomes_empty(self):
-        for value in (None,(),(None,None,0),([],[],True),([1],[],1),([0],['face'],1),([1],[None],1),(['1'],['face'],1)):
-            with self.subTest(value=value), self.assertRaises((RuntimeError,TypeError)):
-                M.probe_feature_references(NS(Modl=NS(AskReferencesOfFeatures=lambda *a:value)),NS(Tag=7))
+    def test_reference_diagnostic_decoding_does_not_define_identity(self):
+        roles = (b'face', 'опора'.encode('utf-8'), b'\xff', b'\\xff')
+        self.assertEqual(M.reference_name(roles[1]), 'опора')
+        self.assertEqual(M.reference_name(roles[2]), M.reference_name(roles[3]))
+        self.assertNotEqual(roles[2], roles[3])  # Comparison keeps original bytes.
 
     def test_unique_mapping_is_independent_of_list_order(self):
         self.assertEqual(M.unique_probe_mapping([1,2],[20,10],lambda a,b:b==a*10,'faces'),{1:10,2:20})
@@ -252,6 +249,10 @@ class ProbeRoutingTests(unittest.TestCase):
 class ReplacementProtocolTests(unittest.TestCase):
     def test_complete_protocol_only_transforms_candidate_and_requests_mandatory_undo(self):
         w = ProbeWorld()
+        self.assertFalse(hasattr(w.t.uf.Modl,'AskReferencesOfFeatures'))
+        self.assertFalse(hasattr(w.t.uf.Modl,'DeleteObjectParms'))
+        self.assertFalse(hasattr(w.t.uf.Modl,'Compare'))
+        self.assertFalse(hasattr(w.t.uf.Modl,'CompareTopology'))
         with self.assertRaises(M.ReplacementProbeComplete): w.probe.run()
         self.assertEqual(w.events,['extract',('remove-parameters',(4000,)),('reflect',(4000,)),'replace'])
         self.assertEqual(w.probe.map,{1003:4003,1001:4001,1002:4002,1000:4000})
@@ -266,8 +267,25 @@ class ReplacementProtocolTests(unittest.TestCase):
         w.extract.Destroy.assert_called_once(); w.replace.Destroy.assert_called_once()
 
     def test_missing_reference_api_stops_before_creating_body(self):
-        w = ProbeWorld(); del w.t.uf.Modl.AskReferencesOfFeatures
+        w = ProbeWorld(); del w.t.native.feature_references
         with self.assertRaises(AttributeError): w.probe.run()
+        self.assertEqual(w.events,[])
+
+    def test_missing_native_export_is_detected_before_reading_or_mutating_model(self):
+        w = ProbeWorld()
+        w.t.native.prepare_replacement_api.side_effect = RuntimeError('missing UF_MODL_compare')
+        with self.assertRaisesRegex(RuntimeError,'UF_MODL_compare'): w.probe.run()
+        self.assertEqual(w.events,[])
+        w.t.native.feature_references.assert_not_called()
+        w.t.part.Features.CreateExtractFaceBuilder.assert_not_called()
+
+    def test_native_reference_error_is_not_empty_and_stops_before_candidate(self):
+        w = ProbeWorld()
+        failure = M.NativeApiError(777,'UF_MODL_ask_references_of_features','reference failed')
+        w.t.native.feature_references.side_effect = failure
+        with self.assertRaises(M.NativeApiError) as caught: w.probe.run()
+        self.assertIs(caught.exception,failure)
+        self.assertIn('UF_MODL_ask_references_of_features',w.t.stage)
         self.assertEqual(w.events,[])
 
     def test_external_parameter_consumer_stops_before_extract(self):
@@ -277,7 +295,7 @@ class ReplacementProtocolTests(unittest.TestCase):
         self.assertEqual(w.events,[])
 
     def test_intermediate_history_face_requires_exact_support_not_coplanar_substitute(self):
-        w = ProbeWorld(); w.register(Face(1999,w.body)); w.references[22] = ((1999,'old attachment'),)
+        w = ProbeWorld(); w.register(Face(1999,w.body)); w.references[22] = ((1999,b'old attachment'),)
         with self.assertRaisesRegex(RuntimeError,'промежуточной истории.*\n22 / old attachment: Face 1999'):
             w.probe.run()
         self.assertEqual(w.events,[])
@@ -285,14 +303,14 @@ class ReplacementProtocolTests(unittest.TestCase):
     def test_candidate_preparation_cannot_damage_original_sketch(self):
         w = ProbeWorld(); w.after_extract = lambda:w.sketch.parents.clear()
         with self.assertRaisesRegex(RuntimeError,'исходную историю'): w.probe.run()
-        w.t.uf.Modl.DeleteObjectParms.assert_not_called()
+        w.t.native.delete_candidate_parameters.assert_not_called()
         w.t.native.transform_entities.assert_not_called()
         w.extract.Destroy.assert_called_once()
 
     def test_candidate_must_be_independent_before_removing_parameters(self):
         w = ProbeWorld(); w.after_extract = lambda:setattr(w.candidate.features[0],'parents',[w.extrude])
         with self.assertRaisesRegex(RuntimeError,'независимым телом'): w.probe.run()
-        w.t.uf.Modl.DeleteObjectParms.assert_not_called()
+        w.t.native.delete_candidate_parameters.assert_not_called()
 
     def test_unreadable_brep_parents_and_expressions_do_not_mean_independent(self):
         for method in ('GetParents','GetExpressions','GetBodies'):
@@ -331,8 +349,8 @@ class ReplacementProtocolTests(unittest.TestCase):
 
     def test_geometry_comparison_failure_or_unknown_status_blocks_replacement(self):
         for equivalent,status in ((0,5),(1,99),(True,5),(1,6)):
-            w = ProbeWorld(); w.t.uf.Modl.Compare.side_effect = None; w.t.uf.Modl.Compare.return_value = equivalent
-            w.t.uf.Modl.CompareTopology.side_effect = None; w.t.uf.Modl.CompareTopology.return_value = status
+            w = ProbeWorld(); w.t.native.compare_geometry.side_effect = None; w.t.native.compare_geometry.return_value = equivalent
+            w.t.native.compare_topology.side_effect = None; w.t.native.compare_topology.return_value = status
             with self.subTest(equivalent=equivalent,status=status), self.assertRaises(RuntimeError): w.probe.run()
             w.t.part.Features.CreateReplaceFeatureBuilder.assert_not_called()
             w.t.native.transform_entities.assert_not_called()
@@ -368,7 +386,7 @@ class ReplacementProtocolTests(unittest.TestCase):
                 if kind=='membership': w.sketch.Sketch.geometry=[w.projected]
                 if kind=='position': w.boxes[602]=w.original_boxes[602]
                 if kind=='warning': w.sketch.warnings=['Parent point modeled away']
-                if kind=='reference': w.references[22]=((1002,'attachment face'),(30,'owning feature'))
+                if kind=='reference': w.references[22]=((1002,b'attachment face'),(30,b'owning feature'))
             w.after_commit = damage
             with self.subTest(kind=kind), self.assertRaises(RuntimeError): w.probe.run()
             w.t.setup.DeleteToolPath.assert_not_called()

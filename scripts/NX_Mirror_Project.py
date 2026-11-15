@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.26
-SCRIPT_VERSION = "V1.26"
+# SCRIPT_VERSION: V1.26.01
+SCRIPT_VERSION = "V1.26.01"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -620,6 +620,124 @@ class NativeCam:
             message = buffer.value.decode("utf-8", errors="replace")
             raise NativeApiError(code, context, message)
 
+    def prepare_replacement_api(self):
+        """Bind the prototype's UF exports before creating a candidate body.
+
+        DC 2606's Python Modl lacks AskReferencesOfFeatures. Published .NET
+        wrappers are not evidence of Python coverage; use the documented C
+        contracts for all four UF operations introduced by this prototype.
+        Missing exports fail here, not after an original/candidate mutation.
+        """
+        if hasattr(self, "_replacement_api"):
+            return
+        u, i, p = ctypes.c_uint32, ctypes.c_int, ctypes.c_void_p
+        up, ip, pp = ctypes.POINTER(u), ctypes.POINTER(i), ctypes.POINTER(p)
+        specs = (
+            ("UF_MODL_ask_references_of_features", (up, i, pp, pp, ip), i),
+            ("UF_free_string_array", (i, p), None),
+            ("UF_MODL_compare", (u, u, i, ip), i),
+            ("UF_MODL_compare_topology", (u, u, ctypes.c_double, ctypes.c_double, ip), i),
+            ("UF_MODL_create_list", (pp,), i),
+            ("UF_MODL_put_list_item", (p, u), i),
+            ("UF_MODL_ask_list_count", (p, ip), i),
+            ("UF_MODL_ask_list_item", (p, i, up), i),
+            ("UF_MODL_delete_list", (pp,), i),
+            ("UF_MODL_delete_object_parms", (p,), i),
+        )
+        api = {name: self.bind(name, args, result) for name, args, result in specs}
+        self._replacement_api = api
+
+    def feature_references(self, tag):
+        tag = probe_tag(tag, "UF_MODL_ask_references_of_features")
+        self.prepare_replacement_api()
+        count, parents, names = ctypes.c_int(-1), ctypes.c_void_p(), ctypes.c_void_p()
+        feature = (ctypes.c_uint32 * 1)(tag)
+        try:
+            self.check(self._replacement_api["UF_MODL_ask_references_of_features"](
+                feature, 1, ctypes.byref(parents), ctypes.byref(names), ctypes.byref(count)),
+                "UF_MODL_ask_references_of_features")
+            if not 0 <= count.value <= MAX_OBJECTS or (count.value and (not parents.value or not names.value)):
+                raise RuntimeError("UF_MODL_ask_references_of_features: некорректный размер/массив опор: " + str(count.value))
+            tags = ctypes.cast(parents, ctypes.POINTER(ctypes.c_uint32))
+            pointers = ctypes.cast(names, ctypes.POINTER(ctypes.c_void_p))
+            result = []
+            for index in range(count.value):
+                parent = probe_tag(tags[index], "Опора элемента " + str(tag))
+                if not pointers[index]:
+                    raise RuntimeError("UF_MODL_ask_references_of_features: не прочитано имя опоры " + str(index + 1))
+                # Compare immutable raw bytes. Diagnostic decoding must not
+                # merge distinct names from a legacy Windows encoding.
+                result.append((parent, ctypes.string_at(pointers[index])))
+            return tuple(result)
+        finally:
+            try:
+                if parents.value:
+                    self.free(parents)
+            finally:
+                if names.value:
+                    if 0 <= count.value <= MAX_OBJECTS:
+                        self._replacement_api["UF_free_string_array"](count.value, names)
+                    else:
+                        # An invalid count cannot safely drive a string-array
+                        # traversal. Release only its outer allocation; never
+                        # guess a count or present malformed output as empty.
+                        self.free(names)
+
+    def compare_geometry(self, first, second):
+        first, second = probe_tag(first, "Compare / first"), probe_tag(second, "Compare / second")
+        self.prepare_replacement_api()
+        value = ctypes.c_int(-1)
+        self.check(self._replacement_api["UF_MODL_compare"](first, second, 1, ctypes.byref(value)), "UF_MODL_compare")
+        if value.value not in (0, 1):
+            raise RuntimeError("UF_MODL_compare: не прочитан результат")
+        return value.value
+
+    def compare_topology(self, first, second, facet_tolerance, distance_tolerance):
+        first, second = probe_tag(first, "CompareTopology / first"), probe_tag(second, "CompareTopology / second")
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0
+               for v in (facet_tolerance, distance_tolerance)):
+            raise ValueError("UF_MODL_compare_topology: некорректные допуски")
+        self.prepare_replacement_api()
+        value = ctypes.c_int(-1)
+        self.check(self._replacement_api["UF_MODL_compare_topology"](first, second, facet_tolerance,
+            distance_tolerance, ctypes.byref(value)), "UF_MODL_compare_topology")
+        if value.value < 0:
+            raise RuntimeError("UF_MODL_compare_topology: не прочитан результат")
+        return value.value  # Caller also checks the installed UFConstants domain.
+
+    def delete_candidate_parameters(self, body_tag):
+        # Caller has proved this is the NEW independent body's tag. The C
+        # function expects a uf_list pointer, never a Python/tag array.
+        body_tag = probe_tag(body_tag, "DeleteObjectParms / candidate")
+        self.prepare_replacement_api()
+        api, linked, primary_error = self._replacement_api, ctypes.c_void_p(), None
+        try:
+            self.check(api["UF_MODL_create_list"](ctypes.byref(linked)), "UF_MODL_create_list")
+            if not linked.value:
+                raise RuntimeError("UF_MODL_create_list: не создан список кандидата")
+            self.check(api["UF_MODL_put_list_item"](linked, body_tag), "UF_MODL_put_list_item")
+            count, actual = ctypes.c_int(-1), ctypes.c_uint32()
+            self.check(api["UF_MODL_ask_list_count"](linked, ctypes.byref(count)), "UF_MODL_ask_list_count")
+            if count.value != 1:
+                raise RuntimeError("Список снятия параметров не содержит ровно одно новое тело")
+            self.check(api["UF_MODL_ask_list_item"](linked, 0, ctypes.byref(actual)), "UF_MODL_ask_list_item")
+            if actual.value != body_tag:
+                raise RuntimeError("В списке снятия параметров другой объект вместо кандидата")
+            self.check(api["UF_MODL_delete_object_parms"](linked), "UF_MODL_delete_object_parms")
+        except Exception as error:
+            primary_error = error
+            raise
+        finally:
+            if linked.value:
+                try:
+                    self.check(api["UF_MODL_delete_list"](ctypes.byref(linked)), "UF_MODL_delete_list")
+                except Exception as cleanup:
+                    if primary_error is None:
+                        raise
+                    # Preserve the primary API code/context as well as cleanup
+                    # failure; deleting this list never deletes NX objects.
+                    primary_error.args = (str(primary_error) + "\nОшибка освобождения списка: " + str(cleanup),)
+
     def face_plane(self, tag):
         face_type, sense = ctypes.c_int(), ctypes.c_int()
         point, normal = (ctypes.c_double * 3)(), (ctypes.c_double * 3)()
@@ -1051,27 +1169,8 @@ def probe_tag(value, context):
     return tag
 
 
-def probe_feature_references(uf, feature):
-    """Managed UF wrapper; never guess native ownership of replacement maps.
-
-    AskReferencesOfFeatures(Tag[], int) returns parents, names, count in the
-    published wrapper contract. Missing methods or another shape are failures,
-    not an empty reference list. Returned order is recorded, never used to
-    infer a correspondence between two different bodies.
-    """
-    tag = probe_tag(feature.Tag, "Элемент истории")
-    result = uf.Modl.AskReferencesOfFeatures([tag], 1)
-    if not isinstance(result, (tuple, list)) or len(result) != 3:
-        raise RuntimeError("AskReferencesOfFeatures: ожидались родители, имена, количество; получено " +
-                           type(result).__name__)
-    parents, names, count = result
-    if type(count) is not int or not 0 <= count <= MAX_OBJECTS:
-        raise RuntimeError("AskReferencesOfFeatures: некорректное количество родителей")
-    parents = probe_array(parents, "AskReferencesOfFeatures / родители")
-    names = probe_array(names, "AskReferencesOfFeatures / имена")
-    if len(parents) != count or len(names) != count or any(not isinstance(n, str) for n in names):
-        raise RuntimeError("AskReferencesOfFeatures: неполные родители или имена опор")
-    return tuple((probe_tag(p, "Опора элемента " + str(tag)), n) for p, n in zip(parents, names))
+def reference_name(name):
+    return name.decode("utf-8", errors="backslashreplace")
 
 
 def unique_probe_mapping(originals, copies, matches, context):
@@ -1122,8 +1221,8 @@ class BodyReplacementProbe:
     def references(self, features, report=False):
         result = {}
         for tag, feature in features.items():
-            self.stage("AskReferencesOfFeatures / " + history_feature_label(tag, self.t.history_baseline[tag]))
-            refs = probe_feature_references(self.t.uf, feature)
+            self.stage("UF_MODL_ask_references_of_features / " + history_feature_label(tag, self.t.history_baseline[tag]))
+            refs = self.t.native.feature_references(tag)
             result[tag] = refs
             if report:
                 self.t.lines.append("Опоры " + history_feature_label(tag, self.t.history_baseline[tag]) +
@@ -1131,7 +1230,7 @@ class BodyReplacementProbe:
             for parent, name in refs:
                 obj = self.object(parent)
                 if report:
-                    self.t.lines.append("  " + name + ": tag=" + str(parent) + "; класс=" + type(obj).__name__)
+                    self.t.lines.append("  " + reference_name(name) + ": tag=" + str(parent) + "; класс=" + type(obj).__name__)
         return result
 
     def curve_state(self, features, report=False):
@@ -1201,7 +1300,7 @@ class BodyReplacementProbe:
                     if owner is None:
                         raise RuntimeError("Не прочитано тело опоры " + str(parent))
                     if int(owner.Tag) == self.body_tag and parent not in final_entities:
-                        missing.append(str(tag) + " / " + name + ": " + type(obj).__name__ + " " + str(parent))
+                        missing.append(str(tag) + " / " + reference_name(name) + ": " + type(obj).__name__ + " " + str(parent))
         if missing:
             raise RuntimeError("Опоры промежуточной истории отсутствуют в конечном теле; " +
                 "копия конечного тела не даёт проверенного соответствия:\n" + "\n".join(missing))
@@ -1315,8 +1414,8 @@ class BodyReplacementProbe:
                 if ({int(f.Tag) for f in probe_array(expression.GetUsingFeatures(), "Candidate / GetUsingFeatures")} - candidate_tags or
                         {int(e.Tag) for e in probe_array(expression.GetReferencingExpressions(), "Candidate / GetReferencingExpressions")} - candidate_expressions):
                     raise RuntimeError("У параметров кандидата есть внешние потребители")
-        self.stage("Снятие параметров только нового тела / DeleteObjectParms")
-        self.t.uf.Modl.DeleteObjectParms([int(self.copy.Tag)])
+        self.stage("Снятие параметров только нового тела / UF_MODL_delete_object_parms")
+        self.t.native.delete_candidate_parameters(int(self.copy.Tag))
         self.copy_feature = self.plain_brep(self.copy)
         self.check_originals()
 
@@ -1361,14 +1460,14 @@ class BodyReplacementProbe:
             if not close_values(boxes[a], boxes[b], 1e-7):
                 return False
             self.stage("Сравнение геометрии и обрезанной топологии " + str(a) + " → " + str(b))
-            equivalent = self.t.uf.Modl.Compare(a, b, 1)
+            equivalent = self.t.native.compare_geometry(a, b)
             if type(equivalent) is not int or equivalent not in (0, 1):
-                raise RuntimeError("UF.Modl.Compare: некорректный результат")
+                raise RuntimeError("UF_MODL_compare: некорректный результат")
             if not equivalent:
                 return False
-            actual = self.t.uf.Modl.CompareTopology(a, b, facet_tolerance, facet_tolerance)
+            actual = self.t.native.compare_topology(a, b, facet_tolerance, facet_tolerance)
             if type(actual) is not int or actual not in statuses:
-                raise RuntimeError("UF.Modl.CompareTopology: не прочитан статус")
+                raise RuntimeError("UF_MODL_compare_topology: не прочитан статус")
             return actual == status
 
         if not old_edges and not new_edges:
@@ -1522,6 +1621,10 @@ class BodyReplacementProbe:
     def run(self):
         self.t.lines.append("РЕЖИМ " + SCRIPT_VERSION + ": изолированный прототип одного тела с обязательным откатом. " +
             "Это не готовая зеркальная CAM-копия. MCS/заготовки отдельно не переносятся; DeleteToolPath не вызывается.")
+        self.stage("Проверка UF C API прототипа до изменения тел")
+        self.t.native.prepare_replacement_api()
+        self.t.lines.append("UF C API прототипа: функции чтения опор, сравнения и списка кандидата найдены. " +
+                            "Наличие функций не подтверждает результат их выполнения.")
         self.snapshot()
         self.independent_copy()
         self.match_topology()

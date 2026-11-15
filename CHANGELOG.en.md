@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-15 — Mirrored CAM project trial V1.26.01
+
+Fix the observed AttributeError before candidate creation: read references using `UF_MODL_ask_references_of_features`, with separate tag/string-array ownership and raw-name identity. The other UF prototype calls also use their C contracts; check all exports before changing bodies. Parameter removal takes a verified single-candidate linked list. Missing outputs, invalid counts, partial errors and cleanup failures remain errors; no geometry/history guard is disabled.
+
+All 447 focused checks outside NX pass, including 86 using compiled C fixtures. The V1.26 NX report confirms initial On reads for the four R1 boundaries, rollback and source checks, but never reached extraction/replacement. Real 2606 C exports and history preservation remain unconfirmed. Source, suffixed catalog version/checksum and bilingual documentation are aligned. [Details](docs/en/mirror-project.md#uf-api-v12601).
+
 ## 2026-11-15 — Mirrored CAM project trial V1.26
 
 Add a one-body replacement experiment for retained model dependencies: read exact references and sketch membership, create an independent body, require a complete unique face/edge map, reflect only the candidate and try explicit ReplaceFeatureBuilder mapping. Missing intermediate references, changed geometry tags, sketch definitions, MCS selections, stock settings or new warnings cause rejection. Success and failure both use the existing copy-only rollback; no MCS/stock transfer or toolpath deletion follows this branch.
