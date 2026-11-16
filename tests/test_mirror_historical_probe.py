@@ -11,11 +11,17 @@ from unittest.mock import Mock
 from test_mirror_replacement_probe import M, Body, Edge, Face, ownerless_support_report_world
 
 
+class VisibleUndoMarkRequired(RuntimeError):
+    """Contract observed in the user's DC 2606 V1.27.01 report."""
+    ErrorCode=690037
+
+
 class HistoryWorld:
     def __init__(self):
         self.w = ownerless_support_report_world()
         self.t, self.p = self.w.t, self.w.probe
         self.events, self.marks, self.fail = [], {}, {}
+        self.mark_visibility = {}
         self.after_start = self.after_stop = self.after_undo = lambda: None
         self.current = 69595
         self.next_mark = 100
@@ -27,7 +33,7 @@ class HistoryWorld:
         self.w.objects[69595].Timestamp = 100
         self.t.part.Expressions = list({e.Tag:e for f in self.t.part.Features for e in f.expressions}.values())
         self.t.nx.Body = Body
-        self.t.nx.Session = NS(MarkVisibility=NS(Invisible=0))
+        self.t.nx.Session = NS(MarkVisibility=NS(Invisible=0,Visible=1))
         self.t.nx.Features.EditWithRollbackManager = HistoryManager
         self.t.part.Features.StartEditWithRollbackManager = Mock(side_effect=self.start)
         self.t.session = NS(Parts=NS(Work=self.t.part, Display=self.t.part),
@@ -78,10 +84,13 @@ class HistoryWorld:
         self.next_mark += 1
         self.events.append(('mark',mark,visibility))
         self.marks[mark] = self.snapshot()
+        self.mark_visibility[mark] = visibility
         return mark
 
     def start(self, feature, mark):
         self.events.append(('start',feature.Tag,mark))
+        if mark not in self.marks or self.mark_visibility[mark] != self.t.nx.Session.MarkVisibility.Visible:
+            raise VisibleUndoMarkRequired('Cannot edit with rollback a feature. A visible undo mark needs to be provided to the edit with rollback manager.')
         self.current = feature.Tag
         edge = 64791 if feature.Tag in (69573,69574) else 73591
         self.w.body.edges.append(self.w.objects[edge])
@@ -107,6 +116,7 @@ class HistoryWorld:
         self.events.append(('delete-mark',mark))
         self.failure('delete-mark')
         del self.marks[mark]
+        del self.mark_visibility[mark]
 
     def assert_no_geometry_edits(self, test):
         test.assertEqual(self.w.events,[])
@@ -144,7 +154,7 @@ class HistoricalProtocolTests(unittest.TestCase):
         self.assertEqual([event[1] for event in h.events if event[0]=='start'],[69573,69576,69579])
         for offset,consumer in enumerate((69573,69576,69579)):
             mark=100+offset
-            self.assertEqual(h.events[offset*7:(offset+1)*7],[('mark',mark,0),('start',consumer,mark),
+            self.assertEqual(h.events[offset*7:(offset+1)*7],[('mark',mark,1),('start',consumer,mark),
                 ('update',mark,False),('stop',mark),('destroy',mark),('undo',mark),('delete-mark',mark)])
         self.assertEqual(h.snapshot(),before)
         self.assertEqual(h.marks,{})
@@ -154,6 +164,48 @@ class HistoricalProtocolTests(unittest.TestCase):
         self.assertIn('успешно 3; ошибок 0',report)
         for tag in (69574,69578,69582): self.assertIn('элемент '+str(tag),report)
         for tag in (64791,73591): h.w.objects[tag].GetBody.assert_not_called()
+        h.assert_no_geometry_edits(self)
+
+    def test_invisible_mark_reproduces_690037_and_local_return_without_reading_supports(self):
+        h=HistoryWorld();before=h.snapshot()
+        with self.assertRaises(M.UnresolvedProbeReferences) as rejected: h.p.snapshot()
+        probe=M.HistoricalReferenceProbe(h.p,rejected.exception.supports)
+        probe.preflight()
+        probe.visibility=h.t.nx.Session.MarkVisibility.Invisible
+        consumer,supports=probe.contexts[0]
+        with self.assertRaises(VisibleUndoMarkRequired) as caught: probe.inspect_context(consumer,supports)
+        self.assertEqual(caught.exception.ErrorCode,690037)
+        self.assertEqual(h.snapshot(),before)
+        self.assertEqual(h.events,[('mark',100,0),('start',consumer,100),('undo',100),('delete-mark',100)])
+        self.assertEqual(h.marks,{})
+        h.t.native.history_bounding_box.assert_not_called()
+        self.assertIn('Локальный Undo выполнен','\n'.join(h.t.lines))
+        h.assert_no_geometry_edits(self)
+
+    def test_missing_visible_enum_stops_before_creating_mark_or_starting_manager(self):
+        h=HistoryWorld();del h.t.nx.Session.MarkVisibility.Visible
+        with self.assertRaises(AttributeError): h.p.run()
+        h.t.session.SetUndoMark.assert_not_called()
+        h.t.part.Features.StartEditWithRollbackManager.assert_not_called()
+        self.assertEqual(h.events,[])
+
+    def test_visible_value_is_taken_from_nx_enum_instead_of_a_numeric_guess(self):
+        h=HistoryWorld();h.t.nx.Session.MarkVisibility.Visible=17
+        with self.assertRaises(M.HistoricalProbeComplete): h.p.run()
+        self.assertEqual([e[2] for e in h.events if e[0]=='mark'],[17,17,17])
+        self.assertEqual(h.marks,{})
+        self.assertEqual(h.mark_visibility,{})
+
+    def test_each_context_uses_its_own_visible_mark_and_keeps_existing_marks(self):
+        h=HistoryWorld();h.marks[55]=h.snapshot();h.mark_visibility[55]=1
+        with self.assertRaises(M.HistoricalProbeComplete): h.p.run()
+        created=[e[1] for e in h.events if e[0]=='mark']
+        self.assertEqual(created,[100,101,102])
+        self.assertEqual([e[2] for e in h.events if e[0]=='start'],created)
+        self.assertEqual([e[1] for e in h.events if e[0]=='undo'],created)
+        self.assertEqual([e[1] for e in h.events if e[0]=='delete-mark'],created)
+        self.assertEqual(set(h.marks),{55})
+        self.assertEqual(h.mark_visibility,{55:1})
         h.assert_no_geometry_edits(self)
 
     def test_external_sketch_consumers_get_their_own_contexts(self):
@@ -297,7 +349,7 @@ class HistoricalProtocolTests(unittest.TestCase):
     def test_start_failure_after_transition_still_undoes_without_manager(self):
         h=HistoryWorld(); before=h.snapshot(); h.fail['start']=RuntimeError('start failed after moving history')
         with self.assertRaisesRegex(RuntimeError,'start failed'): h.p.run()
-        self.assertEqual(h.events,[('mark',100,0),('start',69573,100),('undo',100),('delete-mark',100)])
+        self.assertEqual(h.events,[('mark',100,1),('start',69573,100),('undo',100),('delete-mark',100)])
         self.assertEqual(h.snapshot(),before)
 
     def test_all_manager_cleanup_steps_and_local_undo_are_attempted_on_failure(self):

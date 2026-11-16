@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.27.02
+
+Fix confirmed error 690037: supply Session.MarkVisibility.Visible instead of Invisible to StartEditWithRollbackManager. Each context owns its mark; the outer copy mark is not reused. Preserve manager cleanup order, local Undo with restoration checks before mark deletion, rejection after incomplete restoration and mandatory outer rollback. Include the mark kind in diagnostics.
+
+The fixture now reproduces NX rejection of invisible marks. Add four regressions; all 518 focused checks outside NX pass, including 97 using C fixtures. The V1.27.01 report establishes the initial MCS check, first Start rejection, verified local return, outer Undo and successful source checks; historical-edge access and successful manager operation remain unconfirmed. Align the version, SHA-256 and documentation. [Details](docs/en/mirror-project.md#visible-undo-v12702).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.27.01
 
 Fix premature comparison of unchanged Three Planes supports with reflected positions. For X = −79, V1.27 expected x = −158 from an original support near x = 0 and stopped before StartEditWithRollbackManager. Candidate preparation and history-context restoration now require original supports; post-replacement validation still requires reflected supports. Preserve exact ordered face selections, Plane methods, CSYS graphs/origins/axes, live-object checks and rollback. Attribute failures to the actual CSYS/axis/support rather than the previous frame.

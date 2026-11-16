@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.27.01
-SCRIPT_VERSION = "V1.27.01"
+# SCRIPT_VERSION: V1.27.02
+SCRIPT_VERSION = "V1.27.02"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -1837,7 +1837,10 @@ class HistoricalReferenceProbe:
         if any(not callable(method) for method in required):
             raise RuntimeError("Не подтверждён API EditWithRollbackManager/Undo")
         self.t.lines.append("Методы EditWithRollbackManager/Undo найдены; результат их работы ещё не проверен.")
-        self.visibility = self.t.nx.Session.MarkVisibility.Invisible
+        # EditWithRollbackManager rejects invisible marks (NX error 690037).
+        # Each context still owns a separate mark, removed only after its Undo
+        # and full restoration checks; the outer copy mark is not reused.
+        self.visibility = self.t.nx.Session.MarkVisibility.Visible
         self.states = self.feature_states()
         self.expressions = self.expression_state()
         self.stage("Снимок истории до перехода")
@@ -1916,6 +1919,7 @@ class HistoricalReferenceProbe:
         self.stage("Начало EditWithRollback / " + label)
         self.require_copy()
         mark = self.t.session.SetUndoMark(self.visibility, TITLE + " / история " + str(consumer))
+        self.t.lines.append("Метка Undo для EditWithRollback: Visible / " + label)
         manager, primary, primary_trace, failure_stage = None, None, None, None
         readings, read_errors, cleanup_errors = [], [], []
         try:

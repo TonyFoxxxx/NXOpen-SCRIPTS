@@ -202,9 +202,9 @@
       "file": "NX_Mirror_Project.py",
       "version": "V1.27",
       "path": "scripts/NX_Mirror_Project.py",
-      "sha256": "e9c91dff440b11f4439e77672ba4b5c62cff9cee273886b6fb7f55c79ccb7ba2",
+      "sha256": "753103052e5e604ada945896155169b04d7f930d80ecb8efebf91308bfe7a00d",
       "description": "Тест без компонентов. При зависимой истории — проверка доступа к историческим опорам либо прототип замены одного тела, с обязательным откатом. Проверяются выбранные CAM-объекты и Tool Position. Работа в NX 2606 не подтверждена; без автосохранения.",
-      "release_version": "V1.27.01"
+      "release_version": "V1.27.02"
     },
     {
       "id": "NX_Update_Scripts",
