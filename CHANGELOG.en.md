@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.30.09
+
+V1.30.08 stopped before the map on 821049 — Tag limit would be exceeded — during exact bounds, after a successful first local historical restoration. Outer Undo and copy closure then failed; session recovery is unconfirmed. Additional map/audit errors collected: 0. Remove only the repeated full check between verified Undo and the next historical context; retain every post-Stop/Undo check. Code 821049 stops further diagnostics/object creation while retaining owned cleanup/rollback attempts. Report the object, CSYS and bounds call number, preserve primary errors across WCS cleanup failures and distinguish an Undo API return from unverified model integrity.
+
+Add 20 regressions: 835 focused checks outside NX, including the existing 147 using C fixtures. The cause of tag exhaustion and resolution in DC 2606 are unconfirmed; the next trial requires a new NX session with the source PRT from disk. Unknown-edge/Part Box blockers, no historical-map Commit and mandatory rollback remain. Version, SHA-256, README and RU/EN guides are aligned. [Result and current stage](docs/en/mirror-project.md#resource-failure-v13009).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.30.08
 
 The V1.30.07 report identified two map blockers: ownerless/unmatched Edge 757371 and missing Part Box collector 750348. Then 1367 independent checks passed and rollback was confirmed. Add accessible nested Section/ScCollector reference search with consumer context and a separate diagnostic ReplaceFeatureBuilder using DisplayUniqueInputsToMap=True. Sources, connectors and internal output curves remain distinct; rules/filters stay unchanged, and Dispose is restricted to confirmed transient objects. Audit integrity before/after the separate view and retain both primary failures. The additional editor cannot assign matches, Validate or Commit; rollback remains mandatory.

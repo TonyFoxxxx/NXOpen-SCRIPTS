@@ -202,9 +202,9 @@
       "file": "NX_Mirror_Project.py",
       "version": "V1.30",
       "path": "scripts/NX_Mirror_Project.py",
-      "sha256": "c91edda994ae1faeea042dee96f937a7392289127c7e9ac22748adc88d2d888b",
+      "sha256": "b9997e798e70163af0efd1db91e9f31f5cdff94d3120f6cda71d9622fffae0c5",
       "description": "Тест без компонентов. Отражённые кандидаты и проверка карты исторических опор без применения замены либо прототип одного тела; обязательный откат. Полный перенос CAM не подтверждён; без автосохранения.",
-      "release_version": "V1.30.08"
+      "release_version": "V1.30.09"
     },
     {
       "id": "NX_Update_Scripts",

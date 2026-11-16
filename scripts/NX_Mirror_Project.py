@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.30.08
-SCRIPT_VERSION = "V1.30.08"
+# SCRIPT_VERSION: V1.30.09
+SCRIPT_VERSION = "V1.30.09"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -502,6 +502,53 @@ class NativeApiError(RuntimeError):
     def __init__(self, code, context, message):
         self.code, self.context = int(code), context
         super().__init__(context + ": " + str(code) + " — " + message)
+
+
+def nx_resource_failure(error):
+    """Recognize the tag-limit code observed in DC 2606, not message guesses."""
+    pending, seen = [error], set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        for attribute in ("ErrorCode", "code"):
+            try:
+                code = getattr(current, attribute, None)
+            except Exception:
+                continue
+            if type(code) is int and code == 821049:
+                return current
+        pending.extend((current.__cause__, current.__context__))
+    return None
+
+
+def record_nx_resource_failure(trial, error):
+    failure = nx_resource_failure(error)
+    if failure is not None and getattr(trial, "resource_failure", None) is None:
+        trial.resource_failure = failure
+        trial.lines.append("Критическая ошибка NX 821049: дальнейшие проверки и создание объектов остановлены. " +
+                           "Выполняются только попытки завершения редакторов и отката своей копии. " +
+                           "Причина исчерпания тегов этим отчётом не установлена.")
+    return failure is not None
+
+
+def require_diagnostic_session(trial):
+    failure = getattr(trial, "resource_failure", None)
+    if failure is not None:
+        raise failure
+
+
+def append_nx_error(lines, heading, error):
+    lines.append(heading + ": " + type(error).__name__ + ": " + str(error))
+    for attribute in ("ErrorCode", "code"):
+        try:
+            code = getattr(error, attribute, None)
+        except Exception:
+            continue
+        if isinstance(code, int) and not isinstance(code, bool):
+            lines.append("Код NX/API (" + attribute + "): " + str(code))
+    lines.append("".join(traceback.format_exception(type(error), error, error.__traceback__)))
 
 
 class CurveEvaluatorCleanupError(RuntimeError):
@@ -1709,6 +1756,7 @@ class ProbeChecks:
         self.errors, self.passed = [], 0
 
     def run(self, label, read):
+        require_diagnostic_session(self.t)
         self.guard()
         self.t.stage = self.phase + " / " + label
         ok, value = False, None
@@ -1728,6 +1776,8 @@ class ProbeChecks:
                 if isinstance(code, int) and not isinstance(code, bool):
                     self.t.lines.append("Код NX/API (" + attribute + "): " + str(code))
             self.t.lines.append("".join(traceback.format_exception(type(error), error, trace)))
+            if record_nx_resource_failure(self.t, error):
+                raise
         self.guard()
         if ok:
             self.passed += 1
@@ -1954,6 +2004,7 @@ class ReplacementMapInputs:
             if self.read_state(collector, report=False)[0] != saved:
                 raise RuntimeError("Изменилось определение исходной коллекции " + str(original_tag))
         except Exception as error:
+            record_nx_resource_failure(self.t, error)
             primary, trace, failure_stage = error, error.__traceback__, self.t.stage
         finally:
             if owned:
@@ -1964,8 +2015,10 @@ class ReplacementMapInputs:
                     clone.Destroy()
                     self.guard()
                 except Exception as error:
+                    record_nx_resource_failure(self.t, error)
                     cleanup.append((self.t.stage, error))
             try:
+                require_diagnostic_session(self.t)
                 self.p.stage("ScCollector " + str(original_tag) + " / проверка удаления временной коллекции")
                 if self.inventory()[1] != baseline:
                     raise RuntimeError("После CopyCollector/Destroy изменился состав ScCollectors")
@@ -1973,6 +2026,7 @@ class ReplacementMapInputs:
                 if self.read_state(collector, report=False)[0] != saved:
                     raise RuntimeError("После Destroy изменилось определение исходной коллекции " + str(original_tag))
             except Exception as error:
+                record_nx_resource_failure(self.t, error)
                 cleanup.append((self.t.stage, error))
         for stage, error in cleanup:
             self.t.lines.append("Ошибка проверки временной коллекции / " + stage + ": " + str(error))
@@ -2548,6 +2602,8 @@ class BodyReplacementProbe:
                             owner = self.t.native.reference_body(parent, kind)
                             queried[key] = (owner, None)
                         except Exception as failure:
+                            if record_nx_resource_failure(self.t, failure):
+                                raise
                             queried[key] = (None, failure)
                     owner, error = queried[key]
                     if error is not None:
@@ -2631,6 +2687,7 @@ class BodyReplacementProbe:
             raise RuntimeError("Пробная замена изменила пользовательские точки CAM")
 
     def check_originals(self):
+        require_diagnostic_session(self.t)
         if self.map_inputs is not None:
             self.map_inputs.check()
         self.stage("Сохранность исходных объектов внутри копии PRT")
@@ -2654,6 +2711,7 @@ class BodyReplacementProbe:
             if actual != topology:
                 raise RuntimeError("При подготовке изменились идентификаторы граней/рёбер тела " + str(tag))
         for tag, box in self.initial_boxes.items():
+            self.stage("Сохранность исходной геометрии / точный габарит " + str(tag))
             if not close_values(self.t.bounding_box(tag), box):
                 raise RuntimeError("Подготовка кандидата сдвинула исходную геометрию " + str(tag))
         refs = self.references(self.features)
@@ -3067,15 +3125,8 @@ class HistoricalReferenceProbe:
             raise RuntimeError("Для проверки истории текущая копия должна оставаться рабочей и отображаемой")
 
     def record_error(self, heading, stage, error):
-        self.t.lines.append(heading + " / " + stage + ": " + type(error).__name__ + ": " + str(error))
-        for attribute in ("ErrorCode", "code"):
-            try:
-                code = getattr(error, attribute, None)
-            except Exception:
-                continue
-            if isinstance(code, int) and not isinstance(code, bool):
-                self.t.lines.append("Код NX/API (" + attribute + "): " + str(code))
-        self.t.lines.append("".join(traceback.format_exception(type(error), error, error.__traceback__)))
+        record_nx_resource_failure(self.t, error)
+        append_nx_error(self.t.lines, heading + " / " + stage, error)
 
     def feature_states(self, extra_features=()):
         result = {}
@@ -3161,6 +3212,7 @@ class HistoricalReferenceProbe:
                             "; внешних контекстов " + str(len(self.contexts)) + "; текущий элемент " + str(self.current))
 
     def verify_restored(self, phase):
+        require_diagnostic_session(self.t)
         self.stage("Проверка возврата / " + phase)
         self.require_copy()
         if self.t.native.current_feature(int(self.t.part.Tag)) != self.current:
@@ -3247,9 +3299,12 @@ class HistoricalReferenceProbe:
                 except CurveEvaluatorCleanupError:
                     raise  # Do not open another context after an unconfirmed release.
                 except Exception as error:
+                    if record_nx_resource_failure(self.t, error):
+                        raise
                     read_errors.append((self.t.stage, error))
                     self.record_error("Не прочитана историческая опора", self.t.stage, error)
         except Exception as error:
+            record_nx_resource_failure(self.t, error)
             primary, primary_trace, failure_stage = error, error.__traceback__, self.t.stage
         finally:
             if manager is not None:
@@ -3259,11 +3314,13 @@ class HistoricalReferenceProbe:
                         self.require_copy()
                         getattr(manager, name)(*args)
                     except Exception as error:
+                        record_nx_resource_failure(self.t, error)
                         cleanup_errors.append((self.t.stage, error))
             if primary is None and not cleanup_errors:
                 try:
                     self.verify_restored("Stop / " + label)
                 except Exception as error:
+                    record_nx_resource_failure(self.t, error)
                     primary, primary_trace, failure_stage = error, error.__traceback__, self.t.stage
             # Undo even after a successful Stop: the experiment owns this mark
             # only. Failure here is left for execute's outer copy-only rollback.
@@ -3271,11 +3328,16 @@ class HistoricalReferenceProbe:
                 self.stage(label + " / локальный Undo")
                 self.require_copy()
                 self.t.session.UndoToMark(mark, None)
-                self.verify_restored("локальный Undo / " + label)
-                self.t.lines.append("Локальный Undo выполнен; возврат модели и текущего элемента проверен: " + label)
-                self.stage(label + " / удаление локальной метки Undo")
-                self.t.session.DeleteUndoMark(mark, None)
+                if getattr(self.t, "resource_failure", None) is not None:
+                    self.t.lines.append("Команда локального Undo вернулась без ошибки; проверка возврата после 821049 " +
+                                        "не выполнялась, восстановление модели не подтверждено: " + label)
+                else:
+                    self.verify_restored("локальный Undo / " + label)
+                    self.t.lines.append("Локальный Undo выполнен; возврат модели и текущего элемента проверен: " + label)
+                    self.stage(label + " / удаление локальной метки Undo")
+                    self.t.session.DeleteUndoMark(mark, None)
             except Exception as error:
+                record_nx_resource_failure(self.t, error)
                 cleanup_errors.append((self.t.stage, error))
         for stage, error in cleanup_errors:
             self.record_error("Ошибка завершения проверки", stage, error)
@@ -3293,8 +3355,11 @@ class HistoricalReferenceProbe:
             "После проверенного возврата — отдельный прототип создания кривых без замены опор. В конце обязателен откат.")
         self.preflight()
         readings, errors = [], []
+        self.verify_restored("перед первым контекстом")
         for consumer, supports in self.contexts:
-            self.verify_restored("перед новым контекстом")
+            # inspect_context verifies the complete model after BOTH Stop and
+            # local Undo. Between contexts only the checked mark is deleted;
+            # no model edit warrants repeating every exact box a third time.
             values, failures = self.inspect_context(consumer, supports)
             readings.extend(values)
             errors.extend(failures)
@@ -3412,6 +3477,7 @@ class HistoricalCurveCandidateProbe:
             self.check_inventory()
             HistoricalReplacementMapProbe(self).run()
         except Exception as error:
+            record_nx_resource_failure(self.t, error)
             primary, primary_trace, failure_stage = error, error.__traceback__, self.t.stage
         finally:
             try:
@@ -3421,12 +3487,17 @@ class HistoricalCurveCandidateProbe:
                 # Restoration must require ONLY original bodies/features. Do
                 # not keep a stale candidate exemption after Undo returns.
                 self.p.copy, self.p.copy_feature, self.p.map = None, None, {}
-                self.h.verify_restored("локальный Undo новых кривых")
-                self.check_inventory(include_candidates=False)
-                self.t.lines.append("Локальный Undo новых кривых выполнен; исходная коллекция, состав тел, история, MCS/заготовки и CAM проверены.")
-                self.stage("Удаление собственной метки новых кривых")
-                self.t.session.DeleteUndoMark(mark,None)
+                if getattr(self.t, "resource_failure", None) is not None:
+                    self.t.lines.append("Команда локального Undo новых кривых вернулась без ошибки; " +
+                                        "после 821049 состояние модели не проверялось и не подтверждено.")
+                else:
+                    self.h.verify_restored("локальный Undo новых кривых")
+                    self.check_inventory(include_candidates=False)
+                    self.t.lines.append("Локальный Undo новых кривых выполнен; исходная коллекция, состав тел, история, MCS/заготовки и CAM проверены.")
+                    self.stage("Удаление собственной метки новых кривых")
+                    self.t.session.DeleteUndoMark(mark,None)
             except Exception as error:
+                record_nx_resource_failure(self.t, error)
                 cleanup.append((self.t.stage,error))
         for stage,error in cleanup:
             self.h.record_error("Ошибка отката новых кривых",stage,error)
@@ -3470,6 +3541,7 @@ class HistoricalReplacementMapProbe:
         edits history, transfers stock/MCS/CAM or authorizes Commit. Normal
         post-Undo verification remains mandatory and separate.
         """
+        require_diagnostic_session(self.t)
         checks = ProbeChecks(self.t, self.h.require_copy, "Независимая диагностика после ошибки карты")
         self.t.lines.append("Продолжаются независимые проверки после закрытия редактора. " +
                             "Сопоставления и перенос не выполняются; затем обязателен Undo.")
@@ -3547,6 +3619,7 @@ class HistoricalReplacementMapProbe:
 
     def inspect_unique_view(self, closed_builder):
         """An isolated map view, never a retry of failed assignment checks."""
+        require_diagnostic_session(self.t)
         self.h.require_copy()
         self.t.stage = "Диагностический просмотр / новый ReplaceFeatureBuilder"
         builder = self.t.part.Features.CreateReplaceFeatureBuilder()
@@ -3645,7 +3718,9 @@ class HistoricalReplacementMapProbe:
         except Exception as error:
             self.h.record_error("Диагностический просмотр остановлен; первичная ошибка карты сохранена",self.t.stage,error)
         finally:
-            if not self.diagnostic_editor_open:
+            if getattr(self.t, "resource_failure", None) is not None:
+                self.t.lines.append("Проверки после отдельного просмотра остановлены из-за 821049; далее откат.")
+            elif not self.diagnostic_editor_open:
                 self.diagnose_after_failure()
             else:
                 self.t.lines.append("Проверки после отдельного просмотра заблокированы: закрытие редактора не подтверждено; далее откат.")
@@ -3674,6 +3749,7 @@ class HistoricalReplacementMapProbe:
             self.t.lines.append("Карта отражённого тела и исторических кривых проверена редактором. " +
                 "Commit не вызывался; допустимость фактической замены и сохранение ограничений ещё не доказаны.")
         except Exception as error:
+            record_nx_resource_failure(self.t, error)
             primary, primary_trace, failure_stage = error, error.__traceback__, self.t.stage
         finally:
             try:
@@ -3684,7 +3760,9 @@ class HistoricalReplacementMapProbe:
                 cleanup = error
                 self.h.record_error("Ошибка закрытия редактора карты",self.t.stage,error)
         if primary is not None:
-            if cleanup is None:
+            if getattr(self.t, "resource_failure", None) is not None:
+                self.t.lines.append("Независимая диагностика не запускалась после 821049; далее откат своей копии.")
+            elif cleanup is None:
                 try:
                     if self.diagnose_after_failure() is True:
                         self.diagnose_blockers(builder)
@@ -5294,12 +5372,21 @@ class Trial:
         return result
 
     def bounding_box(self, tag):
+        require_diagnostic_session(self)
         obj = self.refs.get(int(tag))
         if obj is not None and isinstance(obj, self.nx.Point):
             value = obj.Coordinates
             point = self.plane.local((value.X, value.Y, value.Z))
             return point + point
-        corner, directions, distances = self.native.bounding_box_exact(tag, self.box_csys)
+        self.exact_box_calls = getattr(self, "exact_box_calls", 0) + 1
+        try:
+            corner, directions, distances = self.native.bounding_box_exact(tag, self.box_csys)
+        except Exception as error:
+            self.stage = (getattr(self, "stage", "Геометрия") + " / UF_MODL_ask_bounding_box_exact: объект=" +
+                          str(int(tag)) + "; CSYS=" + str(int(self.box_csys)) +
+                          "; вызов в этом запуске=" + str(self.exact_box_calls))
+            record_nx_resource_failure(self, error)
+            raise
         return local_box(self.plane, corner, directions, distances)
 
     def operation_snapshot(self):
@@ -5316,7 +5403,15 @@ class Trial:
         try:
             set_wcs_values(wcs, self.nx, [0.0, 0.0, 0.0], [1,0,0,0,1,0,0,0,1])
             self.run_in_absolute_wcs()
-        finally:
+        except Exception as error:
+            record_nx_resource_failure(self, error)
+            try:
+                set_wcs_values(wcs, self.nx, origin, axes)
+            except Exception as restore:
+                record_nx_resource_failure(self, restore)
+                append_nx_error(self.lines, "Не удалось восстановить WCS копии", restore)
+            raise  # Keep the original failure even when WCS cleanup also fails.
+        else:
             set_wcs_values(wcs, self.nx, origin, axes)
 
     def select_transform_targets(self):
@@ -5548,7 +5643,8 @@ def execute(session, nx, uf, plane, native=None):
         lines.append("после проверки сохраните открытую копию штатной командой NX.")
         lines.append("Затем рассчитайте операции заново. Исходный проект скрипт не сохранял.")
     except Exception as exc:
-        probe_complete = isinstance(exc, ReplacementProbeComplete)
+        resource_failed = nx_resource_failure(exc) is not None or getattr(trial, "resource_failure", None) is not None
+        probe_complete = isinstance(exc, ReplacementProbeComplete) and not resource_failed
         failure_traceback = None if probe_complete else traceback.format_exc()
         if probe_complete:
             caption = "ПРОТОТИП ИСТОРИЧЕСКИХ ОПОР" if isinstance(exc, HistoricalProbeComplete) else "ПРОТОТИП ОДНОГО ТЕЛА"
@@ -5573,25 +5669,38 @@ def execute(session, nx, uf, plane, native=None):
                 session.UndoToMark(mark, None)
                 rolled_back = True
                 session.DeleteUndoMark(mark, None)
-                lines.append("Изменения теста в копии отменены через Undo.")
-            except Exception as rollback:
-                if rolled_back:
-                    lines.append("Изменения отменены; не удалось удалить метку Undo: " + str(rollback))
+                if resource_failed:
+                    lines.append("Команда общего Undo вернулась без ошибки; после 821049 целостность модели не проверялась и не подтверждена.")
                 else:
-                    lines.append("Откат через Undo не выполнен: " + str(rollback))
+                    lines.append("Изменения теста в копии отменены через Undo.")
+            except Exception as rollback:
+                resource_failed = resource_failed or nx_resource_failure(rollback) is not None
+                if rolled_back:
+                    heading = ("Команда Undo вернулась без ошибки, целостность модели после 821049 не подтверждена; " +
+                               "не удалось удалить метку Undo" if resource_failed else
+                               "Изменения отменены; не удалось удалить метку Undo")
+                    append_nx_error(lines, heading, rollback)
+                else:
+                    append_nx_error(lines, "Откат через Undo не выполнен", rollback)
                     try:
                         discard_failed_copy(session, nx, part, source_part, target)
                         lines.append("Созданная тестовая копия закрыта без сохранения; это не успешный Undo.")
                         lines.append("Снова активен исходный проект: " + source)
                     except Exception as discard:
-                        lines.append("Не удалось подтвердить закрытие тестовой копии: " + str(discard))
+                        resource_failed = resource_failed or nx_resource_failure(discard) is not None
+                        append_nx_error(lines, "Не удалось подтвердить закрытие тестовой копии", discard)
                         lines.append("Закройте тестовую копию без сохранения: " + target)
             if rolled_back:
                 try:
                     restore_source_display(session, source_part)
                     lines.append("Снова активен исходный проект: " + source)
                 except Exception as restore:
-                    lines.append("Не удалось вернуть исходный проект на экран: " + str(restore))
+                    resource_failed = resource_failed or nx_resource_failure(restore) is not None
+                    append_nx_error(lines, "Не удалось вернуть исходный проект на экран", restore)
+        if resource_failed:
+            lines.append("После ошибки NX 821049 не сохраняйте экспериментальную копию и не повторяйте тест в этом сеансе. " +
+                         "Следующая проверка — в новом сеансе NX с исходным PRT с диска. " +
+                         "Контрольная сумма файла и IsModified не подтверждают целостность текущего сеанса.")
         lines.append("Новая копия на диске не перезаписывалась; исходник не сохранялся.")
         # A failed diagnostic must not replace the original error/traceback or
         # imply that the source is unchanged. Check disk AND in-session state.
@@ -5616,6 +5725,8 @@ def execute(session, nx, uf, plane, native=None):
                 lines.extend(sorted(unverified))
         if failure_traceback is not None:
             lines.append("\n" + failure_traceback)
+    if trial is not None and hasattr(trial, "exact_box_calls"):
+        lines.append("Вызовов UF_MODL_ask_bounding_box_exact в этом запуске (включая неуспешные): " + str(trial.exact_box_calls))
     lines.append("\nНажмите «Копировать всё» и пришлите результат теста.")
     return "\r\n".join(lines)
 

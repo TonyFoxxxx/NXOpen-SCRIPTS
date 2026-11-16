@@ -2,10 +2,31 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.30.08**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.30.09**.
+
+<a id="resource-failure-v13009"></a>
+## Latest changes — V1.30.09 · 2026-11-16
+
+**V1.30.08 result in DC 2606:** the first historical context, arc definition, in-memory reflection, local Undo and restoration passed. The next repeated original-geometry check failed in `UF_MODL_ask_bounding_box_exact`: **821049 — Tag limit would be exceeded**. Outer Undo failed with `Undo unsuccessful, parts in this session may be corrupt`; fallback copy closure failed with `Irrecoverable run-time error`. Outer rollback and closure are **unconfirmed**. The source-file checksum remained unchanged and IsModified was false; these do not establish session integrity.
+
+**Additional map or independent-audit errors collected: 0:** this run never reached them. The three failures are the bounding-box read, outer Undo and copy closure; three independent causes are not established. This run created no candidate curves/body and did not execute nested-reference search or the separate map view. The previously identified unknown edge and missing Part Box collector remain unresolved.
+
+V1.30.09 removes only the full check repeated immediately before the second and subsequent historical contexts. The initial full check and checks after **every Stop and local Undo** remain. Between verified Undo and the next context the script only deletes its checked mark; it does not cache bounds across edits/Undo or substitute approximate bounds. Three contexts now require seven full historical-read checks instead of nine.
+
+Code 821049 in `code`/`ErrorCode`, including an exception chain, stops error collection, further reads, historical transitions and new diagnostic editors. Ordinary independent failures are still collected. Only attempts to finish owned editors and roll back the owned copy remain, guarded by copy ownership; other parts and their Undo are untouched. After 821049, a successful Undo API return is explicitly distinguished from unverified model integrity. WCS cleanup cannot hide the primary failure; outer Undo/closure/source-restoration errors include type, API code and traceback.
+
+An exact-box failure identifies the object's tag, CSYS and call number; the report also lists total calls in the run, including failed calls. A retry after 821049 is blocked. Diagnostics stay in memory; no additional NX files or Save/SaveAs/SaveAll calls are introduced.
+
+**The cause of tag exhaustion is unknown.** Session state, historical transitions, kernel behavior and bounds queries have not been isolated. A tag value does not measure remaining capacity. This change reduces redundant reads and limits actions after a critical failure; it does not establish that error 821049 is fixed. No new SDK methods are introduced.
+
+**Verified outside NX:** 835 focused checks, including the existing 147 using C fixtures; 20 new regressions cover code/chains, stopping history/diagnostics, owned Undo boundaries, both mandatory checks per context, exact-box reporting and preserved primary errors. These are API protocol simulations, not NX/Parasolid or DC 2606 compatibility tests.
+
+**Current stage:** regain a stable diagnostic pass to the map, then identify the unknown edge's provenance and Part Box dependency representation. A “support” means a model element's geometric reference: for example body edge → dependent sketch → sketch curves → Planar Mill Part Boundary. Actual transfer of that chain, a complete mirrored CAM project, save/reopen and toolpath regeneration remain unconfirmed.
+
+**Next run:** install **V1.30.09** with the updater; test **in a new NX session**, opening the saved source PRT from disk and choosing the same plane. Do not save the experimental copy or retry in the failed session. Return the full report with the bounding-box object/call number, or nested-reference/map results if reached, and the actual rollback outcome. [Outstanding SDK/2606 checks](#replacement-probe-sdk-2606).
 
 <a id="reference-provenance-v13008"></a>
-## Latest changes — V1.30.08 · 2026-11-16
+## V1.30.08 · 2026-11-16
 
 **V1.30.07 result in DC 2606:** all 17 initial map rows were read. Three messages describe two causes: Edge `757371` has neither a readable owning body nor a verified match, and Part Box collector `750348` is absent from the map. This is one additional issue beyond the previous unknown-edge stop. After editor destruction, **1367 independent checks passed without further errors**. Local/outer Undo, source restoration, unchanged file checksum and a clear modified flag were confirmed. Tags belong to this run; identity with the preceding run's Edge `581793` has not been established.
 
@@ -22,7 +43,7 @@ Sources are published Siemens **NX 2512** headers, not SDK 2606: [Section](https
 
 **Current stage:** identifying the unknown edge's provenance and how the map represents the Part Box dependency. Both blocking causes remain unresolved. History/sketch/Part Boundary transfer and a complete mirrored CAM project are unconfirmed; numerical operation-setting limitations remain unchanged.
 
-**Next run:** install **V1.30.08**, open the saved source PRT and select the same plane. Return the full report including nested-reference search, paths to inputs, unique rows, missing-collector comparison, integrity audits and rollback outcomes. **Do not save** the experimental copy. [Outstanding SDK/2606 checks](#replacement-probe-sdk-2606).
+**V1.30.08 release test plan (result above):** install **V1.30.08**, open the saved source PRT and select the same plane. Return the full report including nested-reference search, paths to inputs, unique rows, missing-collector comparison, integrity audits and rollback outcomes. **Do not save** the experimental copy. [Outstanding SDK/2606 checks](#replacement-probe-sdk-2606).
 
 <a id="batch-diagnostics-v13007"></a>
 ## V1.30.07: accumulated diagnostics · 2026-11-16
@@ -189,7 +210,7 @@ New curves **are not assigned to sketches or CAM geometry**. A correctly shaped 
 
 **Verified outside NX:** 601 focused checks, including 137 using separately compiled C fixtures. The 39 new checks cover measured report arcs, creation after context cleanup, one candidate per edge, strict result readback, failed/partial creation, retained CAM selection, local Undo and the spline C ABI. These test our code and fixtures, not Siemens DLLs. At V1.29 release time, native creation was untested in DC 2606; the subsequent report confirmed two Arcs and rollback, as documented above.
 
-The subsequent V1.29 run is documented above. The current V1.30.08 experiment checks a proposed replacement map without applying it and also requires rollback.
+The subsequent V1.29 run is documented above. The current V1.30.09 experiment checks a proposed replacement map without applying it and also requires rollback.
 
 Creation contracts come from older [CurveCollection, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.CurveCollection.html) and the [published copy of Siemens uf_curve.h](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_curve.h). SDK 2606 is unavailable; the [separate method/definition checklist](#replacement-probe-sdk-2606) has been extended.
 
@@ -210,7 +231,7 @@ Unknown types, procedural curves without an available exact representation, full
 
 All **562 focused checks outside NX**, including **122 using C fixtures**, pass. The 44 new checks cover analytic geometry, a rational spline with an independent closed form, oblique reflection, trim/repeated knots, C structures/arrays, partial failures, rejection of approximating fallback and context restoration. These use our fixtures, not Siemens DLLs; new UF_EVAL calls remain untested in DC 2606.
 
-Historical-read results and the current V1.30.08 experiment with mandatory rollback are described above.
+Historical-read results and the current V1.30.09 experiment with mandatory rollback are described above.
 
 Contracts were checked against a [published Siemens `uf_eval.h` copy](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_eval.h) and the [NURBS definition in `uf_curve.h`](https://www.ugapi.com/doc/ufun/uf_curve/UF_CURVE_spline_s.html). These are older contracts; **SDK 2606 is unavailable**. [Outstanding API checks](#replacement-probe-sdk-2606).
 
@@ -225,7 +246,7 @@ Cleanup order is unchanged: UpdateFeature/Stop/Destroy when a manager was obtain
 
 The manager fixture now rejects invisible marks with code 690037. Add four regressions for rejection/verified return, missing Visible, use of the NX enum value, and separate context marks preserving existing marks. Previous MCS, manager-failure, CAM and rollback scenarios run under this requirement. All **518 focused checks outside NX** pass, including **97 using C fixtures**. These test logic with synthetic data, not successful historical access in DC 2606.
 
-The current trial uses **V1.30.08** from the saved source PRT with the same plane. The experimental result does not need saving. Complete historical-support and mirrored-CAM transfer remain unconfirmed; the [SDK 2606 checklist](#replacement-probe-sdk-2606) is retained.
+The current trial uses **V1.30.09** from the saved source PRT with the same plane. The experimental result does not need saving. Complete historical-support and mirrored-CAM transfer remain unconfirmed; the [SDK 2606 checklist](#replacement-probe-sdk-2606) is retained.
 
 <a id="mcs-phase-v12701"></a>
 ## V1.27.01: expected MCS support state
@@ -238,7 +259,7 @@ Independent-body preparation, reflection of the separate candidate only, and che
 
 Add **15 regressions** using actual MCS validators over synthetic objects: X = −79, an oblique mirror, direct Face and Plane supports, exact selection order, damaged positions/normals/definitions, candidate preparation, and external sketches with restoration checks after Stop/Undo. Two new scenarios reproduce the premature −158 mm expectation against published V1.27 and pass with the fix. All **514 focused checks outside NX** pass, including the existing **97 using C fixtures**. These do not prove manager or CAM operation in DC 2606.
 
-After this revision, checks continued in V1.28; the current trial is **V1.30.08**, described above. The experiment still ends with outer rollback even after successful reads; its result does not need saving. V1.27.01 introduced no new API; the [SDK 2606 checklist](#replacement-probe-sdk-2606) now also lists V1.28's curve readers. Complete project mirroring is still unconfirmed.
+After this revision, checks continued in V1.28; the current trial is **V1.30.09**, described above. The experiment still ends with outer rollback even after successful reads; its result does not need saving. V1.27.01 introduced no new API; the [SDK 2606 checklist](#replacement-probe-sdk-2606) now also lists V1.28's curve readers. Complete project mirroring is still unconfirmed.
 
 <a id="historical-probe-v127"></a>
 ## V1.27: historical-support access experiment
@@ -255,7 +276,7 @@ Even successful reading ends this branch and invokes the outer copy rollback. Ex
 
 **Checked outside NX:** 499 focused checks, including 97 using C fixtures. New scenarios cover the report's six links, external/internal contexts, Start/Update/Stop/Destroy/Undo failures, preserved R1 curves and On, rejection after damage, and exact C outputs. These test the protocol and ABI against our fixtures, not Siemens DLLs or DC 2606 compatibility.
 
-Historical-read results and the current V1.30.08 experiment with mandatory rollback are described above.
+Historical-read results and the current V1.30.09 experiment with mandatory rollback are described above.
 
 The manager sequence comes from [older Siemens C++ documentation](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a56381.html), the start signature from [FeatureCollection, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.FeatureCollection.html), and bounds from [uf_modl_utilities.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl_utilities.html). **SDK 2606 is unavailable**: Python signatures, read-only manager use without a feature-editing Builder, intermediate-object visibility and actual restoration require DC 2606 verification. [Separate API checklist](#replacement-probe-sdk-2606).
 
@@ -346,6 +367,7 @@ V1.26 reads application data for the boundary and **each member**, using `UF_CAM
 | `ScCollector.GetMultiComponent/GetNonFeatureMode` | V1.30.06 read Part Box MultiComponent=True, NonFeatureMode=False and the local original BodyDumb body. Full option semantics, other definitions and preservation across later stages still require SDK/2606 verification. SetMultiComponent/SetNonFeatureMode are never called. |
 | `FeatureReferences.GetMatchedReferences`, `UF_MODL_ask_edge_body/ask_face_body` | V1.30.07 read 17 initial rows; ownerless/unmatched Edge 757371 and the missing Part Box collector remained blockers. 1367 independent checks, Destroy and Undo passed on this PRT. Edge provenance, full map coverage and other cases remain unconfirmed. |
 | `Section.GetSectionData/GetOutputCurves`, `SectionData.GetRules/GetStartConnector/GetEndConnector/GetSectionElementsData`, `SectionElementData.GetSectionElementData1`, `Dispose` | V1.30.08: Python 2606 classes/returns, five GetSectionElementData1 values, internal-output provenance, partial/historical references and transient ownership. 2512 contracts do not establish compatibility. Model objects are never disposed. |
+| `UF_MODL_ask_bounding_box_exact`, `EditWithRollbackManager.Stop/Destroy`, `UndoToMark/DeleteUndoMark` | V1.30.09 changes no signatures. Verify the 821049 cause, resource behavior of exact bounds/history/Undo, CSYS/model-tag validity after Undo and integrity after every transition in DC 2606. The next trial requires a new session; local fixtures do not model kernel resources. |
 | Separate `ReplaceFeatureBuilder` with `DisplayUniqueInputsToMap=True` after the first editor fails/is destroyed | V1.30.08: actual 2606 rows/types, Part Box and historical-input representation, independent editors, preserved original settings and complete cleanup/Undo. This view never applies matches or overrides the main-map failure. |
 | `ScCollector.AskRulesAndCollectedEntities`, `ScEvaluationFiltertype`, `IsEvaluationFilterEnabled` | V1.30.04 read SleepyEntity=True, four False filters and one BodyDumb with counts=(1,) / the original body. Other cases, unfiltered completeness, segment ordering and stability after UpdateMap/Destroy/Undo remain unverified. SDK 2606 is absent; Commit stays prohibited pending semantics/settings verification. |
 | `DisplayUniqueInputsToMap`, `ScCollector.GetObjects/GetRules/GetMultiComponent/GetNonFeatureMode`, `BodyDumbRule.GetData`, `SelectionIntentRule.RuleType.BodyDumb`, `MatchedReferenceBuilder.Types.BodyCollector` | V1.30.01: Python signatures/returns and actual EXTRACT_BODY rule in 2606; complete expansion into individual parents, unchanged definitions before/after UpdateMap, Destroy and Undo. Other rules are not declared supported. |
@@ -406,9 +428,9 @@ Sources: [older Siemens `uf_modl.h` header](https://github.com/feifeiwang/NXOPEN
 
 ## Latest release
 
-Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.30.08**. [Updater upgrade](updater.md#upgrading-to-v120).
+Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.30.09**. [Updater upgrade](updater.md#upgrading-to-v120).
 
-**V1.30.08 · 2026-11-16** — Read nested Section/ScCollector links and inspect a separate unique-input map view. Both primary blockers, no Commit and mandatory rollback remain. [Result and next run](#reference-provenance-v13008).
+**V1.30.09 · 2026-11-16** — Stop diagnostics on 821049, reduce repeated bounds and report the exact object/rollback outcome. The NX failure cause and CAM transfer remain unconfirmed. [Result and next run](#resource-failure-v13009).
 
 **V1.30.03 · 2026-11-16** — Read per-rule BodyDumb objects via AskRulesAndCollectedEntities instead of the rejected base-wrapper call; strict partition/filter checks and still no Commit. [Report and next trial](#rule-members-v13003).
 
@@ -494,13 +516,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. Y/Z are reflected and X completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.30.08 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.30.08 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.30.09 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.30.09 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.30.08**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.30.09**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. **If the historical-access or one-body experiment ran, it must roll back; do not save the experimental result.** The following inspection/save steps apply only to a successful full-project branch. Read the report; its text is available through **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -620,7 +642,7 @@ The V1.23 report passed the previous MCS “2” stop and both Three Planes rebu
 
 ## Files and validation
 
-V1.30.08: **815 focused checks outside NX**, including **147 using C fixtures**. V1.30.07 collected both blocking causes, passed 1367 independent checks and rolled back. Nested-reference reads, the separate map view and complete transfer still require DC 2606 verification.
+V1.30.09: **835 focused checks outside NX**, including **147 using C fixtures**. V1.30.08 failed before the map on 821049; outer rollback is unconfirmed. The next trial requires a new NX session. Compatibility and complete transfer remain unconfirmed.
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 

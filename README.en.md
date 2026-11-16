@@ -32,16 +32,16 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.30.08 | CAM-copy trial; historical-support access and one-body experiments with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.30.09 | CAM-copy trial; historical-support access and one-body experiments with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.20 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.30.08 · 2026-11-16
+### Latest update — Mirrored CAM project trial V1.30.09 · 2026-11-16
 
-V1.30.07 collected two blockers: an unknown edge and a missing Part Box collector; 1367 independent checks passed before rollback. V1.30.08 reads nested Section/ScCollector links and separately inspects the unique-input map to identify specific dependencies. Both blockers remain; no matches are assigned. [Report, checks and limits](docs/en/mirror-project.md#reference-provenance-v13008).
+V1.30.08 failed before the map: NX 821049 during exact bounds, followed by outer Undo and copy-closure failures. V1.30.09 removes repeated checks between historical contexts while retaining post-Stop/Undo checks, stops diagnostics on 821049 and improves object/rollback reporting. The cause of tag exhaustion remains unknown. [Result and limits](docs/en/mirror-project.md#resource-failure-v13009).
 
-All **815 focused checks outside NX** pass, including **147 using C fixtures**. Next run: **V1.30.08** from the saved source PRT with the same plane; return the full report with nested-reference paths, unique map rows and rollback outcomes. Complete CAM transfer is still unconfirmed; do not save the experimental copy.
+All **835 focused checks outside NX** pass, including **147 using C fixtures**. Next run: **V1.30.09 in a new NX session**, using the saved source PRT and the same plane. Do not save the experimental copy. The unknown edge and Part Box dependency remain unresolved; CAM transfer is unconfirmed.
 
 ### Also released — Setup sheets V2.70 · 2026-11-16
 
