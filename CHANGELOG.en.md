@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Setup sheets V2.70
+
+Fix the source body appearing beside mirrored IPW: before each set of views, show existing Part Geometry bodies of the current Workpiece and hide part bodies of other Workpieces. Support shared bodies, face/edge selections and inherited parent Workpiece geometry. Preserve blank/fixture bodies outside Part Geometry and selected components. Restore original visibility after capture and on failure; restoration errors stop export.
+
+Add 11 regressions. A PRT in a background NX 2606 session confirms actual visible bodies for both setups and restoration after normal switching and an injected error. Geometry, topology, model features, MCS, operations and the PRT file remain unchanged. Final IPW screenshots require interactive verification. Synchronize the SHA-256 manifest, README and RU/EN guides; the Zmin algorithm is unchanged.
+
 ## 2026-11-16 — Mirrored CAM project trial V1.30.02
 
 The V1.30.01 report exposed a base SelectionIntentRule wrapper, Type=34, instead of the expected BodyDumbRule class. Require SelectionIntentRule and the installed BodyDumb enum, then try the public BodyDumbRule.GetData reader with an explicit receiver for a base wrapper. No numeric type is hardcoded and rules/pointers are not substituted. Read errors are not replaced by GetObjects or retried through alternate calls; preserve code/traceback, definition/map checks and rollback without Commit.

@@ -14,7 +14,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 | File | Version | Purpose | Guide |
 | --- | --- | --- | --- |
-| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.69 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
+| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.70 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.50 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.09 | Add minimum Z to operation names, including supported spot-drilling and through-hole drilling cycles. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
@@ -37,17 +37,17 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.30.02 · 2026-11-16
+### Latest update — Setup sheets V2.70 · 2026-11-16
+
+Capture shows the current MCS's Part Geometry bodies, including an initially hidden mirrored Workpiece body. Part bodies belonging to other Workpieces are temporarily hidden. Original visibility is restored after each set of views, including on failure. [Details and validation](docs/en/setup-card.md#latest-release).
+
+Update **«Карта наладки»** to **V2.70** in the updater and regenerate the HTML. Actual visible bodies for both setups, unchanged geometry and restored visibility were verified on a PRT in a background NX 2606 session. Final IPW screenshots still require an interactive NX check.
+
+### Also released — Mirrored CAM project trial V1.30.02 · 2026-11-16
 
 In NX, V1.30.01 reconfirmed arcs, the reflected body, matching of 118 faces / 298 edges and rollback. Rule reading stopped at a base SelectionIntentRule wrapper with Type=34. V1.30.02 compares the type against the installed BodyDumb constant and tries GetData for that wrapper; definition and map guards remain. [Cause and next trial](docs/en/mirror-project.md#rule-reader-v13002).
 
 All **679 focused checks outside NX** pass, including **137 using C fixtures**. Python DC 2606 acceptance of the base wrapper still needs confirmation. The next trial uses **V1.30.02** from the saved source PRT with the same plane. Replacement remains without Commit and requires rollback; the copy does not need saving.
-
-### Also released — Setup sheets V2.69 · 2026-11-16
-
-Mirrored operations use their own MCS and Workpiece from actual Geometry tree membership. The fix covers setup names, operation-table MCS, blank geometry and operation selection for each set of views. [Details and validation](docs/en/setup-card.md#latest-release).
-
-Update **«Карта наладки»** to **V2.69** in the updater and regenerate the HTML. Ownership was verified on a PRT in a background NX 2606 session; final IPW screenshots still require an interactive NX check.
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 

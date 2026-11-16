@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.69
+# SCRIPT_VERSION: V2.70
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -18,6 +18,7 @@ Zmin использует выделение до открытия меню
 Одна выбранная папка — один установ со всеми её операциями и вложенными папками.
 Имя установа и заготовка — от MCS первой операции внутри выбранной папки.
 MCS и Workpiece определяются по членству в дереве Geometry, включая зеркальные операции.
+Перед съёмкой показывается Part Geometry текущей MCS; видимость тел восстанавливается после неё.
 Кнопка «Выводить несколько MCS» открывает выбор привязок всех выбранных установов.
 Каждая отмеченная MCS даёт три пары IPW / NO IPW со своими осями и полным названием.
 Первый набор видов — на основном листе, остальные — на отдельных листах того же установа.
@@ -117,7 +118,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.69"
+SCRIPT_VERSION = "V2.70"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -2893,6 +2894,7 @@ def resolve_setup_jobs(nx, ui, part, report, memory=None):
     selections = [[folder] for folder in folders]
     report['selection_source'] = 'startup_folder_tree'
     geometry_index = geometry_ownership(nx, part)
+    part_geometry_cache = {}
     jobs = []
     for selection in selections:
         item = new_report()
@@ -2900,6 +2902,7 @@ def resolve_setup_jobs(nx, ui, part, report, memory=None):
         try:
             context = resolve_context(nx, ui, part, item, selected=selection, confirm=False,
                                       geometry_index=geometry_index)
+            context['_part_geometry_cache'] = part_geometry_cache
             name = record_setup_identity(context, item)
             resolve_ipw_source(nx, part, context, item)
         except ExportCancelled:
@@ -4223,6 +4226,118 @@ def resolve_workpieces(nx, part, context, report):
         result.update(status='error', message=str(exc), operations=bindings,
                       workpieces=[{'tag': object_key(g), 'name': str(g.Name)} for g in groups.values()])
         raise
+
+
+def setup_part_geometry(nx, part, context):
+    """Read only CAM Part Geometry, so fixtures and blank bodies stay untouched.
+
+    Cache membership across this export's setups, never the visibility flags.
+    Part Geometry can reference bodies or individual faces of those bodies.
+    GeometrySet.GetItems reads the existing selection without Commit.
+    """
+    cache = context.setdefault('_part_geometry_cache', {})
+    if 'workpieces' in cache:
+        return cache['workpieces']
+    result = {}
+    facet_type = getattr(getattr(nx, 'Facet', None), 'FacetedBody', ())
+    for key, entry in context['geometry_index'].items():
+        group = entry['object']
+        if not isinstance(group, nx.CAM.FeatureGeometry):
+            continue
+        builder = None
+        try:
+            builder = part.CAMSetup.CAMGroupCollection.CreateMillGeomBuilder(group)
+            geometry = getattr(builder, 'PartGeometry', None)
+            if geometry is None or getattr(builder, 'BlankGeometry', None) is None:
+                continue
+            bodies = {}
+            for geometry_set in geometry.GeometryList.GetContents():
+                for obj in geometry_set.GetItems():
+                    body = obj
+                    if isinstance(obj, (nx.Face, nx.Edge)):
+                        body = obj.GetBody()
+                    if body is None or not (isinstance(body, nx.Body) or
+                                            (facet_type and isinstance(body, facet_type))):
+                        raise RuntimeError('Не удалось определить тело элемента Part Geometry: ' +
+                                           type(obj).__name__)
+                    if not body.IsOccurrence and object_key(body.OwningPart) != object_key(part):
+                        raise RuntimeError('Part Geometry ссылается на прототип другой детали. '
+                                           'Выберите тело компонента в контексте CAM-сборки.')
+                    bodies[object_key(body)] = body
+            result[key] = bodies
+        except Exception as exc:
+            raise RuntimeError('Не удалось прочитать Part Geometry «%s»: %s' % (group.Name, exc)) from exc
+        finally:
+            if builder is not None:
+                builder.Destroy()
+    cache['workpieces'] = result
+    return result
+
+
+class SetupPartDisplay:
+    """Show the current MCS's existing part bodies for both IPW/NO IPW images.
+
+    A mirrored Workpiece can own a hidden, already mirrored body while the
+    source model remains visible. Toggle those actual body objects only;
+    do not move/copy geometry or change CAM references and component choices.
+    """
+    def __init__(self, nx, part, context, report):
+        self.nx, self.part, self.context, self.report = nx, part, context, report
+        self.states = []
+
+    def apply(self):
+        inventory = setup_part_geometry(self.nx, self.part, self.context)
+        workpieces = resolve_workpieces(self.nx, self.part, self.context, self.report)
+        selected = {}
+        for group in workpieces:
+            # An empty local selection may inherit Part Geometry from an
+            # enclosing Workpiece. Follow the same verified Geometry tree.
+            node, found = group, None
+            while node is not None:
+                key = object_key(node)
+                if inventory.get(key):
+                    found = inventory[key]
+                    break
+                node = self.context['geometry_index'][key]['parent']
+            if found is None:
+                raise RuntimeError('В Workpiece «%s» не найдены тела Part Geometry для снимков.' % group.Name)
+            selected.update(found)
+        bodies = {key: body for members in inventory.values() for key, body in members.items()}
+        info = self.report['part_geometry_display'] = {
+            'mcs_name': str(self.context['mcs'].Name),
+            'workpieces': [str(group.Name) for group in workpieces],
+            'shown_body_tags': sorted(selected), 'hidden_body_tags': sorted(set(bodies) - set(selected)),
+            'restored': False}
+        # Save every flag before the first change: even a failed Blank/Unblank
+        # call can have changed NX state and must be included in restoration.
+        self.states = [(body, bool(body.IsBlanked)) for body in bodies.values()]
+        for key, body in bodies.items():
+            blanked = key not in selected
+            if bool(body.IsBlanked) != blanked:
+                (body.Blank if blanked else body.Unblank)()
+            if bool(body.IsBlanked) != blanked:
+                raise RuntimeError('NX не переключил видимость тела Part Geometry [%s].' % key)
+        info['status'] = 'applied'
+
+    def restore(self):
+        errors = []
+        for body, blanked in reversed(self.states):
+            try:
+                if bool(body.IsBlanked) != blanked:
+                    (body.Blank if blanked else body.Unblank)()
+                if bool(body.IsBlanked) != blanked:
+                    raise RuntimeError('исходная видимость не восстановлена')
+            except Exception as exc:
+                errors.append('тело Part Geometry [%s]: %s' % (object_key(body), exc))
+        if self.states:
+            try:
+                self.part.Views.Refresh()
+                self.nx.UF.UFSession.GetUFSession().Disp.MakeDisplayUpToDate()
+            except Exception as exc:
+                errors.append('обновление видимости Part Geometry: ' + str(exc))
+        if 'part_geometry_display' in self.report:
+            self.report['part_geometry_display']['restored'] = not errors
+        return errors
 
 
 def workpiece_blank_values(nx, part, group):
@@ -11338,6 +11453,7 @@ def capture_setup_views(nx, part, view, output, report, context):
             mcs_name=str(group.Name), part_units=report.get('part_units'),
             _capture_index=index, _capture_count=len(contexts))
         report['mcs_captures'].append(capture_report)
+        part_display = SetupPartDisplay(nx, part, capture_context, capture_report)
         try:
             if (object_key(group) == object_key(context['mcs'])
                     and report.get('mcs_activation')):
@@ -11347,6 +11463,7 @@ def capture_setup_views(nx, part, view, output, report, context):
             basis, origin = read_mcs(part, group)
             capture_report.update(mcs_axes_absolute=basis, mcs_origin_absolute=origin)
             resolve_ipw_source(nx, part, capture_context, capture_report)
+            part_display.apply()
             capture_views(nx, part, view, basis, output, capture_report, ipw_context=capture_context)
             capture_report['status'] = 'warning' if (
                 capture_report['restore_errors'] or capture_report.get('mcs_anchor_issues')
@@ -11360,8 +11477,18 @@ def capture_setup_views(nx, part, view, output, report, context):
             capture_report.update(status='error', error=str(exc))
             raise RuntimeError('MCS «%s»: %s' % (group.Name, exc)) from exc
         finally:
+            part_errors = part_display.restore()
+            capture_report['restore_errors'].extend(part_errors)
             report['restore_errors'].extend(capture_report['restore_errors'])
             report['data_issues'].extend(capture_report['data_issues'])
+            if part_errors:
+                report['capture_failed'] = True
+                message = 'Не удалось восстановить видимость Part Geometry после MCS «%s»: %s' % (
+                    group.Name, '; '.join(part_errors))
+                if capture_report.get('error'):
+                    message = capture_report['error'] + '\n' + message
+                capture_report.update(status='error', error=message)
+                raise RuntimeError(message)
     # Retain the legacy summary for single-MCS consumers and diagnostics.
     if report['mcs_captures']:
         for key in ('ipw', 'original_view', 'capture_projection', 'view_restored'):

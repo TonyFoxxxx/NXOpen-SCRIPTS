@@ -131,6 +131,7 @@ class MultiMcsTests(unittest.TestCase):
             output = Path(folder)
             patches = dict(nearest_mcs=lambda nx, op, index: op.mcs,
                 activate_first_mcs=Mock(),
+                SetupPartDisplay=Mock(return_value=NS(apply=Mock(), restore=Mock(return_value=[]))),
                 read_mcs=lambda part, group: (IDENTITY if group is groups[0] else ROTATED, (group.Tag, 0., 0.)),
                 ScreenshotDisplay=Mock(return_value=display),
                 snapshot_view=lambda view: dict(scale=1.),
@@ -170,6 +171,7 @@ class MultiMcsTests(unittest.TestCase):
         report = CARD.new_report()
         with patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op, index: op.mcs), \
                 patch.object(CARD, 'activate_first_mcs'), \
+                patch.object(CARD, 'SetupPartDisplay', return_value=NS(apply=Mock(), restore=Mock(return_value=[]))), \
                 patch.object(CARD, 'read_mcs', return_value=(IDENTITY, (0, 0, 0))), \
                 patch.object(CARD, 'capture_views', side_effect=RuntimeError('capture test')) as capture:
             with self.assertRaisesRegex(RuntimeError, 'MCS «1»'):

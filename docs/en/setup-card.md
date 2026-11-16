@@ -8,13 +8,13 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.69 · 2026-11-16**
+**V2.70 · 2026-11-16**
 
-- Fix MCS and Workpiece selection for mirrored operations. NX may return the source operation's parent from `GetParent(Geometry)`; the sheet now traverses `GetRoot(Geometry)` / `GetMembers()` and resolves actual membership by tag.
-- The same verified branch supplies setup names, operation-table MCS, blank geometry, view axes and IPW operation lists. Multiple-MCS mode isolates each coordinate system's selected operations while preserving Program Order.
-- Support nested geometry groups and identically named MCS objects. Missing operations, ambiguous membership and tree cycles produce an explicit error instead of substituting the source operation's parent.
+- Fix part visibility when capturing a mirrored setup. Show existing bodies from the current Workpiece's Part Geometry, including initially hidden bodies, and temporarily hide part bodies belonging to other Workpieces.
+- Resolve this selection separately for each captured MCS and use it for both IPW and NO IPW images. Shared bodies remain visible when used by the current Workpiece; face/edge selections resolve to their containing bodies. An empty local Part Geometry selection can inherit from an enclosing Workpiece.
+- Restore every affected body's original visibility after each set of views and on failure. A restoration error stops export. Bodies are not moved or copied, and CAM references are unchanged. Blank/fixture bodies outside Part Geometry and the selected component visibility are preserved.
 
-Validation: 166 automated setup-sheet checks and a PRT with source/mirrored operations read in a background NX 2606 session. Distinct MCS, origins/axes, Workpiece, blank dimensions and view operation lists were confirmed. The original PRT was unchanged. Final IPW generation and screenshots were unavailable in the background session and still require interactive NX verification. The Zmin calculation algorithm was not updated.
+Add 11 checks for body selection, shared bodies, inheritance, components, switching MCS and restoration on failure. A PRT in a background NX 2606 session confirms the actual visible bodies for source/mirrored Workpieces, restored visibility and unchanged coordinates, faces/edges, model features, MCS and operations. The original PRT is unchanged. Final IPW and screenshots still require interactive NX verification. The Zmin algorithm was not updated.
 
 Regenerate the HTML after updating.
 
@@ -23,6 +23,7 @@ Regenerate the HTML after updating.
 - Select one or more setups in the script's Program Order tree. A selected folder includes all its operations and nested folders. A parent and its descendant cannot both be selected. Preselection in the NX navigator does not select setups; only the Zmin naming option uses it.
 - The setup name comes from the first operation's MCS in the selected folder. Views and IPW use that MCS by default; the multiple-MCS mode lets you select further coordinate systems independently for each setup.
 - Operation membership in MCS and Workpiece comes from the Geometry tree, including mirrored operations. The tree is read again for each export.
+- Each set of MCS views shows its Workpiece's Part Geometry. Other part bodies are temporarily hidden and original visibility is restored after capture. Bodies on hidden layers or inside unchecked components still follow layer and component visibility settings.
 - Choose visible part and fixture components separately for each setup. NX immediately previews the selection. Original visibility is restored after selection and capture.
 - Top, side and isometric views are created relative to the MCS, each with matching-camera IPW and NO IPW variants.
 - X/Y/Z arrows are anchored at the MCS origin. Geometry is fitted with margins.
