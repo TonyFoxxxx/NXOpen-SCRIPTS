@@ -2,10 +2,27 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.30**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.30.01**.
+
+<a id="collector-map-v13001"></a>
+## Latest changes — V1.30.01 · 2026-11-16
+
+**V1.30 NX result:** two standalone Arcs were created and read back again with deviation 0.0. Source body `580746` produced independent BREP `571964`; all **118 faces and 298 edges** were matched, and only the candidate was reflected. `GetMatchedReferences` then returned `ScCollector 170651`, the body selection of retained `EXTRACT_BODY 162517`. V1.30 stopped before assigning matches: a collector cannot be mapped as a single edge. The report confirms local/outer Undo, source restoration, unchanged source checksum and a clear modification flag. Tags are specific to that run.
+
+V1.30.01 adds a checked transition to `ReplaceFeatureBuilder.DisplayUniqueInputsToMap=True`, requesting mappings of individual parent objects. Original collectors and rules **are not rewritten**. This branch still never calls replacement `Commit`.
+
+- Before the first `UpdateMap`, read collectors using the selected source body. Expansion currently requires a `BodyCollector` row without reversal and fully read `BodyDumbRule.GetData`: the original body must agree with `GetObjects`, rule definitions and the proven geometric map. Collector modes are checked. Unknown rules, other types, empty/unreadable data or different membership stop the experiment. The V1.30 report **does not identify the rule type**; BodyDumb still needs confirmation in NX.
+- Original collectors must be present in the first map. After changing the view, require exactly the previous individual parents plus the bodies read from those collectors. Missing collectors/bodies/historical arcs, extra rows and changed types/directions are rejected. Assign the explicit original-body to candidate-body match; do not pass a body as the replacement for a collector to `SetMatchingForParent`.
+- Recheck collector membership and definitions after map generation, match assignment, builder `Destroy` and local Undo. Existing history, sketch, MCS/RCS, stock, exact CAM-selection and `Tool Position = On` guards remain. Unconfirmed state is rejected; automatic matching stays disabled.
+
+**Verified outside NX:** 665 focused checks, including 137 using C fixtures; 30 new regressions cover collectors, complete mapping, no Commit, failures and rollback. These exercise our code and synthetic API contracts, not DC 2606 DLLs or its kernel. The V1.30 report does not establish that the new map or association transfer works.
+
+**Next run:** install **V1.30.01** through the updater, open the saved source PRT and select the same plane. Send the complete report, including the collector row/rule, unique-parent map and both rollback results. The experimental copy does not need saving. Sketch-support transfer, history replacement and a complete CAM copy remain unconfirmed.
+
+Sources are older published Siemens contracts: [ReplaceFeatureBuilder](https://www.ugapi.com/doc/nxopen/a03024.html), [ScCollector](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.ScCollector.html), [BodyDumbRule.GetData](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.BodyDumbRule.html). They are not SDK 2606; the [separate verification list](#replacement-probe-sdk-2606) is extended below.
 
 <a id="historical-map-v130"></a>
-## Latest changes — V1.30 · 2026-11-16
+## V1.30: historical-support map · 2026-11-16
 
 **V1.29 NX result:** after three successful historical reads, two standalone reflected Arcs were created. Native readback checked nine parameters per candidate with deviation **0.0**. This run used `145875 → 160132` and `145971 → 160133`; source body `146565`, external contexts `131334`, `131338`, `131342`, and initial current feature `131352`. Tags are specific to this run. History-context restoration, candidate removal through local Undo, outer Undo and source restoration passed their checks; the source PRT checksum was unchanged and its modification flag was clear.
 
@@ -22,9 +39,9 @@ V1.30 extends this branch to a `ReplaceFeatureBuilder` map check, **without call
 
 A verified map and Validate result **do not establish that applying it is valid**. Edge → Curve compatibility for every consumer, sketch-constraint preservation and identifiers after actual replacement remain untested. This branch does not replace the original body, transfer MCS/stock, change Part Boundary/On or delete toolpaths. Unknown numeric CAM settings remain reported as unverified. Other parts/Undo are protected; no automatic saves or additional files are introduced.
 
-**Verified outside NX:** 635 focused checks, including the existing 137 using C fixtures. The 34 new regressions cover complete available maps, absence of Commit, missing/unknown/duplicate rows, type/direction/status, changed selections/candidate geometry, MCS/CAM, cleanup/Undo errors and active-copy loss. A builder fixture does not establish NX kernel behavior. Body extraction and this map on the user's PRT still require a real V1.30 run.
+**Verified outside NX:** 635 focused checks, including the existing 137 using C fixtures. The 34 new regressions cover complete available maps, absence of Commit, missing/unknown/duplicate rows, type/direction/status, changed selections/candidate geometry, MCS/CAM, cleanup/Undo errors and active-copy loss. A builder fixture does not establish NX kernel behavior. The subsequent run confirmed extraction and topology matching, then stopped at ScCollector as described above.
 
-**Next run:** update to **V1.30**, open the saved source PRT and use the same plane. After two checked arcs, expect “ПРОТОТИП КАРТЫ ЗАМЕНЫ” with extraction, topology matching and historical-row results, followed by local and outer rollback. A failure needs the complete stage/error report. The experimental copy does not need saving.
+**Original V1.30 trial:** update to **V1.30**, open the saved source PRT and use the same plane. After two checked arcs, expect “ПРОТОТИП КАРТЫ ЗАМЕНЫ” with extraction, topology matching and historical-row results, followed by local and outer rollback. A failure needs the complete stage/error report. The experimental copy does not need saving.
 
 This experiment uses older Siemens contracts: [ReplaceFeatureBuilder](https://www.ugapi.com/doc/nxopen/a03024.html), [MatchedReferenceBuilder](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.MatchedReferenceBuilder.html), [row types](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.MatchedReferenceBuilder.Types.html) and [statuses](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.MatchedReferenceBuilder.ResolvedStatus.html). SDK 2606 is unavailable; see the [separate verification list](#replacement-probe-sdk-2606).
 
@@ -47,7 +64,7 @@ New curves **are not assigned to sketches or CAM geometry**. A correctly shaped 
 
 **Verified outside NX:** 601 focused checks, including 137 using separately compiled C fixtures. The 39 new checks cover measured report arcs, creation after context cleanup, one candidate per edge, strict result readback, failed/partial creation, retained CAM selection, local Undo and the spline C ABI. These test our code and fixtures, not Siemens DLLs. At V1.29 release time, native creation was untested in DC 2606; the subsequent report confirmed two Arcs and rollback, as documented above.
 
-The subsequent V1.29 run is documented above. The current V1.30 experiment checks a proposed replacement map without applying it and also requires rollback.
+The subsequent V1.29 run is documented above. The current V1.30.01 experiment checks a proposed replacement map without applying it and also requires rollback.
 
 Creation contracts come from older [CurveCollection, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.CurveCollection.html) and the [published copy of Siemens uf_curve.h](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_curve.h). SDK 2606 is unavailable; the [separate method/definition checklist](#replacement-probe-sdk-2606) has been extended.
 
@@ -68,7 +85,7 @@ Unknown types, procedural curves without an available exact representation, full
 
 All **562 focused checks outside NX**, including **122 using C fixtures**, pass. The 44 new checks cover analytic geometry, a rational spline with an independent closed form, oblique reflection, trim/repeated knots, C structures/arrays, partial failures, rejection of approximating fallback and context restoration. These use our fixtures, not Siemens DLLs; new UF_EVAL calls remain untested in DC 2606.
 
-Historical-read results and the current V1.30 experiment with mandatory rollback are described above.
+Historical-read results and the current V1.30.01 experiment with mandatory rollback are described above.
 
 Contracts were checked against a [published Siemens `uf_eval.h` copy](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_eval.h) and the [NURBS definition in `uf_curve.h`](https://www.ugapi.com/doc/ufun/uf_curve/UF_CURVE_spline_s.html). These are older contracts; **SDK 2606 is unavailable**. [Outstanding API checks](#replacement-probe-sdk-2606).
 
@@ -83,7 +100,7 @@ Cleanup order is unchanged: UpdateFeature/Stop/Destroy when a manager was obtain
 
 The manager fixture now rejects invisible marks with code 690037. Add four regressions for rejection/verified return, missing Visible, use of the NX enum value, and separate context marks preserving existing marks. Previous MCS, manager-failure, CAM and rollback scenarios run under this requirement. All **518 focused checks outside NX** pass, including **97 using C fixtures**. These test logic with synthetic data, not successful historical access in DC 2606.
 
-The current trial uses **V1.30** from the saved source PRT with the same plane. The experimental result does not need saving. Complete historical-support and mirrored-CAM transfer remain unconfirmed; the [SDK 2606 checklist](#replacement-probe-sdk-2606) is retained.
+The current trial uses **V1.30.01** from the saved source PRT with the same plane. The experimental result does not need saving. Complete historical-support and mirrored-CAM transfer remain unconfirmed; the [SDK 2606 checklist](#replacement-probe-sdk-2606) is retained.
 
 <a id="mcs-phase-v12701"></a>
 ## V1.27.01: expected MCS support state
@@ -96,7 +113,7 @@ Independent-body preparation, reflection of the separate candidate only, and che
 
 Add **15 regressions** using actual MCS validators over synthetic objects: X = −79, an oblique mirror, direct Face and Plane supports, exact selection order, damaged positions/normals/definitions, candidate preparation, and external sketches with restoration checks after Stop/Undo. Two new scenarios reproduce the premature −158 mm expectation against published V1.27 and pass with the fix. All **514 focused checks outside NX** pass, including the existing **97 using C fixtures**. These do not prove manager or CAM operation in DC 2606.
 
-After this revision, checks continued in V1.28; the current trial is **V1.30**, described above. The experiment still ends with outer rollback even after successful reads; its result does not need saving. V1.27.01 introduced no new API; the [SDK 2606 checklist](#replacement-probe-sdk-2606) now also lists V1.28's curve readers. Complete project mirroring is still unconfirmed.
+After this revision, checks continued in V1.28; the current trial is **V1.30.01**, described above. The experiment still ends with outer rollback even after successful reads; its result does not need saving. V1.27.01 introduced no new API; the [SDK 2606 checklist](#replacement-probe-sdk-2606) now also lists V1.28's curve readers. Complete project mirroring is still unconfirmed.
 
 <a id="historical-probe-v127"></a>
 ## V1.27: historical-support access experiment
@@ -113,7 +130,7 @@ Even successful reading ends this branch and invokes the outer copy rollback. Ex
 
 **Checked outside NX:** 499 focused checks, including 97 using C fixtures. New scenarios cover the report's six links, external/internal contexts, Start/Update/Stop/Destroy/Undo failures, preserved R1 curves and On, rejection after damage, and exact C outputs. These test the protocol and ABI against our fixtures, not Siemens DLLs or DC 2606 compatibility.
 
-Historical-read results and the current V1.30 experiment with mandatory rollback are described above.
+Historical-read results and the current V1.30.01 experiment with mandatory rollback are described above.
 
 The manager sequence comes from [older Siemens C++ documentation](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a56381.html), the start signature from [FeatureCollection, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.FeatureCollection.html), and bounds from [uf_modl_utilities.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl_utilities.html). **SDK 2606 is unavailable**: Python signatures, read-only manager use without a feature-editing Builder, intermediate-object visibility and actual restoration require DC 2606 verification. [Separate API checklist](#replacement-probe-sdk-2606).
 
@@ -198,10 +215,11 @@ V1.26 reads application data for the boundary and **each member**, using `UF_CAM
 
 | Methods / definitions | Outstanding verification |
 | --- | --- |
+| `DisplayUniqueInputsToMap`, `ScCollector.GetObjects/GetRules/GetMultiComponent/GetNonFeatureMode`, `BodyDumbRule.GetData`, `SelectionIntentRule.RuleType.BodyDumb`, `MatchedReferenceBuilder.Types.BodyCollector` | V1.30.01: Python signatures/returns and actual EXTRACT_BODY rule in 2606; complete expansion into individual parents, unchanged definitions before/after UpdateMap, Destroy and Undo. Other rules are not declared supported. |
 | `MatchedReferenceBuilder.Type/Types.Curve`, `MatchedStatus/ResolvedStatus.ByUser/BySystem/Initial/Unresolved`, `ReverseDirection`, `ReplaceFeatureBuilder.UpdateMap/SetMatchingForParent`, `FeatureReferences.GetMatchedReferences/Validate`, builder `Validate/Destroy` | V1.30: Python 2606 members, single-edge rows versus Section/collectors, coverage of intermediate supports, acceptance of standalone Arc targets, direction and status semantics, no-Commit cleanup and actual later replacement/constraints. Do not set type/status just to pass; Validate is not proof of transfer. |
 | `Part.Curves`, `CreateLine(Point3d, Point3d)`, `CreateArc(Point3d, Vector3d, Vector3d, radius, startAngle, endAngle)`, `CreateEllipse(Point3d, Vector3d, Vector3d, major, minor, startAngle, endAngle)` | V1.29: Python overloads in DC 2606, collection coverage, ABS directions, angle/trim semantics and actual periodicity, independent new tags and Undo removal. V1.29 confirmed CreateArc, native readback and Undo for two arcs on this PRT; the other positive creation paths remain untested. |
 | `UF_CURVE_create_spline(UF_CURVE_spline_t*, tag_t*, int*, UF_CURVE_state_t**)`, `UF_free` | V1.29: Windows C ABI, int rational flag, double-pointer states output, pole[4]/knot ownership, trim/periodicity and normalized domain. Every returned state is rejected; real kernel behavior and readback remain unverified. |
-| Sketch/support association definitions, complete constraints and Edge → Curve compatibility | V1.30 only prepares a proposed map without Commit; actual transfer is not implemented in this branch. Native curve creation does not establish a valid replacement reference; never silently convert the definition or substitute a geometrically similar object. |
+| Sketch/support association definitions, complete constraints and Edge → Curve compatibility | V1.30.01 only prepares a proposed map without Commit; actual transfer is not implemented in this branch. Native curve creation does not establish a valid replacement reference; never silently convert the definition or substitute a geometrically similar object. |
 | `UF_EVAL_initialize_2`, `UF_EVAL_is_line/is_arc/is_ellipse/is_spline/is_periodic`, `UF_EVAL_ask_limits/ask_arc/ask_ellipse/ask_spline/ask_spline_control_pts/ask_spline_knots/evaluate/free`, `UF_free`; `UF_EVAL_arc_t/ellipse_t/spline_t` | V1.28 read two Arc supports on this PRT; Line/Ellipse/Spline and all variants remain untested. Verify: Windows 2606 exports/C ABI, struct/logical sizes and alignment, exact procedural-edge representations, ABS/parameterization/trim/periodicity, weights/knots, allocation ownership and release. Older contracts and C fixtures do not establish compatibility. |
 | `StartEditWithRollbackManager(feature, mark)`, `EditWithRollbackManager.UpdateFeature/Stop/Destroy` | V1.27.02 passed Start/UpdateFeature/Stop/Destroy and checks after local Undo in three external sketch contexts on this PRT. Other consumer types and definition methods remain unverified. |
 | `Feature.Timestamp/Suppressed/IsInternal`, `UF_MODL_ask_current_feature` | Property types, eligible external consumers, current-feature values inside/after the manager, and complete history-state preservation. |
@@ -255,7 +273,9 @@ Sources: [older Siemens `uf_modl.h` header](https://github.com/feifeiwang/NXOPEN
 
 ## Latest release
 
-Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.30**. [Updater upgrade](updater.md#upgrading-to-v120).
+Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.30.01**. [Updater upgrade](updater.md#upgrading-to-v120).
+
+**V1.30.01 · 2026-11-16** — Checked BodyDumb-collector expansion into a unique-parent map without Commit; retain original rules. [V1.30 result and next trial](#collector-map-v13001).
 
 **V1.30 · 2026-11-16** — Prepare a reflected BREP and complete available map including historical curves; validate without replacement Commit, then local/outer Undo. V1.29 established two native Arc candidates. [Result and next stage](#historical-map-v130).
 
@@ -335,13 +355,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. Y/Z are reflected and X completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.30 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.30 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.30.01 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.30.01 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.30**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.30.01**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. **If the historical-access or one-body experiment ran, it must roll back; do not save the experimental result.** The following inspection/save steps apply only to a successful full-project branch. Read the report; its text is available through **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -461,7 +481,7 @@ The V1.23 report passed the previous MCS “2” stop and both Three Planes rebu
 
 ## Files and validation
 
-V1.30: **635 focused checks outside NX**, including **137 using C fixtures**. The new map probe checks candidates and every available row without Commit; original history/geometry, MCS/stock, CAM and rollback guards remain. V1.29 confirmed two standalone Arcs and their Undo removal in NX. Body extraction, the V1.30 map, actual replacement and full-project transfer remain untested.
+V1.30.01: **665 focused checks outside NX**, including **137 using C fixtures**. New regressions check BodyDumb-collector expansion into individual parents without Commit. On the user’s PRT, V1.30 confirmed candidate extraction/reflection and matching of 118 faces / 298 edges, then stopped at ScCollector. The new map expansion, actual association replacement and full-project transfer remain unconfirmed in NX.
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 

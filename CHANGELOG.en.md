@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.30.01
+
+V1.30 confirmed separate BREP extraction/reflection and matching of 118 faces / 298 edges, then stopped at a retained EXTRACT_BODY ScCollector. Add a checked unique-parent map through DisplayUniqueInputsToMap. Read BodyDumb definitions and collector membership before UpdateMap; expansion must not lose/add parents, change types/directions or conceal unreadable data. Original rules are not rewritten and replacement Commit is never called; definition checks continue after Destroy and local Undo.
+
+30 new regressions; 665 focused checks outside NX, including 137 using C fixtures. The actual collector rule and new map remain unconfirmed in DC 2606. The updater sees patch release V1.30.01; SHA-256 and both documentation languages are synchronized. [Result and next trial](docs/en/mirror-project.md#collector-map-v13001).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.30
 
 The V1.29 report confirms two standalone reflected Arcs, native readback with deviation 0.0, local/outer Undo and successful source checks. V1.30 extends this branch with an independent reflected BREP and explicit final/historical-support map in ReplaceFeatureBuilder. Require complete available rows, exact targets, Curve type and unchanged historical-reference direction, resolved status, both selections and Validate. Recheck candidate curves/body after map preparation and builder destruction.

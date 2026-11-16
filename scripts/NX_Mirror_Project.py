@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.30
-SCRIPT_VERSION = "V1.30"
+# SCRIPT_VERSION: V1.30.01
+SCRIPT_VERSION = "V1.30.01"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -1650,6 +1650,128 @@ def unique_probe_mapping(originals, copies, matches, context):
     return result
 
 
+class ReplacementMapInputs:
+    """Read a BodyDumb collector, then request the builder's unique-input view.
+
+    This is only a proposal without Commit. No collector/rule is rewritten.
+    A different rule needs its own complete reader; GetObjects alone does not
+    establish selection intent or justify replacing it with a dumb rule.
+    """
+    def __init__(self, probe):
+        self.p, self.t, self.states = probe, probe.t, {}
+
+    def state(self, tag):
+        self.p.stage("Чтение определения ScCollector " + str(tag))
+        collector = self.p.object(tag)
+        if not isinstance(collector, self.t.nx.ScCollector):
+            raise RuntimeError("Изменился класс коллекции опор " + str(tag))
+        def bodies(values, context):
+            tags = []
+            for obj in probe_array(values, context):
+                body = probe_tag(obj.Tag, context)
+                if not isinstance(self.p.object(body), self.t.nx.Body) or body != self.p.body_tag:
+                    raise RuntimeError(context + ": требуется выбранное исходное тело, получен tag=" + str(body))
+                tags.append(body)
+            if not tags or len(set(tags)) != len(tags):
+                raise RuntimeError(context + ": пустой или неоднозначный состав тел")
+            return tuple(tags)
+        members = bodies(collector.GetObjects(), "ScCollector.GetObjects " + str(tag))
+        rules, definitions = probe_array(collector.GetRules(), "ScCollector.GetRules"), []
+        if not rules:
+            raise RuntimeError("Не прочитаны правила ScCollector " + str(tag))
+        for rule in rules:
+            self.p.stage("ScCollector " + str(tag) + " / " + type(rule).__name__ + ".GetData")
+            if (not isinstance(rule, self.t.nx.BodyDumbRule) or
+                    rule.Type != self.t.nx.SelectionIntentRule.RuleType.BodyDumb):
+                raise RuntimeError("Нет проверенного чтения правила ScCollector " + str(tag) + ": " +
+                                   type(rule).__name__ + "; Type=" + str(rule.Type))
+            definitions.append((rule.Type, bodies(rule.GetData(), "BodyDumbRule.GetData " + str(tag))))
+        if Counter(members) != Counter(body for _, tags in definitions for body in tags):
+            raise RuntimeError("Определение и вычисленный выбор ScCollector различаются: " + str(tag))
+        modes = (collector.GetMultiComponent(), collector.GetNonFeatureMode())
+        if any(type(value) is not bool for value in modes) or any(modes):
+            raise RuntimeError("Не подтверждён локальный модельный режим ScCollector " + str(tag))
+        return members, tuple(definitions), modes
+
+    def check(self):
+        for tag, saved in self.states.items():
+            if self.state(tag) != saved:
+                raise RuntimeError("Изменилось определение ScCollector " + str(tag))
+
+    def capture(self):
+        # Capture before UpdateMap, which must not change original intent.
+        tags = {p for f in self.p.retained for p, _ in self.p.initial_refs[f]}
+        for tag in sorted(tags):
+            obj = self.p.object(tag)
+            if not isinstance(obj, self.t.nx.ScCollector):
+                continue
+            self.p.stage("Исходные объекты ScCollector " + str(tag))
+            members = probe_array(obj.GetObjects(), "ScCollector.GetObjects")
+            if self.p.body_tag in {probe_tag(o.Tag, "ScCollector member") for o in members}:
+                self.states[tag] = self.state(tag)
+
+    def expand(self, builder, rows, mapping, guard):
+        expected, direct, collectors = set(), {}, set()
+        reference_type = self.t.nx.Features.MatchedReferenceBuilder
+        for row in rows:
+            tag = probe_tag(row.ParentEntity.Tag, "ParentEntity")
+            parent = self.p.object(tag)
+            if type(row.ReverseDirection) is not bool:
+                raise RuntimeError("Не прочитан ReverseDirection опоры " + str(tag))
+            if isinstance(parent, self.t.nx.ScCollector):
+                consumers = sorted(f for f in self.p.retained if any(p == tag for p, _ in self.p.initial_refs[f]))
+                self.t.lines.append("Коллекция в карте: tag=" + str(tag) + "; Type=" + str(row.Type) +
+                                    "; сохраняемые потребители=" + str(consumers))
+                if not consumers or row.Type != reference_type.Types.BodyCollector or row.ReverseDirection:
+                    raise RuntimeError("Не подтверждена строка BodyCollector без разворота: " + str(tag))
+                if tag not in self.states:
+                    raise RuntimeError("Нет исходного определения ScCollector до UpdateMap: " + str(tag))
+                state = self.state(tag)
+                if self.states[tag] != state:
+                    raise RuntimeError("Изменилось исходное определение коллекции " + str(tag))
+                expected.update(state[0])
+                collectors.add(tag)
+                self.t.lines.append("ScCollector " + str(tag) + ": BodyDumb; тела " + str(state[0]) +
+                                    ". Исходные правила только прочитаны.")
+            else:
+                if tag not in mapping:
+                    raise RuntimeError("Нет проверенного соответствия опоре редактора: " + type(parent).__name__ + " " + str(tag))
+                value = (row.Type, row.ReverseDirection)
+                if tag in direct and direct[tag] != value:
+                    raise RuntimeError("Неоднозначное определение повторной опоры " + str(tag))
+                direct[tag] = value
+                expected.add(tag)
+        if collectors != set(self.states):
+            raise RuntimeError("Редактор не включил исходные коллекции в карту: " + str(sorted(set(self.states) - collectors)))
+        self.p.stage("Карта по отдельным родителям / DisplayUniqueInputsToMap")
+        guard()
+        builder.DisplayUniqueInputsToMap = True
+        if builder.DisplayUniqueInputsToMap is not True:
+            raise RuntimeError("NX не подтвердил DisplayUniqueInputsToMap=True")
+        guard()
+        builder.UpdateMap()
+        guard()
+        self.check()
+        self.p.stage("Чтение полной карты отдельных родителей")
+        expanded = probe_array(builder.FeatureReferences.GetMatchedReferences(), "GetMatchedReferences unique inputs")
+        actual = {probe_tag(row.ParentEntity.Tag, "ParentEntity") for row in expanded}
+        if actual != expected:
+            raise RuntimeError("Карта отдельных родителей не совпала с прочитанными опорами: отсутствуют " +
+                               str(sorted(expected - actual)) + "; лишние " + str(sorted(actual - expected)))
+        for row in expanded:
+            tag = int(row.ParentEntity.Tag)
+            self.p.object(tag)
+            if (type(row.ReverseDirection) is not bool or
+                    (tag in direct and (row.Type, row.ReverseDirection) != direct[tag]) or
+                    (tag not in direct and row.ReverseDirection)):
+                raise RuntimeError("Изменилось определение строки при раскрытии карты: " + str(tag))
+        if builder.DisplayUniqueInputsToMap is not True:
+            raise RuntimeError("Изменился режим DisplayUniqueInputsToMap")
+        self.t.lines.append("Карта по отдельным родителям: раскрыто коллекций " + str(len(collectors)) +
+                            "; уникальных опор " + str(len(actual)) + "; пропущенных/лишних нет. Правила не заменялись.")
+        return expanded
+
+
 class BodyReplacementProbe:
     """One-body experiment, always rolled back; never a completed CAM project.
 
@@ -1666,6 +1788,7 @@ class BodyReplacementProbe:
         self.retained = set(self.features) - self.old
         self.copy = self.copy_feature = None
         self.map = {}
+        self.map_inputs = None
 
     def stage(self, value):
         self.t.stage = "Прототип одного тела " + str(self.body_tag) + " / " + value
@@ -1862,6 +1985,8 @@ class BodyReplacementProbe:
             raise RuntimeError("Пробная замена изменила пользовательские точки CAM")
 
     def check_originals(self):
+        if self.map_inputs is not None:
+            self.map_inputs.check()
         self.stage("Сохранность исходных объектов внутри копии PRT")
         current = self.t.checkpoint_model_history("Подготовка независимого тела", check_errors=True)
         original = {tag: record for tag, record in current.items() if tag in self.features}
@@ -2075,16 +2200,39 @@ class BodyReplacementProbe:
         if (builder.MappingMethod != method or builder.DoAutomaticGeomMatch or
                 not builder.CopyReplacementFeature or not builder.DeleteOriginalFeature):
             raise RuntimeError("NX не подтвердил режим явной замены с копированием кандидата")
+        if extra_curves:
+            inputs = ReplacementMapInputs(self)
+            inputs.capture()
+            if inputs.states:
+                self.map_inputs = inputs
+                self.stage("Карта исходных коллекций / DisplayUniqueInputsToMap=False")
+                guard()
+                builder.DisplayUniqueInputsToMap = False
+                if builder.DisplayUniqueInputsToMap is not False:
+                    raise RuntimeError("NX не подтвердил DisplayUniqueInputsToMap=False")
         self.stage("Заполнение карты / ReplaceFeatureBuilder.UpdateMap")
         guard()
         builder.UpdateMap()
         self.stage("Чтение опор / FeatureReferences.GetMatchedReferences")
         guard()
         rows = probe_array(builder.FeatureReferences.GetMatchedReferences(), "GetMatchedReferences")
-        parents, directions = [], {}
+        parents, directions, row_types = [], {}, {}
         mapping = dict(self.map)
         mapping.update(extra_curves)
         mapping.update((tag, int(self.copy_feature.Tag)) for tag in self.old)
+        if extra_curves and (self.map_inputs is not None or
+                any(isinstance(self.object(row.ParentEntity.Tag), self.t.nx.ScCollector) for row in rows)):
+            # Only the historical branch may request this view: it never commits.
+            if self.map_inputs is None:
+                self.map_inputs = ReplacementMapInputs(self)
+            rows = self.map_inputs.expand(builder, rows, mapping, guard)
+            check_selections()
+        def check_mode():
+            if (builder.MappingMethod != method or builder.DoAutomaticGeomMatch or
+                    not builder.CopyReplacementFeature or not builder.DeleteOriginalFeature or
+                    (self.map_inputs is not None and builder.DisplayUniqueInputsToMap is not True)):
+                raise RuntimeError("Изменился режим явной карты замены")
+        check_mode()
         for row in rows:
             parent = row.ParentEntity
             tag = probe_tag(parent.Tag, "ParentEntity")
@@ -2103,6 +2251,10 @@ class BodyReplacementProbe:
                     raise RuntimeError("Не подтверждена одиночная Curve-строка без разворота для исторического Edge " + str(tag))
             parents.append(tag)
             directions[tag] = row.ReverseDirection
+            if self.map_inputs is not None:
+                if tag in row_types and row_types[tag] != row.Type:
+                    raise RuntimeError("Неоднозначные типы повторной опоры " + str(tag))
+                row_types[tag] = row.Type
         required = {p for tag in self.retained for p, _ in self.initial_refs[tag] if p in self.map} | set(extra_curves)
         if required - set(parents):
             raise RuntimeError("Редактор не включил в явную карту используемые геометрические опоры: " +
@@ -2113,6 +2265,7 @@ class BodyReplacementProbe:
             builder.SetMatchingForParent(self.object(tag), self.object(mapping[tag]))
         self.stage("Повторное чтение явной карты")
         guard()
+        check_mode()
         checked = probe_array(builder.FeatureReferences.GetMatchedReferences(), "Повторное GetMatchedReferences")
         if Counter(int(row.ParentEntity.Tag) for row in checked) != Counter(parents):
             raise RuntimeError("Изменился состав опор редактора замены")
@@ -2122,6 +2275,10 @@ class BodyReplacementProbe:
             if (row.MatchedEntity is None or int(row.MatchedEntity.Tag) != mapping[tag] or
                     row.ReverseDirection != directions[tag] or not row.Validate()):
                 raise RuntimeError("Не подтверждено явное сопоставление опоры " + str(tag))
+            if self.map_inputs is not None and (row.Type != row_types[tag] or
+                    type(row.ReverseDirection) is not bool or
+                    row.MatchedStatus not in (reference_type.ResolvedStatus.ByUser,reference_type.ResolvedStatus.BySystem)):
+                raise RuntimeError("Не подтверждены тип/статус строки раскрытой карты " + str(tag))
             if tag in extra_curves:
                 self.object(row.MatchedEntity.Tag)
                 if (row.Type != reference_type.Types.Curve or type(row.ReverseDirection) is not bool or
@@ -2136,6 +2293,7 @@ class BodyReplacementProbe:
         if not builder.FeatureReferences.Validate() or not builder.Validate():
             raise RuntimeError("Редактор замены отклонил полную карту опор")
         guard()
+        check_mode()
         check_selections()
         self.check_originals()
 

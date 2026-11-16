@@ -40,6 +40,7 @@ class HistoryWorld:
         self.w.objects[69595].Timestamp = 100
         self.t.part.Expressions = list({e.Tag:e for f in self.t.part.Features for e in f.expressions}.values())
         self.t.nx.Body = Body
+        self.t.nx.ScCollector = type('ScCollector', (), {})
         self.t.nx.Session = NS(MarkVisibility=NS(Invisible=0,Visible=1))
         self.t.nx.Features.EditWithRollbackManager = HistoryManager
         self.t.nx.Features.MatchedReferenceBuilder = NS(Types=NS(Curve=71,Face=72,Object=73),

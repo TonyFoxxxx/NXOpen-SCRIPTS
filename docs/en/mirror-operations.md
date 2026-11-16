@@ -1,10 +1,10 @@
-# CAM operation coverage audit — V1.30
+# CAM operation coverage audit — V1.30.01
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-16**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
 
-V1.30 checks a proposed replacement map using a separate reflected BREP and historical curves without Commit; original references are not replaced. V1.29 confirmed two Arc creations, native readback and Undo in NX. The CAM catalog, 21 routes, 31 recognized builders and spatial-setting limitations are unchanged. A builder map does not prove CAM or sketch-constraint transfer. [Result and new SDK 2606 checks](mirror-project.md#historical-map-v130).
+V1.30.01 adds checked expansion of a BodyDumb collector into individual map parents without Commit. V1.30 confirmed a reflected body and matching of 118 faces / 298 edges, then stopped at ScCollector. Original associations are not transferred yet. [Result and limits](mirror-project.md#collector-map-v13001). Operation coverage is unchanged; availability of a Builder does not establish transformation of all its spatial data.
 
 V1.29 adds standalone reflected Curve creation after verified history restoration, result readback and mandatory local/outer Undo. This is not yet Edge-support replacement, sketch-constraint transfer or Part Boundary transfer. V1.28 established two Arc definitions and restoration in NX; Line/Ellipse/Spline remain untested; the subsequent V1.29 report confirmed two Arc creations and rollback. The CAM catalog, 21 routes, 31 recognized builders and numeric-settings limitations are unchanged. [Result and exact new SDK 2606 API list](mirror-project.md#native-curves-v129).
 
