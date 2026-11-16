@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.30.04
+
+V1.30.03 stopped at its SleepyEntity guard before calling AskRulesAndCollectedEntities. Print exact filter values/types and include them in snapshots. For base wrappers with enabled filters, CopyCollector creates a separately verified collector: preserve original settings, remove filters only from the new object, and require each BodyDumb selection to remain identical. Check fresh identity/ownership, hidden extra inputs, Destroy and no leftovers after Undo. Partial failure never authorizes destroying an unverified object. Preserve primary/cleanup errors; no replacement Commit added.
+
+Add 25 regressions; 719 focused checks outside NX, including the existing 137 using C fixtures. These do not test Siemens DLLs; new ScCollector reads/copy/destruction in DC 2606 remain unconfirmed. Patch release V1.30.04, SHA-256, README and RU/EN guides are synchronized. [Result and next run](docs/en/mirror-project.md#filter-copy-v13004).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.30.03
 
 The DC 2606 report confirmed rule Type equals installed BodyDumb, but the GetData descriptor rejects the base SelectionIntentRule wrapper. Remove that call route; base wrappers now use the published per-rule object query AskRulesAndCollectedEntities. Validate both rule lists, a complete partition, exact bodies, repeated selection, GetData on available specialized wrappers, and absence of enabled filters. Do not bypass errors or rewrite rules/filters. Retain map, history, sketch, MCS/stock/CAM, active-copy and rollback guards; no Commit added.

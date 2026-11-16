@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.30.03
-SCRIPT_VERSION = "V1.30.03"
+# SCRIPT_VERSION: V1.30.04
+SCRIPT_VERSION = "V1.30.04"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -1653,13 +1653,17 @@ def unique_probe_mapping(originals, copies, matches, context):
 class ReplacementMapInputs:
     """Read a BodyDumb collector, then request the builder's unique-input view.
 
-    This is only a proposal without Commit. No collector/rule is rewritten.
+    This is only a proposal without Commit. Original collectors/rules are
+    never rewritten; filter comparisons use a verified disposable clone.
     A different rule needs its own complete reader; GetObjects alone does not
     establish selection intent or justify replacing it with a dumb rule.
     """
-    def __init__(self, probe):
+    def __init__(self, probe, guard):
         self.p, self.t, self.states = probe, probe.t, {}
+        self.guard = guard
         self.rule_reports = set()
+        self.pending_collectors = None
+        self.observed = {}
 
     def rule_types(self, rules, tag):
         expected = self.t.nx.SelectionIntentRule.RuleType.BodyDumb
@@ -1676,27 +1680,17 @@ class ReplacementMapInputs:
             raise RuntimeError("Не прочитаны правила ScCollector " + str(tag))
         return tuple(kinds)
 
-    def collected_body_rules(self, collector, rules, kinds, bodies):
+    def collected_body_rules(self, collector, rules, kinds, bodies, report=True):
         """NX 2312+ per-rule membership query, only for explicit BodyDumb.
 
         This is not GetObjects used as a rule definition. The API supplies a
-        separate object count for each rule. Reject filtering, incomplete
-        partitions and any other intent. No casts or rule writes are needed.
+        separate object count for each rule. Reject incomplete partitions and
+        any other intent. Enabled filters require a separate clone comparison.
+        No casts or rule writes are needed.
         The installed DC 2606 binding/semantics still need a real NX check;
         this reader is used only by the no-Commit replacement-map probe.
         """
         tag = int(collector.Tag)
-        self.p.stage("ScCollector " + str(tag) + " / фильтры вычисления")
-        enum = self.t.nx.ScEvaluationFiltertype
-        names = tuple(sorted(name for name in dir(enum) if not name.startswith("_") and name != "ValueOf"))
-        if not {"SleepyEntity", "LaminarEdge", "MinimumBody", "SheetBody", "FacetEntity"}.issubset(names):
-            raise RuntimeError("Не прочитано перечисление фильтров ScCollector " + str(tag))
-        # Query every exposed member, including new installed filter values.
-        # Unknown members/errors must not be treated as disabled filters.
-        for name in names:
-            enabled = collector.IsEvaluationFilterEnabled(getattr(enum, name))
-            if type(enabled) is not bool or enabled:
-                raise RuntimeError("Не подтверждено отсутствие фильтра ScCollector " + str(tag) + ": " + name)
         self.p.stage("ScCollector " + str(tag) + " / AskRulesAndCollectedEntities")
         result = probe_array(collector.AskRulesAndCollectedEntities(), "AskRulesAndCollectedEntities")
         if len(result) != 3:
@@ -1726,20 +1720,165 @@ class ReplacementMapInputs:
         if (self.rule_types(rules, tag) != kinds or self.rule_types(returned, tag) != kinds or
                 self.rule_types(probe_array(collector.GetRules(), "ScCollector.GetRules повторно"), tag) != kinds):
             raise RuntimeError("Изменился тип/состав правил при чтении ScCollector " + str(tag))
-        report = (tag, "AskRulesAndCollectedEntities", tuple(counts), tuple(definitions))
-        if report not in self.rule_reports:
+        key = (tag, "AskRulesAndCollectedEntities", tuple(counts), tuple(definitions))
+        if report and key not in self.rule_reports:
             self.t.lines.append("Чтение правил ScCollector " + str(tag) +
                 ": AskRulesAndCollectedEntities; только BodyDumb; counts=" + str(counts) +
-                "; тела по правилам=" + str(tuple(tags for _, tags in definitions)) +
-                "; включённых фильтров нет: " + ", ".join(names))
-            self.rule_reports.add(report)
+                "; тела по правилам=" + str(tuple(tags for _, tags in definitions)))
+            self.rule_reports.add(key)
         return definitions
 
+    def filter_state(self, collector, report=True):
+        tag = int(collector.Tag)
+        enum = self.t.nx.ScEvaluationFiltertype
+        names = tuple(sorted(name for name in dir(enum) if not name.startswith("_") and name != "ValueOf"))
+        if not {"SleepyEntity", "LaminarEdge", "MinimumBody", "SheetBody", "FacetEntity"}.issubset(names):
+            raise RuntimeError("Не прочитано перечисление фильтров ScCollector " + str(tag))
+        result = []
+        for name in names:
+            self.p.stage("ScCollector " + str(tag) + " / фильтр " + name)
+            value = getattr(enum, name)
+            enabled = collector.IsEvaluationFilterEnabled(value)
+            if type(enabled) is not bool:
+                raise RuntimeError("Не прочитан bool фильтра ScCollector " + str(tag) + " / " + name +
+                                   ": тип=" + type(enabled).__name__ + "; значение=" + repr(enabled)[:256])
+            result.append((name, str(value), enabled))
+        result = tuple(result)
+        key = ("filters", tag, result)
+        if report and key not in self.rule_reports:
+            self.t.lines.append("Фильтры ScCollector " + str(tag) + ": " +
+                "; ".join(name + "=" + str(enabled) + " (bool)" for name, _, enabled in result) +
+                ". Исходные настройки не изменялись.")
+            self.rule_reports.add(key)
+        return result
+
+    def inventory(self):
+        self.guard()
+        result = set()
+        for obj in self.t.part.ScCollectors:
+            tag = probe_tag(obj.Tag, "ScCollectors")
+            if tag in result or not isinstance(self.p.object(tag), self.t.nx.ScCollector):
+                raise RuntimeError("Не подтверждён состав ScCollectors")
+            result.add(tag)
+            if len(result) > MAX_OBJECTS:
+                raise RuntimeError("Слишком много ScCollectors для проверки")
+        return result
+
+    def unfiltered_check(self, collector, saved):
+        """Prove that filters hide no BodyDumb inputs, on a new owned clone.
+
+        The original collector is never edited. Every call, including later
+        map/Undo checks, gets a fresh clone; cached evaluated output is not
+        evidence that a hidden rule input has stayed unchanged.
+        """
+        original_tag = int(collector.Tag)
+        baseline = self.inventory()
+        if original_tag not in baseline or self.pending_collectors is not None:
+            raise RuntimeError("Не подтверждён исходный состав ScCollectors перед CopyCollector")
+        self.pending_collectors = baseline
+        clone, owned = None, False
+        primary, trace, failure_stage, cleanup = None, None, None, []
+        try:
+            self.p.stage("ScCollector " + str(original_tag) + " / отдельная CopyCollector")
+            self.guard()
+            clone = collector.CopyCollector()
+            self.guard()
+            clone_tag = probe_tag(clone.Tag, "CopyCollector")
+            if (clone_tag in baseline or not isinstance(clone, self.t.nx.ScCollector) or
+                    not isinstance(self.p.object(clone_tag), self.t.nx.ScCollector) or
+                    self.inventory() != baseline | {clone_tag}):
+                raise RuntimeError("CopyCollector не вернул единственную новую коллекцию в текущей копии PRT")
+            owned = True  # Only this verified new object may be changed/destroyed.
+            if self.read_state(collector, report=False)[0] != saved:
+                raise RuntimeError("CopyCollector изменил исходную коллекцию " + str(original_tag))
+            if self.read_state(clone, report=False)[0] != saved:
+                raise RuntimeError("CopyCollector не сохранил правила/выбор/режимы/фильтры " + str(original_tag))
+            expected_filters = list(saved[3])
+            for index, (name, value, enabled) in enumerate(saved[3]):
+                if not enabled:
+                    continue
+                self.p.stage("ScCollector " + str(original_tag) + " / фильтр " + name +
+                             " только временной коллекции " + str(clone_tag))
+                enum_value = getattr(self.t.nx.ScEvaluationFiltertype, name)
+                if str(enum_value) != value:
+                    raise RuntimeError("Изменилось перечисление фильтров " + name)
+                self.guard()
+                clone.RemoveEvaluationFilter(enum_value)
+                self.guard()
+                expected_filters[index] = (name, value, False)
+                if self.filter_state(clone, report=False) != tuple(expected_filters):
+                    raise RuntimeError("Не подтверждено изменение фильтра только временной коллекции: " + name)
+                if self.filter_state(collector, report=False) != saved[3]:
+                    raise RuntimeError("Изменились фильтры исходной коллекции " + str(original_tag))
+            self.p.stage("ScCollector " + str(original_tag) + " / полный выбор без фильтров на копии")
+            actual = self.read_state(clone, report=False)[0]
+            if actual != saved[:3] + (tuple(expected_filters),):
+                raise RuntimeError("Фильтры скрывали объекты/правила ScCollector " + str(original_tag))
+            if self.read_state(collector, report=False)[0] != saved:
+                raise RuntimeError("Изменилось определение исходной коллекции " + str(original_tag))
+        except Exception as error:
+            primary, trace, failure_stage = error, error.__traceback__, self.t.stage
+        finally:
+            if owned:
+                try:
+                    self.p.stage("ScCollector " + str(original_tag) + " / Destroy только временной коллекции " + str(clone_tag))
+                    self.guard()
+                    self.p.object(clone_tag)
+                    clone.Destroy()
+                    self.guard()
+                except Exception as error:
+                    cleanup.append((self.t.stage, error))
+            try:
+                self.p.stage("ScCollector " + str(original_tag) + " / проверка удаления временной коллекции")
+                if self.inventory() != baseline:
+                    raise RuntimeError("После CopyCollector/Destroy изменился состав ScCollectors")
+                self.pending_collectors = None
+                if self.read_state(collector, report=False)[0] != saved:
+                    raise RuntimeError("После Destroy изменилось определение исходной коллекции " + str(original_tag))
+            except Exception as error:
+                cleanup.append((self.t.stage, error))
+        for stage, error in cleanup:
+            self.t.lines.append("Ошибка проверки временной коллекции / " + stage + ": " + str(error))
+            for attribute in ("ErrorCode", "code"):
+                try:
+                    code = getattr(error, attribute, None)
+                except Exception:
+                    continue
+                if isinstance(code, int) and not isinstance(code, bool):
+                    self.t.lines.append("Код NX/API (" + attribute + "): " + str(code))
+            self.t.lines.append("".join(traceback.format_exception(type(error), error, error.__traceback__)))
+        if primary is not None:
+            self.t.stage = failure_stage
+            raise primary.with_traceback(trace)
+        if cleanup:
+            self.t.stage, error = cleanup[0]
+            raise error
+        key = ("unfiltered", original_tag, saved)
+        if key not in self.rule_reports:
+            self.t.lines.append("ScCollector " + str(original_tag) +
+                ": выбор каждого BodyDumb совпал с отдельной коллекцией без фильтров; " +
+                "исходные фильтры сохранены, временная коллекция удалена и состав проверен.")
+            self.rule_reports.add(key)
+
     def state(self, tag):
+        self.guard()
         self.p.stage("Чтение определения ScCollector " + str(tag))
         collector = self.p.object(tag)
         if not isinstance(collector, self.t.nx.ScCollector):
             raise RuntimeError("Изменился класс коллекции опор " + str(tag))
+        state, grouped = self.read_state(collector)
+        if tag in self.observed and state != self.observed[tag]:
+            raise RuntimeError("Изменилось определение/фильтры ScCollector " + str(tag) + ": " + str(state[3]))
+        self.observed.setdefault(tag, state)
+        if grouped and any(enabled for _, _, enabled in state[3]):
+            self.unfiltered_check(collector, state)
+        return state
+
+    def read_state(self, collector, report=True):
+        """Read without editing or recursively checking another clone."""
+        self.guard()
+        tag = int(collector.Tag)
+        filters = self.filter_state(collector, report)
         def bodies(values, context):
             tags = []
             for obj in probe_array(values, context):
@@ -1758,19 +1897,19 @@ class ReplacementMapInputs:
             expected = self.t.nx.SelectionIntentRule.RuleType.BodyDumb
             route = "AskRulesAndCollectedEntities" if grouped else "rule.GetData()"
             self.p.stage("ScCollector " + str(tag) + " / правило " + str(index) + " / " + route)
-            report = (tag, index, type(rule).__name__, str(kind), str(expected), route)
-            if report not in self.rule_reports:
+            key = (tag, index, type(rule).__name__, str(kind), str(expected), route)
+            if report and key not in self.rule_reports:
                 self.t.lines.append("Чтение правила ScCollector " + str(tag) + " / " + str(index) +
                     ": оболочка=" + type(rule).__name__ + "; Type=" + str(kind) +
                     "; BodyDumb установленного NX=" + str(expected) + "; вызов=" + route)
-                self.rule_reports.add(report)
+                self.rule_reports.add(key)
             if not grouped:
                 data = rule.GetData()
                 if rule.Type != kind:
                     raise RuntimeError("Изменился тип правила при чтении ScCollector " + str(tag))
                 definitions.append((kind, bodies(data, "BodyDumbRule.GetData " + str(tag))))
         if grouped:
-            definitions = self.collected_body_rules(collector, rules, kinds, bodies)
+            definitions = self.collected_body_rules(collector, rules, kinds, bodies, report)
             if bodies(collector.GetObjects(), "ScCollector.GetObjects повторно " + str(tag)) != members:
                 raise RuntimeError("Изменился вычисленный выбор ScCollector при чтении: " + str(tag))
         if Counter(members) != Counter(body for _, tags in definitions for body in tags):
@@ -1778,9 +1917,26 @@ class ReplacementMapInputs:
         modes = (collector.GetMultiComponent(), collector.GetNonFeatureMode())
         if any(type(value) is not bool for value in modes) or any(modes):
             raise RuntimeError("Не подтверждён локальный модельный режим ScCollector " + str(tag))
-        return members, tuple(definitions), modes
+        if self.filter_state(collector, report=False) != filters:
+            raise RuntimeError("Изменились фильтры при чтении ScCollector " + str(tag))
+        self.guard()
+        return (members, tuple(definitions), modes, filters), grouped
 
     def check(self):
+        if self.pending_collectors is not None:
+            # A failed/partial copy may not have returned a safe handle. Only
+            # the enclosing owned Undo may remove such objects. Builder/candidate
+            # collectors may also disappear during that Undo, so require a subset.
+            if not self.inventory().issubset(self.pending_collectors):
+                raise RuntimeError("Не подтверждено удаление временных ScCollectors после отката")
+            self.pending_collectors = None
+        # Keep successfully read original settings protected even when the
+        # initial clone proof failed and no complete state was accepted.
+        for tag, saved in self.observed.items():
+            current = self.read_state(self.p.object(tag), report=False)[0]
+            if current != saved:
+                raise RuntimeError("Изменилось прочитанное состояние ScCollector " + str(tag) +
+                                   "; фильтры=" + str(current[3]))
         for tag, saved in self.states.items():
             if self.state(tag) != saved:
                 raise RuntimeError("Изменилось определение ScCollector " + str(tag))
@@ -2288,7 +2444,8 @@ class BodyReplacementProbe:
                 not builder.CopyReplacementFeature or not builder.DeleteOriginalFeature):
             raise RuntimeError("NX не подтвердил режим явной замены с копированием кандидата")
         if extra_curves:
-            inputs = ReplacementMapInputs(self)
+            inputs = ReplacementMapInputs(self, guard)
+            self.map_inputs = inputs  # Keep partial-clone cleanup verifiable after Undo.
             inputs.capture()
             if inputs.states:
                 self.map_inputs = inputs
@@ -2297,6 +2454,8 @@ class BodyReplacementProbe:
                 builder.DisplayUniqueInputsToMap = False
                 if builder.DisplayUniqueInputsToMap is not False:
                     raise RuntimeError("NX не подтвердил DisplayUniqueInputsToMap=False")
+            else:
+                self.map_inputs = None
         self.stage("Заполнение карты / ReplaceFeatureBuilder.UpdateMap")
         guard()
         builder.UpdateMap()
@@ -2311,7 +2470,7 @@ class BodyReplacementProbe:
                 any(isinstance(self.object(row.ParentEntity.Tag), self.t.nx.ScCollector) for row in rows)):
             # Only the historical branch may request this view: it never commits.
             if self.map_inputs is None:
-                self.map_inputs = ReplacementMapInputs(self)
+                self.map_inputs = ReplacementMapInputs(self, guard)
             rows = self.map_inputs.expand(builder, rows, mapping, guard)
             check_selections()
         def check_mode():

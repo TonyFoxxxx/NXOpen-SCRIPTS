@@ -2,10 +2,30 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.30.03**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.30.04**.
+
+<a id="filter-copy-v13004"></a>
+## Latest changes — V1.30.04 · 2026-11-16
+
+**V1.30.03 result in DC 2606:** the SleepyEntity guard stopped `ScCollector 608674` for body `181423`, **before AskRulesAndCollectedEntities or UpdateMap was called**. V1.30.03 rejected both enabled filters and non-bool results, but did not print the actual value. This report therefore establishes neither that value nor successful rule reading. Two Arcs again read back with deviation 0.0; the independent body was reflected and 118 faces / 298 edges matched. Local/outer Undo, source restoration, its unchanged checksum and clear modification flag were confirmed. Tags are specific to this run.
+
+V1.30.04 replaces the requirement that all filters be disabled with a check of their actual effect. First read exact filter settings, BodyDumb rules, per-rule objects, array partitions and collector modes. Report values and bool types; unavailable/non-boolean results remain errors showing the actual type/value. Filter settings are part of the saved snapshot and are checked on subsequent reads.
+
+A base wrapper with enabled filters uses a **separate temporary ScCollector inside the test PRT copy**:
+
+- CopyCollector must return exactly one new collector in that part. Verify its new tag, ownership, non-occurrence status, ScCollectors membership, and matching rules/selection/modes/filters. An original, pre-existing or foreign collector may not be changed or destroyed.
+- Remove filters **only from the verified new collector**, reading back each change. Do not edit the original collector; recheck its settings and readable data.
+- Each unfiltered BodyDumb selection must equal the original exactly. A hidden extra body, missing/unknown object, invalid partition or changed rule stops the trial. GetObjects, available specialized GetData, and exact body-ownership checks remain.
+- Destroy the temporary collector and verify ScCollectors membership and original settings. Repeated checks use a fresh copy, not cached evaluated output. A partial creation without a verified returned object is not manually deleted by guesswork: the enclosing candidate Undo must remove it, with explicit checks for leftover collectors. Preserve primary/cleanup errors, codes and tracebacks separately. Active-copy loss prevents further mutations and Undo in another part.
+
+Specialized BodyDumbRule wrappers retain direct reading and need no extra collector. Rules are not rewritten and replacement Commit is not added. Geometry, history, sketch supports/constraints, MCS/RCS, Tooling Box, CAM references, source PRT and rollback retain their previous guards. No extra files are created: the temporary ScCollector is an object in the open test part, not a file or another PRT.
+
+**Verified outside NX:** 719 focused checks, including the existing 137 using C fixtures. Add 25 regressions for filters, hidden inputs, copy ownership/results, destruction, partial failures, active-part loss and unverified Undo. CopyCollector/filter fixtures do not establish Siemens kernel behavior. Sources are published [NX 2512 Python API files](https://github.com/ugopen/nxopen_lib/blob/96855b43415ac81dcfdc83f8874ea5622c19d2db/NX2512/UGOPEN/pythonStubs/NXOpen/__init__.pyi) and [ScCollector.hxx](https://github.com/ugopen/nxopen_lib/blob/96855b43415ac81dcfdc83f8874ea5622c19d2db/NX2512/UGOPEN/NXOpen/ScCollector.hxx); SDK 2606 is unavailable here.
+
+**Next run:** install **V1.30.04**, open the saved source PRT and select the same plane. Return the full report with filter values, collector reading/comparison, map checks and both rollback results. **Do not save** the experimental copy. AskRulesAndCollectedEntities, CopyCollector, changing filters on its separate result and destroying it remain unconfirmed in DC 2606; historical-support transfer and a complete mirrored CAM project are still later steps. [Separate SDK/API checklist](#replacement-probe-sdk-2606).
 
 <a id="rule-members-v13003"></a>
-## Latest changes — V1.30.03 · 2026-11-16
+## V1.30.03: per-rule object reading · 2026-11-16
 
 **V1.30.02 result in DC 2606:** `GetRules()` returned a base SelectionIntentRule wrapper; `Type=34` matched the installed `RuleType.BodyDumb=34`. Python nevertheless rejected `BodyDumbRule.GetData(rule)` with TypeError: the method descriptor requires a BodyDumbRule instance. This establishes a Python binding failure, not an unknown operation type or a Part Boundary curve error. This run did not reach `UpdateMap`. Two standalone Arcs again read back with deviation 0.0; the independent body was reflected and 118 faces / 298 edges matched. The report confirmed local/outer Undo, source restoration, its unchanged checksum and clear modification flag. Collector tag `619472` and source body tag `627114` are specific to this run.
 
@@ -19,7 +39,7 @@ This checks explicit selection membership for a **map proposal without Commit**.
 
 **Verified outside NX:** 694 focused checks, including the existing 137 using C fixtures. The reader suite now has 29 scenarios covering the reported descriptor refusal, separate rule data, invalid partitions/types/objects, filters and drift, repeated reads, errors and rollback. The GetData fixture now rejects base wrappers as the real report does. These tests do not establish the new API call or its DC 2606 semantics.
 
-**Next run:** install **V1.30.03**, open the saved source PRT and select the same plane. Return the full report containing `AskRulesAndCollectedEntities`, map checks and both rollback results, including any filter/API refusal. Do not save the experimental copy: this branch always attempts rollback and does not yet produce a complete mirrored CAM project. [Separate SDK/NX 2606 methods and definitions checklist](#replacement-probe-sdk-2606).
+**Original V1.30.03 trial:** install **V1.30.03**, open the saved source PRT and select the same plane. Return the full report containing `AskRulesAndCollectedEntities`, map checks and both rollback results, including any filter/API refusal. Do not save the experimental copy: this branch always attempts rollback and does not yet produce a complete mirrored CAM project. [Separate SDK/NX 2606 methods and definitions checklist](#replacement-probe-sdk-2606).
 
 <a id="rule-reader-v13002"></a>
 ## V1.30.02: base-wrapper trial · 2026-11-16
@@ -96,7 +116,7 @@ New curves **are not assigned to sketches or CAM geometry**. A correctly shaped 
 
 **Verified outside NX:** 601 focused checks, including 137 using separately compiled C fixtures. The 39 new checks cover measured report arcs, creation after context cleanup, one candidate per edge, strict result readback, failed/partial creation, retained CAM selection, local Undo and the spline C ABI. These test our code and fixtures, not Siemens DLLs. At V1.29 release time, native creation was untested in DC 2606; the subsequent report confirmed two Arcs and rollback, as documented above.
 
-The subsequent V1.29 run is documented above. The current V1.30.03 experiment checks a proposed replacement map without applying it and also requires rollback.
+The subsequent V1.29 run is documented above. The current V1.30.04 experiment checks a proposed replacement map without applying it and also requires rollback.
 
 Creation contracts come from older [CurveCollection, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.CurveCollection.html) and the [published copy of Siemens uf_curve.h](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_curve.h). SDK 2606 is unavailable; the [separate method/definition checklist](#replacement-probe-sdk-2606) has been extended.
 
@@ -117,7 +137,7 @@ Unknown types, procedural curves without an available exact representation, full
 
 All **562 focused checks outside NX**, including **122 using C fixtures**, pass. The 44 new checks cover analytic geometry, a rational spline with an independent closed form, oblique reflection, trim/repeated knots, C structures/arrays, partial failures, rejection of approximating fallback and context restoration. These use our fixtures, not Siemens DLLs; new UF_EVAL calls remain untested in DC 2606.
 
-Historical-read results and the current V1.30.03 experiment with mandatory rollback are described above.
+Historical-read results and the current V1.30.04 experiment with mandatory rollback are described above.
 
 Contracts were checked against a [published Siemens `uf_eval.h` copy](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_eval.h) and the [NURBS definition in `uf_curve.h`](https://www.ugapi.com/doc/ufun/uf_curve/UF_CURVE_spline_s.html). These are older contracts; **SDK 2606 is unavailable**. [Outstanding API checks](#replacement-probe-sdk-2606).
 
@@ -132,7 +152,7 @@ Cleanup order is unchanged: UpdateFeature/Stop/Destroy when a manager was obtain
 
 The manager fixture now rejects invisible marks with code 690037. Add four regressions for rejection/verified return, missing Visible, use of the NX enum value, and separate context marks preserving existing marks. Previous MCS, manager-failure, CAM and rollback scenarios run under this requirement. All **518 focused checks outside NX** pass, including **97 using C fixtures**. These test logic with synthetic data, not successful historical access in DC 2606.
 
-The current trial uses **V1.30.03** from the saved source PRT with the same plane. The experimental result does not need saving. Complete historical-support and mirrored-CAM transfer remain unconfirmed; the [SDK 2606 checklist](#replacement-probe-sdk-2606) is retained.
+The current trial uses **V1.30.04** from the saved source PRT with the same plane. The experimental result does not need saving. Complete historical-support and mirrored-CAM transfer remain unconfirmed; the [SDK 2606 checklist](#replacement-probe-sdk-2606) is retained.
 
 <a id="mcs-phase-v12701"></a>
 ## V1.27.01: expected MCS support state
@@ -145,7 +165,7 @@ Independent-body preparation, reflection of the separate candidate only, and che
 
 Add **15 regressions** using actual MCS validators over synthetic objects: X = −79, an oblique mirror, direct Face and Plane supports, exact selection order, damaged positions/normals/definitions, candidate preparation, and external sketches with restoration checks after Stop/Undo. Two new scenarios reproduce the premature −158 mm expectation against published V1.27 and pass with the fix. All **514 focused checks outside NX** pass, including the existing **97 using C fixtures**. These do not prove manager or CAM operation in DC 2606.
 
-After this revision, checks continued in V1.28; the current trial is **V1.30.03**, described above. The experiment still ends with outer rollback even after successful reads; its result does not need saving. V1.27.01 introduced no new API; the [SDK 2606 checklist](#replacement-probe-sdk-2606) now also lists V1.28's curve readers. Complete project mirroring is still unconfirmed.
+After this revision, checks continued in V1.28; the current trial is **V1.30.04**, described above. The experiment still ends with outer rollback even after successful reads; its result does not need saving. V1.27.01 introduced no new API; the [SDK 2606 checklist](#replacement-probe-sdk-2606) now also lists V1.28's curve readers. Complete project mirroring is still unconfirmed.
 
 <a id="historical-probe-v127"></a>
 ## V1.27: historical-support access experiment
@@ -162,7 +182,7 @@ Even successful reading ends this branch and invokes the outer copy rollback. Ex
 
 **Checked outside NX:** 499 focused checks, including 97 using C fixtures. New scenarios cover the report's six links, external/internal contexts, Start/Update/Stop/Destroy/Undo failures, preserved R1 curves and On, rejection after damage, and exact C outputs. These test the protocol and ABI against our fixtures, not Siemens DLLs or DC 2606 compatibility.
 
-Historical-read results and the current V1.30.03 experiment with mandatory rollback are described above.
+Historical-read results and the current V1.30.04 experiment with mandatory rollback are described above.
 
 The manager sequence comes from [older Siemens C++ documentation](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a56381.html), the start signature from [FeatureCollection, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.FeatureCollection.html), and bounds from [uf_modl_utilities.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl_utilities.html). **SDK 2606 is unavailable**: Python signatures, read-only manager use without a feature-editing Builder, intermediate-object visibility and actual restoration require DC 2606 verification. [Separate API checklist](#replacement-probe-sdk-2606).
 
@@ -248,6 +268,7 @@ V1.26 reads application data for the boundary and **each member**, using `UF_CAM
 | Methods / definitions | Outstanding verification |
 | --- | --- |
 | Base `SelectionIntentRule`, `BodyDumbRule.GetData(rule)` | V1.30.02 in real DC 2606: Type matched installed BodyDumb, but the descriptor rejected the base wrapper with TypeError. This route is no longer called. |
+| `ScCollector.CopyCollector/RemoveEvaluationFilter/Destroy`, `Part.ScCollectors` iteration | V1.30.04: establish a separate copy preserving rules/settings, new tag/ownership, filter removal affecting only the clone, full selection reading, destruction, repeated checks and no temporary objects after Undo. Real V1.30.03 did not reach AskRulesAndCollectedEntities; its exact SleepyEntity value was not printed. |
 | `ScCollector.AskRulesAndCollectedEntities`, `ScEvaluationFiltertype`, `IsEvaluationFilterEnabled` | V1.30.03: verify availability and Python result `(objects, rules, ruleObjectArrayCount)`, segment ordering, no original-body loss through negation/filters, filter enum members and stability after UpdateMap/Destroy/Undo. Uses NX 2312/2512 contracts, not SDK 2606. Commit remains prohibited pending verification of semantics and rule settings. |
 | `DisplayUniqueInputsToMap`, `ScCollector.GetObjects/GetRules/GetMultiComponent/GetNonFeatureMode`, `BodyDumbRule.GetData`, `SelectionIntentRule.RuleType.BodyDumb`, `MatchedReferenceBuilder.Types.BodyCollector` | V1.30.01: Python signatures/returns and actual EXTRACT_BODY rule in 2606; complete expansion into individual parents, unchanged definitions before/after UpdateMap, Destroy and Undo. Other rules are not declared supported. |
 | `MatchedReferenceBuilder.Type/Types.Curve`, `MatchedStatus/ResolvedStatus.ByUser/BySystem/Initial/Unresolved`, `ReverseDirection`, `ReplaceFeatureBuilder.UpdateMap/SetMatchingForParent`, `FeatureReferences.GetMatchedReferences/Validate`, builder `Validate/Destroy` | V1.30: Python 2606 members, single-edge rows versus Section/collectors, coverage of intermediate supports, acceptance of standalone Arc targets, direction and status semantics, no-Commit cleanup and actual later replacement/constraints. Do not set type/status just to pass; Validate is not proof of transfer. |
@@ -307,7 +328,9 @@ Sources: [older Siemens `uf_modl.h` header](https://github.com/feifeiwang/NXOPEN
 
 ## Latest release
 
-Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.30.03**. [Updater upgrade](updater.md#upgrading-to-v120).
+Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.30.04**. [Updater upgrade](updater.md#upgrading-to-v120).
+
+**V1.30.04 · 2026-11-16** — Check filter effects on a separate temporary ScCollector while preserving original settings and verifying cleanup/rollback. No Commit added. [Result and next run](#filter-copy-v13004).
 
 **V1.30.03 · 2026-11-16** — Read per-rule BodyDumb objects via AskRulesAndCollectedEntities instead of the rejected base-wrapper call; strict partition/filter checks and still no Commit. [Report and next trial](#rule-members-v13003).
 
@@ -393,13 +416,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. Y/Z are reflected and X completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.30.03 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.30.03 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.30.04 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.30.04 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.30.03**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.30.04**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. **If the historical-access or one-body experiment ran, it must roll back; do not save the experimental result.** The following inspection/save steps apply only to a successful full-project branch. Read the report; its text is available through **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -519,7 +542,7 @@ The V1.23 report passed the previous MCS “2” stop and both Three Planes rebu
 
 ## Files and validation
 
-V1.30.03: **694 focused checks outside NX**, including **137 using C fixtures**. V1.30.02 confirmed Python descriptor rejection for the base wrapper; its report reconfirmed arcs, the body, topology and rollback. The new AskRulesAndCollectedEntities reader, map expansion, association transfer and complete CAM project remain unconfirmed in DC 2606.
+V1.30.04: **719 focused checks outside NX**, including **137 using C fixtures**. V1.30.03 stopped at the SleepyEntity guard before rule reading; its report reconfirmed arcs, body, topology and rollback. Unfiltered temporary-collector comparison, map expansion and association transfer still need DC 2606 verification. A complete mirrored CAM project remains unconfirmed.
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 

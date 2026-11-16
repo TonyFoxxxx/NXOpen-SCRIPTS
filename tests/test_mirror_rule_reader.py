@@ -162,18 +162,23 @@ class RuleReaderTests(unittest.TestCase):
         self.rejected(h,'Определение и вычисленный выбор')
         h.w.replace.UpdateMap.assert_not_called()
 
-    def test_filters_are_read_and_never_disabled_or_treated_as_false(self):
+    def test_nonboolean_filter_values_are_not_coerced_or_treated_as_false(self):
         for key in (10,20,30,40,50):
-            for value in (True,None,0,1):
+            for value in (None,0,1,'True'):
                 h=self.world();h.filters[key]=value
-                with self.subTest(key=key,value=value):self.rejected(h,'отсутствие фильтра')
+                with self.subTest(key=key,value=value):self.rejected(h,'Не прочитан bool фильтра')
                 h.collector.AskRulesAndCollectedEntities.assert_not_called()
                 h.w.replace.UpdateMap.assert_not_called()
 
     def test_new_installed_filter_is_also_checked(self):
         h=self.world();h.t.nx.ScEvaluationFiltertype.NewInstalledFilter=61;h.filters[61]=True
-        self.rejected(h,'NewInstalledFilter')
+        before=h.snapshot()
+        with self.assertRaises(M.HistoricalProbeComplete):h.p.run()
+        self.assertEqual(h.snapshot(),before)
         h.collector.IsEvaluationFilterEnabled.assert_any_call(61)
+        h.collector.RemoveEvaluationFilter.assert_not_called()
+        self.assertTrue(h.clones)
+        for clone in h.clones:clone.RemoveEvaluationFilter.assert_called_once_with(61)
 
     def test_missing_filter_enum_or_unreadable_filter_preserves_failure(self):
         h=self.world();del h.t.nx.ScEvaluationFiltertype.SheetBody

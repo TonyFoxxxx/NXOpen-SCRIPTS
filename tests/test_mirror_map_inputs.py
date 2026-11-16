@@ -45,6 +45,13 @@ class CollectorWorld(HistoryWorld):
         self.collector.AskRulesAndCollectedEntities = Mock(side_effect=self.collected_rules)
         self.collector.GetMultiComponent = lambda:self.modes[0]
         self.collector.GetNonFeatureMode = lambda:self.modes[1]
+        self.t.part.ScCollectors = [self.collector]
+        self.next_collector, self.clone_events, self.clones = 910000, [], []
+        self.hidden_tags = set()
+        self.after_clone = self.after_remove_filter = self.after_clone_destroy = lambda clone:None
+        self.collector.CopyCollector = Mock(side_effect=self.clone_collector)
+        self.collector.RemoveEvaluationFilter = Mock(side_effect=AssertionError('Original filter must not change'))
+        self.collector.Destroy = Mock(side_effect=AssertionError('Original collector must not be destroyed'))
         # Existing retained fixture feature stands for the external EXTRACT_BODY.
         self.w.references[69595] += ((170651,b'Body for Extracted Body'),)
         self.after_unique, self.before_inputs = lambda:None, lambda:None
@@ -53,6 +60,7 @@ class CollectorWorld(HistoryWorld):
     def snapshot(self):
         result = super().snapshot()
         result['collector'] = (self.members[:], [(type(r),r.Type,r.tags[:]) for r in self.rules], self.modes[:],self.filters.copy())
+        result['sc_collectors'] = self.t.part.ScCollectors[:]
         return result
 
     def restore(self,saved):
@@ -60,6 +68,7 @@ class CollectorWorld(HistoryWorld):
         members,rules,modes,filters = saved['collector']
         self.members,self.modes = members[:],modes[:]
         self.filters=filters.copy()
+        self.t.part.ScCollectors[:] = saved['sc_collectors']
         self.rules=[]
         for cls,kind,tags in rules:
             rule=cls(self);rule.Type,rule.tags=kind,tags[:];self.rules.append(rule)
@@ -67,8 +76,46 @@ class CollectorWorld(HistoryWorld):
     def collected_rules(self):
         # Contract fixture: independent per-rule membership and partition,
         # deliberately separate from the collector's evaluated GetObjects.
-        return ([self.w.objects[t] for r in self.rules for t in r.tags],
-                self.rules[:], [len(r.tags) for r in self.rules])
+        return self.rule_view(self.rules, self.filters)
+
+    def rule_view(self, rules, filters):
+        # Filtering can mask a raw input; this is the adversarial case the
+        # clone comparison must expose, not a model of NX's filter algorithm.
+        groups=[[t for t in r.tags if not (any(filters.values()) and t in self.hidden_tags)] for r in rules]
+        return ([self.w.objects[t] for tags in groups for t in tags], rules[:], [len(tags) for tags in groups])
+
+    def clone_collector(self):
+        self.next_collector+=1
+        clone=self.t.nx.ScCollector();clone.Tag=self.next_collector
+        self.w.register(clone);self.t.part.ScCollectors.append(clone);self.clones.append(clone)
+        self.clone_events.append(('copy',clone.Tag))
+        clone.fixture_filters=self.filters.copy()
+        clone.fixture_members=self.members[:];clone.fixture_modes=self.modes[:]
+        clone.fixture_rules=[]
+        for old in self.rules:
+            rule=type(old)(self);rule.Type,rule.tags=old.Type,old.tags[:];clone.fixture_rules.append(rule)
+        def members():
+            tags=clone.fixture_members[:]
+            if not any(clone.fixture_filters.values()):
+                tags += [t for r in clone.fixture_rules for t in r.tags if t in self.hidden_tags and t not in tags]
+            return [self.w.objects[t] for t in tags]
+        clone.GetObjects=Mock(side_effect=members)
+        clone.GetRules=Mock(side_effect=lambda:clone.fixture_rules[:])
+        clone.GetMultiComponent=lambda:clone.fixture_modes[0]
+        clone.GetNonFeatureMode=lambda:clone.fixture_modes[1]
+        clone.IsEvaluationFilterEnabled=Mock(side_effect=lambda value:clone.fixture_filters[value])
+        clone.AskRulesAndCollectedEntities=Mock(side_effect=lambda:self.rule_view(clone.fixture_rules,clone.fixture_filters))
+        def remove(value):
+            self.clone_events.append(('filter',clone.Tag,value));clone.fixture_filters[value]=False
+            self.after_remove_filter(clone)
+        clone.RemoveEvaluationFilter=Mock(side_effect=remove)
+        def destroy():
+            self.clone_events.append(('destroy',clone.Tag))
+            self.t.part.ScCollectors.remove(clone);del self.w.objects[clone.Tag]
+            self.after_clone_destroy(clone)
+        clone.Destroy=Mock(side_effect=destroy)
+        self.after_clone(clone)
+        return clone
 
     def row(self, obj, kind):
         return NS(ParentEntity=obj,MatchedEntity=None,ReverseDirection=False,Type=kind,
