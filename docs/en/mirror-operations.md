@@ -1,10 +1,10 @@
-# CAM operation coverage audit — V1.30.09
+# CAM operation coverage audit — V1.30.10
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-16**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
 
-V1.30.09 stops diagnostics on NX code 821049 and removes repeated checks between historical contexts while preserving post-Stop/Undo checks. V1.30.08 did not reach the map or confirm outer rollback; the next trial requires a new NX session. The unknown edge and Part Box collector remain unmapped. The catalog (21 routes / 31 builders) and numerical-setting limitations are unchanged. [Failure and next trial](mirror-project.md#resource-failure-v13009).
+V1.30.10 adds a separate map view using a subset of original history derived from retained consumers’ parents. V1.30.09 traced the edge to Blend and showed missing Part Box/historical inputs; all additional checks passed and rollback completed. The extra view cannot assign or Commit. The catalog (21 routes / 31 builders) and numerical-setting limitations remain unchanged. [Result and next trial](mirror-project.md#map-selection-v13010).
 
 V1.30.03 replaces the rejected Python GetData call on a base wrapper with AskRulesAndCollectedEntities per-rule object reading. Only BodyDumb with a complete partition and no enabled filters is accepted; Commit remains prohibited. The contract comes from NX 2512 API files, not SDK 2606. The operation catalog (21 routes / 31 builders) and numerical-setting limitations are unchanged. [V1.30.02 report and next run](mirror-project.md#rule-members-v13003).
 

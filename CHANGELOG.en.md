@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.30.10
+
+V1.30.09 passed three historical contexts without 821049, checked candidates and rolled back. After the primary failure, 4591 diagnostic checks passed (including repetitions), with 0 additional errors. Edge 461444 was traced to Blend 472016 selection; the unique map lacked Part Box 468565 and historical inputs 461533/461565. V1.30.10 derives a nonempty proper subset of original features from captured parent paths for a separate map view, after the full view/Destroy and successful audit. Incomplete paths, cycles, partial reads and integrity failures block the extra view. Retained features cannot be selected; the primary removal list/errors remain unchanged. Assignment, Validate, Commit and forced Type/status are forbidden; audit integrity and perform mandatory rollback afterwards.
+
+Add 20 regressions: 855 focused checks outside NX, including the existing 147 using C fixtures. These do not establish DC 2606 map behavior. Version, SHA-256, README and RU/EN guides are aligned. [Result and current stage](docs/en/mirror-project.md#map-selection-v13010).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.30.09
 
 V1.30.08 stopped before the map on 821049 — Tag limit would be exceeded — during exact bounds, after a successful first local historical restoration. Outer Undo and copy closure then failed; session recovery is unconfirmed. Additional map/audit errors collected: 0. Remove only the repeated full check between verified Undo and the next historical context; retain every post-Stop/Undo check. Code 821049 stops further diagnostics/object creation while retaining owned cleanup/rollback attempts. Report the object, CSYS and bounds call number, preserve primary errors across WCS cleanup failures and distinguish an Undo API return from unverified model integrity.

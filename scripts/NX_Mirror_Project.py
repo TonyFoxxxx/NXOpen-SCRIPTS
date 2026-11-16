@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.30.09
-SCRIPT_VERSION = "V1.30.09"
+# SCRIPT_VERSION: V1.30.10
+SCRIPT_VERSION = "V1.30.10"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -3617,15 +3617,21 @@ class HistoricalReplacementMapProbe:
                                 "последующие сопоставления, перенос истории и расчёт CAM не выполнялись.")
         return not checks.errors
 
-    def inspect_unique_view(self, closed_builder):
+    def inspect_unique_view(self, closed_builder, original_tags=None):
         """An isolated map view, never a retry of failed assignment checks."""
         require_diagnostic_session(self.t)
         self.h.require_copy()
+        narrowed = original_tags is not None
+        selected = set(self.p.old) if original_tags is None else set(original_tags)
+        if not selected or not selected <= self.p.old or narrowed and selected == self.p.old:
+            raise RuntimeError("Не подтверждён отдельный суженный выбор исходных элементов")
         self.t.stage = "Диагностический просмотр / новый ReplaceFeatureBuilder"
+        self.diagnostic_editor_open = True  # A failed factory does not confirm cleanup.
         builder = self.t.part.Features.CreateReplaceFeatureBuilder()
-        if builder is None or builder is closed_builder:
+        previous = getattr(self, "diagnostic_builders", [])
+        if builder is None or builder is closed_builder or any(builder is old for old in previous):
             raise RuntimeError("Не получен отдельный редактор для диагностического просмотра")
-        self.diagnostic_editor_open = True
+        self.diagnostic_builders = previous + [builder]
         checks = ProbeChecks(self.t,self.h.require_copy,"Диагностический просмотр уникальных объектов")
         try:
             method = self.t.nx.Features.ReplaceFeatureBuilder.MappingMethodType.MapOnlyObjectsWithModelingDependencies
@@ -3642,16 +3648,22 @@ class HistoricalReplacementMapProbe:
                         raise RuntimeError("Не подтверждён режим диагностического редактора: " + name)
                 original = probe_array(builder.SelectFeature.GetArray(),"Диагностика / SelectFeature")
                 replacement = probe_array(builder.ReplacementFeature.GetArray(),"Диагностика / ReplacementFeature")
-                if (Counter(probe_tag(f.Tag,"Исходный элемент") for f in original) != Counter(self.p.old) or
+                if (Counter(probe_tag(f.Tag,"Исходный элемент") for f in original) != Counter(selected) or
                         tuple(probe_tag(f.Tag,"Кандидат") for f in replacement) != (int(self.p.copy_feature.Tag),)):
                     raise RuntimeError("Изменился выбор элементов диагностического редактора")
             self.h.require_copy()
-            builder.SelectFeature.Add([self.p.object(tag) for tag in self.p.features if tag in self.p.old])
+            builder.SelectFeature.Add([self.p.object(tag) for tag in self.p.features if tag in selected])
             self.h.require_copy()
             builder.ReplacementFeature.Add([self.p.object(self.p.copy_feature.Tag)])
             configuration()
-            self.t.lines.append("ОТДЕЛЬНЫЙ ПРОСМОТР КАРТЫ: те же элементы; DisplayUniqueInputsToMap=True; " +
+            self.t.lines.append(("ПРОСМОТР СУЖЕННОГО ВЫБОРА: " if narrowed else "ОТДЕЛЬНЫЙ ПРОСМОТР КАРТЫ: те же элементы; ") +
+                                "DisplayUniqueInputsToMap=True; " +
                                 "автосопоставление выключено; SetMatching, Validate и Commit не вызываются.")
+            self.t.lines.append("Выбраны исходные элементы диагностического просмотра: " + str(sorted(selected)) +
+                                "; кандидат=" + str(int(self.p.copy_feature.Tag)))
+            if narrowed:
+                self.t.lines.append("Суженный выбор проверяет только состав строк. Основная карта и полный список удаляемой истории " +
+                                    "не меняются; допустимость замены не подтверждается.")
             self.t.stage = "Диагностический просмотр / UpdateMap"
             self.h.require_copy()
             builder.UpdateMap()
@@ -3673,7 +3685,8 @@ class HistoricalReplacementMapProbe:
                 route = ("проверенная геометрия кандидата" if tag in self.p.map else
                          "отдельная историческая кривая-кандидат" if tag in self.c.created else
                          "элемент заменяемой истории" if tag in self.p.old else "соответствие не подтверждено")
-                self.t.lines.append("Уникальная строка " + str(index) + ": tag=" + str(tag) + "; класс=" + type(obj).__name__ +
+                self.t.lines.append(("Строка суженного выбора " if narrowed else "Уникальная строка ") +
+                    str(index) + ": tag=" + str(tag) + "; класс=" + type(obj).__name__ +
                     "; Type=" + str(kind) + " / " + ("|".join(names) or "имя enum не распознано") +
                     "; ReverseDirection=" + str(reverse) + "; статус=" + str(status) + "; " + route)
             for index,row in enumerate(rows,1):
@@ -3695,6 +3708,7 @@ class HistoricalReplacementMapProbe:
             checks.summary()
             if checks.errors:
                 self.t.lines.append("Сравнение представлений частичное: часть строк не прочитана; отсутствие tag не доказано.")
+            return frozenset(actual), not checks.errors
         except Exception as error:
             self.h.record_error("Ошибка отдельного просмотра карты",self.t.stage,error)
             raise
@@ -3703,6 +3717,68 @@ class HistoricalReplacementMapProbe:
             self.h.require_copy()
             builder.Destroy()
             self.diagnostic_editor_open = False
+
+    def diagnostic_selection(self, actual):
+        """Nearest replaced ancestors of retained consumers of missing inputs.
+
+        This is a selection experiment, not proof of a complete dependency
+        graph or permission to delete fewer features. Stop at an old ancestor;
+        never add retained sketches, datums or protected stocks to the editor.
+        """
+        require_diagnostic_session(self.t)
+        self.h.require_copy()
+        targets = (set(self.c.created) - set(actual)) | self.p.map_inputs.missing_collectors
+        if not targets:
+            return None
+        consumers = {}
+        covered = set()
+        for feature in sorted(self.p.retained):
+            refs = {tag for tag,_ in self.p.initial_refs[feature]} & targets
+            if refs:
+                consumers[feature] = refs
+                covered.update(refs)
+        if covered != targets:
+            raise RuntimeError("Для отсутствующих опор нет прямого сохраняемого потребителя в снимке: " +
+                               str(sorted(targets-covered)))
+        selected = set()
+        for consumer,refs in consumers.items():
+            self.t.stage = "Выбор для диагностической карты / потребитель " + str(consumer)
+            pending, graph, path = [consumer], {}, {consumer: (consumer,)}
+            ancestors = set()
+            while pending:
+                feature = pending.pop(0)
+                if feature in graph:
+                    continue
+                if len(graph) >= MAX_OBJECTS or feature not in self.p.features:
+                    raise RuntimeError("Неполный или слишком большой граф родителей: " + str(feature))
+                if feature in self.p.old:
+                    graph[feature] = ()
+                    ancestors.add(feature)
+                    continue
+                record = self.t.history_baseline[feature]
+                saved_parents = record["parents"]
+                # model_history stores tag -> description, not an NX array.
+                if not isinstance(saved_parents,dict) or len(saved_parents) > MAX_OBJECTS:
+                    raise RuntimeError("Не прочитан ограниченный снимок родителей элемента " + str(feature))
+                parents = tuple(sorted(probe_tag(tag,"Родитель элемента") for tag in saved_parents))
+                graph[feature] = parents
+                for parent in parents:
+                    if parent not in path:
+                        path[parent] = path[feature] + (parent,)
+                        pending.append(parent)
+            parent_order(graph)  # Reject incomplete data and retained cycles.
+            self.t.lines.append("Потребитель отсутствующих опор " + str(sorted(refs)) + ": " +
+                                history_feature_label(consumer,self.t.history_baseline[consumer]))
+            if not ancestors:
+                raise RuntimeError("По снимку GetParents не найден заменяемый предок потребителя " + str(consumer) +
+                                   ". Это не доказывает отсутствие геометрической зависимости; суженный просмотр не запускается.")
+            for ancestor in sorted(ancestors):
+                self.t.lines.append("Путь по родителям элементов: " + " → ".join(str(tag) for tag in path[ancestor]))
+            selected.update(ancestors)
+        if selected == self.p.old:
+            self.t.lines.append("Выбор ближайших заменяемых предков совпал с полной историей; повторный редактор не создаётся.")
+            return None
+        return tuple(sorted(selected))
 
     def diagnose_blockers(self, closed_builder):
         inputs = self.p.map_inputs
@@ -3713,17 +3789,39 @@ class HistoricalReplacementMapProbe:
             self.t.lines.append("Отдельный просмотр карты заблокирован: после чтения вложенных связей сохранность не подтверждена.")
             return
         self.diagnostic_editor_open = False
+        view, intact = None, False
         try:
-            self.inspect_unique_view(closed_builder)
+            view = self.inspect_unique_view(closed_builder)
         except Exception as error:
             self.h.record_error("Диагностический просмотр остановлен; первичная ошибка карты сохранена",self.t.stage,error)
         finally:
             if getattr(self.t, "resource_failure", None) is not None:
                 self.t.lines.append("Проверки после отдельного просмотра остановлены из-за 821049; далее откат.")
             elif not self.diagnostic_editor_open:
-                self.diagnose_after_failure()
+                intact = self.diagnose_after_failure()
             else:
                 self.t.lines.append("Проверки после отдельного просмотра заблокированы: закрытие редактора не подтверждено; далее откат.")
+        if not intact or view is None or not view[1]:
+            self.t.lines.append("Суженный просмотр не запускался: полный просмотр или сохранность после него не подтверждены.")
+            return
+        selected = self.diagnostic_selection(view[0])
+        if selected is None:
+            return
+        try:
+            result = self.inspect_unique_view(closed_builder, selected)
+            if result[1]:
+                self.t.lines.append("Сравнение полного и суженного выбора: появились tag=" + str(sorted(result[0]-view[0])) +
+                                    "; исчезли tag=" + str(sorted(view[0]-result[0])) +
+                                    ". Изменение списка не разрешает пропуск опор или применение замены.")
+        except Exception as error:
+            self.h.record_error("Суженный просмотр остановлен; первичная ошибка карты сохранена",self.t.stage,error)
+        finally:
+            if getattr(self.t,"resource_failure",None) is not None:
+                self.t.lines.append("Проверки после суженного просмотра остановлены из-за 821049; далее откат.")
+            elif not self.diagnostic_editor_open:
+                self.diagnose_after_failure()
+            else:
+                self.t.lines.append("Проверки после суженного просмотра заблокированы: закрытие редактора не подтверждено; далее откат.")
 
     def run(self):
         if set(self.c.created) != set(self.h.shared_curves):
