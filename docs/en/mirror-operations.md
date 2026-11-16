@@ -1,8 +1,10 @@
-# CAM operation coverage audit — V1.28
+# CAM operation coverage audit — V1.29
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-16**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
+
+V1.29 adds standalone reflected Curve creation after verified history restoration, result readback and mandatory local/outer Undo. This is not yet Edge-support replacement, sketch-constraint transfer or Part Boundary transfer. V1.28 established two Arc definitions and restoration in NX; Line/Ellipse/Spline and V1.29 creation remain untested. The CAM catalog, 21 routes, 31 recognized builders and numeric-settings limitations are unchanged. [Result and exact new SDK 2606 API list](mirror-project.md#native-curves-v129).
 
 V1.28 adds historical-edge definitions and in-memory reflection checks; CAM coverage and unverified spatial settings are unchanged. V1.27.02 confirmed access/restoration across three NX contexts, not project transfer. New UF_EVAL calls require DC 2606 verification. [Result and experiment](mirror-project.md#curve-definitions-v128).
 

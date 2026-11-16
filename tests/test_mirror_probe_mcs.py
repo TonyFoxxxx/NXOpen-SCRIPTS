@@ -153,7 +153,7 @@ class ProbeMcsTests(unittest.TestCase):
         h,world,trial,_=self.historical_world();before=trial.csys_frame(world.csys.Tag)
         with self.assertRaises(M.HistoricalProbeComplete): h.p.run()
         self.assertEqual([e[1] for e in h.events if e[0]=='start'],[69574,69578,69582])
-        self.assertEqual(len([e for e in h.events if e[0]=='undo']),3)
+        self.assertEqual(len([e for e in h.events if e[0]=='undo']),4)
         self.assertEqual(trial.csys_frame(world.csys.Tag),before)
         h.assert_no_geometry_edits(self)
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.28
-SCRIPT_VERSION = "V1.28"
+# SCRIPT_VERSION: V1.29
+SCRIPT_VERSION = "V1.29"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -657,6 +657,81 @@ def check_history_curve(curve, vertices, plane):
     return reflected, error
 
 
+def history_curve_candidate_definition(curve):
+    """Plan a standalone curve, without changing the captured edge definition.
+
+    UF_CURVE_create_spline normalizes its domain. Do that affine parameter
+    change explicitly before the call; do not authorize automatic shape fixes.
+    """
+    validate_history_curve(curve)
+    result, data = dict(curve), dict(curve["data"])
+    if curve["kind"] == "Line":
+        result["limits"] = (0.0,1.0)
+    elif curve["kind"] in ("Arc", "Ellipse"):
+        data["limits"] = curve["limits"]
+    else:
+        origin = data["knots"][data["order"]-1]
+        length = data["knots"][len(data["poles"])]-origin
+        data["knots"] = tuple((u-origin)/length for u in data["knots"])
+        result["limits"] = tuple((u-origin)/length for u in curve["limits"])
+    result["data"] = data
+    validate_history_curve(result)
+    result["samples"] = tuple((u,history_curve_point(result,u)) for u in history_curve_parameters(result))
+    return result
+
+
+def check_created_history_curve(expected, actual):
+    """Check native geometry and definitions; never match by bounds alone."""
+    validate_history_curve(expected)
+    validate_history_curve(actual)
+    if actual["kind"] != expected["kind"] or actual["periodic"] != expected["periodic"]:
+        raise RuntimeError("Изменились тип/периодичность новой кривой")
+    def equal(first, second, tolerance):
+        return len(first) == len(second) and all(abs(p-q) <= tolerance for p,q in zip(first,second))
+    a, b, kind = expected["data"], actual["data"], expected["kind"]
+    fields = ("start","end") if kind == "Line" else ("center","x_axis","y_axis") if kind != "Spline" else ()
+    for key in fields:
+        if not equal(a[key],b[key],1e-5 if key in ("center","start","end") else 1e-10):
+            raise RuntimeError("Изменилось определение новой кривой / " + key)
+    if kind in ("Arc", "Ellipse"):
+        fields = ("radius",) if kind == "Arc" else ("major","minor")
+        if any(abs(a[key]-b[key]) > 1e-8 for key in fields):
+            raise RuntimeError("Изменились радиусы новой кривой")
+        if abs((actual["limits"][1]-actual["limits"][0])-(expected["limits"][1]-expected["limits"][0])) > 1e-10:
+            raise RuntimeError("Изменилась обрезка новой дуги/эллипса")
+    elif kind == "Spline":
+        if (a["order"] != b["order"] or a["rational"] != b["rational"] or
+                len(a["poles"]) != len(b["poles"]) or not equal(a["knots"],b["knots"],1e-12) or
+                not equal(expected["limits"],actual["limits"],1e-12) or
+                any(not equal(p,q,1e-8) or abs(p[3]-q[3]) > 1e-12 for p,q in zip(a["poles"],b["poles"]))):
+            raise RuntimeError("Изменились полюса/веса/узлы/порядок/обрезка нового сплайна")
+    if tuple(u for u,_ in actual["samples"]) != history_curve_parameters(actual):
+        raise RuntimeError("Не прочитан полный контрольный набор новой кривой")
+    alo, ahi = actual["limits"]
+    elo, ehi = expected["limits"]
+    deviation = 0.0
+    for parameter, point in actual["samples"]:
+        point = curve_numbers(point,3,"новая кривая / UF_EVAL_evaluate")
+        mapped = min(ehi,max(elo,elo+(ehi-elo)*((parameter-alo)/(ahi-alo))))
+        wanted = history_curve_point(expected,mapped)
+        computed = history_curve_point(actual,parameter)
+        deviation = max(deviation,*(abs(p-q) for p,q in zip(point,wanted)),*(abs(p-q) for p,q in zip(point,computed)))
+    if deviation > 1e-5:
+        raise RuntimeError("Новая кривая не совпала с отражённым определением / UF_EVAL; отклонение=" + str(deviation))
+    return deviation
+
+
+class _CurveSpline(ctypes.Structure):
+    # UF_CURVE_spline_t uses an int rational flag and pointer-to-four-double poles.
+    _fields_ = [("num_poles",ctypes.c_int), ("order",ctypes.c_int), ("is_rational",ctypes.c_int),
+                ("knots",ctypes.POINTER(ctypes.c_double)), ("poles",ctypes.POINTER(ctypes.c_double*4)),
+                ("start_param",ctypes.c_double), ("end_param",ctypes.c_double)]
+
+
+class _CurveState(ctypes.Structure):
+    _fields_ = [("state_code",ctypes.c_int), ("flag",ctypes.c_int), ("value",ctypes.c_double*3)]
+
+
 class _EvalArc(ctypes.Structure):
     # UF_EVAL_arc_t in published uf_eval.h; logical occupies one byte.
     _fields_ = [("is_periodic", ctypes.c_ubyte), ("limits", ctypes.c_double*2),
@@ -1021,6 +1096,45 @@ class NativeCam:
         if not owner.value:
             raise RuntimeError(name + ": не прочитано тело опоры " + str(tag))
         return int(owner.value)
+
+    def prepare_history_spline_creation_api(self):
+        if not hasattr(self,"_history_create_spline"):
+            self._history_create_spline = self.bind("UF_CURVE_create_spline",
+                (ctypes.POINTER(_CurveSpline),ctypes.POINTER(ctypes.c_uint32),
+                 ctypes.POINTER(ctypes.c_int),ctypes.POINTER(ctypes.c_void_p)))
+
+    def create_history_spline(self, curve):
+        """Create only a new curve; the caller owns a copy-only Undo mark."""
+        validate_history_curve(curve)
+        if curve["kind"] != "Spline":
+            raise RuntimeError("UF_CURVE_create_spline требует определение Spline")
+        data = curve["data"]
+        if data["knots"][data["order"]-1] != 0.0 or data["knots"][len(data["poles"])] != 1.0:
+            raise RuntimeError("До создания сплайна требуется явная нормализация параметра")
+        self.prepare_history_spline_creation_api()
+        knots = (ctypes.c_double*len(data["knots"]))(*data["knots"])
+        poles = ((ctypes.c_double*4)*len(data["poles"]))(*(tuple(p) for p in data["poles"]))
+        definition = _CurveSpline(len(poles),data["order"],int(data["rational"]),knots,poles,*curve["limits"])
+        tag, count, states = ctypes.c_uint32(), ctypes.c_int(-1), ctypes.c_void_p()
+        try:
+            code = self._history_create_spline(ctypes.byref(definition),ctypes.byref(tag),ctypes.byref(count),ctypes.byref(states))
+            self.check(code,"UF_CURVE_create_spline / возвращённый tag=" + str(tag.value))
+            if not 0 <= count.value <= MAX_OBJECTS or count.value and not states.value:
+                raise RuntimeError("UF_CURVE_create_spline: не прочитан массив состояний")
+            if count.value:
+                array = ctypes.cast(states,ctypes.POINTER(_CurveState))
+                details = [(array[j].state_code,array[j].flag,tuple(array[j].value)) for j in range(count.value)]
+                raise RuntimeError("UF_CURVE_create_spline вернул состояния/исправления; принятие запрещено: " + str(details))
+            if (ctypes.cast(definition.knots,ctypes.c_void_p).value != ctypes.addressof(knots) or
+                    ctypes.cast(definition.poles,ctypes.c_void_p).value != ctypes.addressof(poles) or
+                    tuple(knots) != data["knots"] or tuple(tuple(p) for p in poles) != data["poles"] or
+                    (definition.num_poles,definition.order,definition.is_rational,definition.start_param,definition.end_param) !=
+                    (len(data["poles"]),data["order"],int(data["rational"]),*curve["limits"])):
+                raise RuntimeError("UF_CURVE_create_spline изменил входное определение")
+            return probe_tag(tag.value,"Новый сплайн")
+        finally:
+            if states.value:
+                self.free(states)
 
     def compare_topology(self, first, second, facet_tolerance, distance_tolerance):
         first, second = probe_tag(first, "CompareTopology / first"), probe_tag(second, "CompareTopology / second")
@@ -2297,8 +2411,8 @@ class HistoricalReferenceProbe:
 
     def run(self):
         self.t.lines.append("ПРОВЕРКА ИСТОРИЧЕСКИХ ОПОР: чтение через EditWithRollbackManager; " +
-            "определения кривых и отражение только в памяти, без создания геометрии, правки элементов и замены истории. " +
-            "В конце обязателен откат.")
+            "внутри исторических контекстов определения кривых и отражение только в памяти, без правки элементов. " +
+            "После проверенного возврата — отдельный прототип создания кривых без замены опор. В конце обязателен откат.")
         self.preflight()
         readings, errors = [], []
         for consumer, supports in self.contexts:
@@ -2313,9 +2427,134 @@ class HistoricalReferenceProbe:
         self.t.lines.append("Определения исторических рёбер проверены: контекстов/рёбер " + str(len(self.curves)) +
                             "; уникальных рёбер " + str(len(self.shared_curves)) +
                             ". Отражённые определения существуют только в памяти.")
-        raise HistoricalProbeComplete("Доступ к указанным историческим опорам и возврат модели проверены. " +
-            "Прочитаны определения Line/Arc/Ellipse/Spline и проверено их отражение в памяти. " +
-            "Создание новых опор, перенос ограничений эскизов и связей CAM ещё не выполнялись. Эксперимент отменяется.")
+        HistoricalCurveCandidateProbe(self).run()
+        raise RuntimeError("Прототип кривых должен завершаться обязательным откатом")
+
+
+class HistoricalCurveCandidateProbe:
+    """Materialize standalone reflected curves, verify, and undo them locally.
+
+    These are candidates, not replacements for Edge references. No retained
+    feature definition or CAM/MCS reference is changed to use a new curve.
+    """
+    def __init__(self, history):
+        self.h, self.t, self.p = history, history.t, history.p
+        self.created = {}
+
+    def stage(self, value):
+        self.t.stage = "Прототип отражённых кривых / " + value
+
+    def inventory(self):
+        self.h.require_copy()
+        result = {}
+        for obj in self.t.part.Curves:
+            tag = probe_tag(obj.Tag,"Коллекция Curves")
+            self.p.object(tag)
+            if tag in result or not isinstance(obj,self.t.nx.Curve) or isinstance(obj,self.t.nx.Edge):
+                raise RuntimeError("Не подтверждён состав коллекции Curves")
+            result[tag] = (type(obj).__name__,self.t.native.history_bounding_box(tag))
+            if len(result) > MAX_OBJECTS:
+                raise RuntimeError("Слишком много кривых для проверяемого прототипа")
+        return result
+
+    def check_inventory(self, include_candidates=True):
+        current = self.inventory()
+        if set(current) != set(self.initial) | (set(self.created.values()) if include_candidates else set()):
+            raise RuntimeError("Созданы/удалены кривые вне явного списка кандидатов")
+        for tag,(kind,box) in self.initial.items():
+            if current[tag][0] != kind or not close_values(current[tag][1],box):
+                raise RuntimeError("Изменилась исходная кривая " + str(tag))
+
+    def preflight(self):
+        self.stage("Проверка исходного состояния и API")
+        self.h.verify_restored("до создания отдельных кривых")
+        self.initial = self.inventory()
+        self.planned = {tag:history_curve_candidate_definition(reflected_history_curve(curve,self.t.plane))
+                        for tag,(_,curve) in self.h.shared_curves.items()}
+        if not self.planned:
+            raise RuntimeError("Нет проверенных определений для создания кривых")
+        kinds = {curve["kind"] for curve in self.planned.values()}
+        required = []
+        if kinds & {"Line","Arc","Ellipse"}:
+            required.append(self.t.nx.Point3d)
+        if kinds & {"Arc","Ellipse"}:
+            required.append(self.t.nx.Vector3d)
+        for kind in kinds - {"Spline"}:
+            required.append(getattr(self.t.part.Curves,"Create"+kind))
+        if any(not callable(method) for method in required):
+            raise RuntimeError("Не подтверждён API создания отдельных кривых")
+        if "Spline" in kinds:
+            self.t.native.prepare_history_spline_creation_api()
+
+    def create(self, definition):
+        self.h.require_copy()
+        kind, data, nx = definition["kind"], definition["data"], self.t.nx
+        if kind == "Spline":
+            return self.p.object(self.t.native.create_history_spline(definition))
+        if kind == "Line":
+            return self.t.part.Curves.CreateLine(nx.Point3d(*data["start"]),nx.Point3d(*data["end"]))
+        args = (nx.Point3d(*data["center"]),nx.Vector3d(*data["x_axis"]),nx.Vector3d(*data["y_axis"]))
+        if kind == "Arc":
+            return self.t.part.Curves.CreateArc(*args,data["radius"],*definition["limits"])
+        if kind == "Ellipse":
+            return self.t.part.Curves.CreateEllipse(*args,data["major"],data["minor"],*definition["limits"])
+        raise RuntimeError("Не реализовано создание кривой " + str(kind))
+
+    def run(self):
+        self.preflight()
+        self.stage("Локальная метка Undo для новых кривых")
+        self.h.require_copy()
+        mark = self.t.session.SetUndoMark(self.t.nx.Session.MarkVisibility.Visible,TITLE + " / отдельные кривые")
+        primary, primary_trace, failure_stage, cleanup = None, None, None, []
+        try:
+            self.t.lines.append("ПРОТОТИП ОТРАЖЁННЫХ КРИВЫХ: создание отдельных кандидатов после возврата из истории. " +
+                                "Опоры эскизов и выбранные CAM-объекты не заменяются; обязателен локальный и общий откат.")
+            for source, definition in sorted(self.planned.items()):
+                self.stage("Создание " + definition["kind"] + " / исходное ребро " + str(source))
+                obj = self.create(definition)
+                if obj is None:
+                    raise RuntimeError("API не вернул новую кривую")
+                tag = probe_tag(obj.Tag,"Новая кривая")
+                if (tag in self.initial or tag in self.created.values() or tag in self.planned or
+                        not isinstance(obj,self.t.nx.Curve) or isinstance(obj,self.t.nx.Edge)):
+                    raise RuntimeError("API не создал отдельный новый объект Curve")
+                self.p.object(tag)
+                self.created[source] = tag
+                self.h.verify_restored("после создания кривой " + str(tag))
+                self.check_inventory()
+                self.stage("Повторное чтение / ребро " + str(source) + " → кривая " + str(tag))
+                actual = self.t.native.history_curve(tag)
+                error = check_created_history_curve(definition,actual)
+                self.t.lines.append("Кривая-кандидат проверена в NX: исходное ребро " + str(source) + " → " + str(tag) +
+                    "; " + actual["kind"] + "; контрольных параметров=" + str(len(actual["samples"])) +
+                    "; отклонение=" + str(error) + ". Это новая отдельная кривая, а не подмена исходного ребра.")
+            self.h.verify_restored("после проверки всех новых кривых")
+            self.check_inventory()
+        except Exception as error:
+            primary, primary_trace, failure_stage = error, error.__traceback__, self.t.stage
+        finally:
+            try:
+                self.stage("Локальный Undo новых кривых")
+                self.h.require_copy()
+                self.t.session.UndoToMark(mark,None)
+                self.h.verify_restored("локальный Undo новых кривых")
+                self.check_inventory(include_candidates=False)
+                self.t.lines.append("Локальный Undo новых кривых выполнен; исходная коллекция, история, MCS/заготовки и CAM проверены.")
+                self.stage("Удаление собственной метки новых кривых")
+                self.t.session.DeleteUndoMark(mark,None)
+            except Exception as error:
+                cleanup.append((self.t.stage,error))
+        for stage,error in cleanup:
+            self.h.record_error("Ошибка отката новых кривых",stage,error)
+        if primary is not None:
+            self.t.stage = failure_stage
+            raise primary.with_traceback(primary_trace)
+        if cleanup:
+            self.t.stage,error = cleanup[0]
+            raise error
+        raise HistoricalProbeComplete("Созданы и проверены отдельные отражённые кривые: " + str(len(self.created)) +
+            ". Локальный откат проверен; выполняется общий откат. Привязки эскизов, ограничения и CAM не переносились. " +
+            "Кандидаты Curve не объявляются заменами исходных Edge.")
 
 
 class Trial:

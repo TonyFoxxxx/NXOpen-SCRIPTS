@@ -2,6 +2,14 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.29
+
+The V1.28 report establishes two historical Arc definitions with radii near 0.5 mm across three contexts, in-memory reflection checks and all restoration/source checks. After context cleanup, V1.29 creates one standalone Curve per unique edge, reads it back through UF_EVAL and compares its complete available definition and sample points. Line/Arc/Ellipse use CurveCollection; Spline uses UF_CURVE_create_spline with explicit parameter normalization and rejection of automatic fixes.
+
+New curves are not assigned to sketches or CAM; a Curve is not declared an Edge replacement. An owned visible mark, local Undo with collection/history/MCS/stock/CAM restoration checks and outer rollback are mandatory. Preserve errors, codes and tracebacks; source/file rules are unchanged.
+
+Add 39 checks; all 601 focused checks outside NX pass, including 137 using C fixtures. DC 2606 creation remains untested. Synchronize version, catalog SHA-256 and documentation. [Result, next run and SDK methods](docs/en/mirror-project.md#native-curves-v129).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.28
 
 The V1.27.02 report confirms two historical-edge reads across three contexts, local restoration and outer rollback with successful source checks. The next experiment reads Line/Arc/Ellipse/Spline definitions through UF_EVAL_initialize_2 and checks reflection in memory. Validate parameters, sample evaluations, endpoints, weights/knots and repeated reads of one tag; no approximating fallback, geometry creation or reference replacement. Preserve model/MCS/stock/CAM checks and mandatory rollback.

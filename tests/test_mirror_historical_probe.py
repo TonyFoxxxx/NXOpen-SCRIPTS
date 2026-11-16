@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock
 
-from test_mirror_replacement_probe import M, Body, Edge, Face, ownerless_support_report_world
+from test_mirror_replacement_probe import M, Body, Curve, Edge, Face, ownerless_support_report_world
 
 
 class VisibleUndoMarkRequired(RuntimeError):
@@ -25,6 +25,11 @@ class HistoryWorld:
         self.after_start = self.after_stop = self.after_undo = lambda: None
         self.current = 69595
         self.next_mark = 100
+        self.next_curve = 900000
+        self.candidates, self.candidate_events = {}, []
+        self.after_create = lambda obj: None
+        self.t.nx.Point3d = self.t.nx.Vector3d = lambda x,y,z:NS(X=x,Y=y,Z=z)
+        self.t.part.Curves = CurveCollection(self)
         for index, feature in enumerate(self.t.part.Features):
             feature.Timestamp, feature.Suppressed, feature.IsInternal = index, False, False
         for datum, sketch, stamp in ((69573,69574,7),(69576,69578,9),(69579,69582,10)):
@@ -49,6 +54,8 @@ class HistoryWorld:
             self.w.objects[tag].GetVertices = Mock(return_value=(NS(X=-4.,Y=2.,Z=3.),NS(X=5.,Y=6.,Z=7.)))
 
     def curve(self, tag):
+        if tag in self.candidates:
+            return copy.deepcopy(self.candidates[tag])
         # Synthetic straight edges only; the V1.27.02 report does not establish
         # the actual curve type or parameters of the user's two edges.
         self.owner(tag,'Edge')
@@ -57,6 +64,20 @@ class HistoryWorld:
         result['samples']=tuple((u,M.history_curve_point(result,u)) for u in M.history_curve_parameters(result))
         return result
 
+    def create_curve(self, definition):
+        # A protocol fixture: native curve creation is established only by NX.
+        assert self.current==69595
+        assert sum(e[0]=='start' for e in self.events)==sum(e[0]=='destroy' for e in self.events)
+        self.candidate_events.append((self.current,definition['kind'],len(self.events)))
+        definition['samples']=tuple((u,M.history_curve_point(definition,u))
+                                    for u in M.history_curve_parameters(definition))
+        self.next_curve+=1
+        obj=self.w.register(Curve(self.next_curve))
+        self.t.part.Curves.append(obj)
+        self.candidates[obj.Tag]=definition
+        self.after_create(obj)
+        return obj
+
     def snapshot(self):
         return dict(current=self.current, objects=dict(self.w.objects), edges=self.w.body.edges[:], faces=self.w.body.faces[:],
             features=self.t.part.Features[:], expressions=self.t.part.Expressions[:],
@@ -64,7 +85,8 @@ class HistoryWorld:
                           for f in self.t.part.Features},
             expression_data={e.Tag:(e.Name,e.Type,e.RightHandSide,e.Units.Name) for e in self.t.part.Expressions},
             sketches={f.Tag:(f.Sketch.geometry[:],f.Sketch.expressions[:]) for f in self.t.part.Features if hasattr(f,'Sketch')},
-            cam=copy.deepcopy(self.w.cam), references=copy.deepcopy(self.w.references), boxes=dict(self.w.boxes))
+            cam=copy.deepcopy(self.w.cam), references=copy.deepcopy(self.w.references), boxes=dict(self.w.boxes),
+            curves=self.t.part.Curves[:],candidates=copy.deepcopy(self.candidates))
 
     def restore(self, saved):
         self.current = saved['current']
@@ -84,6 +106,8 @@ class HistoryWorld:
         self.w.cam = copy.deepcopy(saved['cam'])
         self.w.references = copy.deepcopy(saved['references'])
         self.w.boxes = dict(saved['boxes'])
+        self.t.part.Curves[:] = saved['curves']
+        self.candidates = copy.deepcopy(saved['candidates'])
 
     def failure(self, name):
         if name in self.fail:
@@ -137,6 +161,28 @@ class HistoryWorld:
         self.t.native.transform_entities.assert_not_called()
         self.t.transfer_mcs_and_stock.assert_not_called()
         self.t.setup.DeleteToolPath.assert_not_called()
+
+
+class CurveCollection(list):
+    def __init__(self, history):
+        self.h=history
+        super().__init__(obj for obj in history.w.objects.values() if type(obj) is Curve)
+
+    def CreateLine(self, start, end):
+        return self.h.create_curve({'kind':'Line','limits':(0.,1.),'periodic':False,
+            'data':{'start':tuple(M.xyz(start)),'end':tuple(M.xyz(end))}})
+
+    def conic(self, kind, center, x, y, radii, lo, hi):
+        periodic=abs(hi-lo-2*M.math.pi)<1e-10
+        return self.h.create_curve({'kind':kind,'limits':(lo,hi),'periodic':periodic,
+            'data':dict(center=tuple(M.xyz(center)),x_axis=tuple(M.xyz(x)),y_axis=tuple(M.xyz(y)),
+                        limits=(lo,hi),periodic=periodic,**radii)})
+
+    def CreateArc(self, center, x, y, radius, lo, hi):
+        return self.conic('Arc',center,x,y,{'radius':radius},lo,hi)
+
+    def CreateEllipse(self, center, x, y, major, minor, lo, hi):
+        return self.conic('Ellipse',center,x,y,{'major':major,'minor':minor},lo,hi)
 
 
 class HistoryManager:
@@ -203,7 +249,7 @@ class HistoricalProtocolTests(unittest.TestCase):
     def test_visible_value_is_taken_from_nx_enum_instead_of_a_numeric_guess(self):
         h=HistoryWorld();h.t.nx.Session.MarkVisibility.Visible=17
         with self.assertRaises(M.HistoricalProbeComplete): h.p.run()
-        self.assertEqual([e[2] for e in h.events if e[0]=='mark'],[17,17,17])
+        self.assertEqual([e[2] for e in h.events if e[0]=='mark'],[17,17,17,17])
         self.assertEqual(h.marks,{})
         self.assertEqual(h.mark_visibility,{})
 
@@ -211,8 +257,8 @@ class HistoricalProtocolTests(unittest.TestCase):
         h=HistoryWorld();h.marks[55]=h.snapshot();h.mark_visibility[55]=1
         with self.assertRaises(M.HistoricalProbeComplete): h.p.run()
         created=[e[1] for e in h.events if e[0]=='mark']
-        self.assertEqual(created,[100,101,102])
-        self.assertEqual([e[2] for e in h.events if e[0]=='start'],created)
+        self.assertEqual(created,[100,101,102,103])
+        self.assertEqual([e[2] for e in h.events if e[0]=='start'],created[:3])
         self.assertEqual([e[1] for e in h.events if e[0]=='undo'],created)
         self.assertEqual([e[1] for e in h.events if e[0]=='delete-mark'],created)
         self.assertEqual(set(h.marks),{55})

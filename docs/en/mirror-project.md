@@ -2,10 +2,33 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.28**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.29**.
+
+<a id="native-curves-v129"></a>
+## Latest changes — V1.29 · 2026-11-16
+
+**V1.28 NX result:** two historical-edge definitions were read across three external sketch contexts. Both supports are Arc with radii near 0.5 mm; nine parameters per reading were checked, with maximum deviation `2.842170943040401e-14` part units. All three reads succeeded. Manager cleanup, local Undo, model restoration, outer Undo and source restoration passed their checks; the source PRT checksum was unchanged and its modification flag was clear. This establishes reading **these arcs**, not Line/Ellipse/Spline execution, native creation or project transfer.
+
+In this run the edges had tags `597080` and `114040`; external contexts were `151110`, `151114`, `151118`, and the body was `171402`. The second edge had identical definitions in two contexts. Tags are specific to this run. These arcs are **historical supports of dependent features**, not the two selected Part Boundary centerlines in SKETCH_000.
+
+V1.29 tests the next step: creating a standalone NX Curve from each captured reflected definition. Creation starts only after **all** historical contexts have closed and restoration has been checked. There is one candidate per unique source edge; any failed history read prevents this stage.
+
+- Line uses `CurveCollection.CreateLine`; Arc/Ellipse use the `CreateArc/CreateEllipse` overloads taking an ABS center, two direction vectors, radii and angle limits. Both curve directions follow reflection R; the MCS axis convention does not apply.
+- Spline uses `UF_CURVE_create_spline` with complete knots and homogeneous poles. Explicitly normalize the full parameter domain to `[0, 1]` beforehand, including knots and trim; preserve geometry and weights. Reject every returned state/automatic fix. Release the states array with `UF_free`, including partial error results. Mutation of the supplied definition is also an error.
+- Each result must have a new tag, belong to the trial copy and be a Curve rather than an Edge. Read it back through `UF_EVAL_initialize_2`: check type, periodicity, center/directions/radii, limits, spline poles/weights/knots/order and sample points. Matching bounding boxes alone is insufficient; unknown or unreadable data are not skipped.
+
+The stage owns a separate visible Undo mark. A Curves snapshot checks collection membership and previous curve bounds; existing history, topology, reference, sketch, MCS/RCS, Tooling Box and CAM guards remain active. Success or failure triggers an attempted **local candidate Undo**, followed by collection and original-snapshot checks before deleting the owned mark. The existing outer rollback follows. Loss of the active copy never authorizes Undo in another part; unconfirmed restoration is not reported as success.
+
+New curves **are not assigned to sketches or CAM geometry**. A correctly shaped Curve is not yet a valid substitute for an Edge in an associative definition. Definition/constraint transfer, body-history replacement, MCS/stock transfer and CAM regeneration remain subsequent steps. This branch deletes no toolpaths, saves nothing automatically and creates no extra files; rollback removes the candidates.
+
+**Verified outside NX:** 601 focused checks, including 137 using separately compiled C fixtures. The 39 new checks cover measured report arcs, creation after context cleanup, one candidate per edge, strict result readback, failed/partial creation, retained CAM selection, local Undo and the spline C ABI. These test our code and fixtures, not Siemens DLLs. V1.29 native candidate creation remains untested in DC 2606.
+
+**Next run:** update to **V1.29**, open the saved source PRT and choose the same plane. Expect two “Кривая-кандидат проверена в NX” lines, then checked local and outer rollback. The experimental copy does not need saving. Even this result would not establish a complete mirrored CAM project.
+
+Creation contracts come from older [CurveCollection, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.CurveCollection.html) and the [published copy of Siemens uf_curve.h](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_curve.h). SDK 2606 is unavailable; the [separate method/definition checklist](#replacement-probe-sdk-2606) has been extended.
 
 <a id="curve-definitions-v128"></a>
-## Latest changes — V1.28 · 2026-11-16
+## V1.28: historical curve definitions · 2026-11-16
 
 **V1.27.02 NX result:** the access experiment completed successfully. Three external sketch contexts `128710`, `128714`, `128718` opened; exact edges `120469` and `251637` of body `134471` were read, the latter in two contexts. The report records three successful reads and zero errors. Manager cleanup, local Undo and restoration checks passed for each context, followed by outer Undo, source restoration, an unchanged checksum and a clear modification flag. This establishes access and return on this PRT, not complete curve definitions or mirroring. Tags identify this run only.
 
@@ -21,7 +44,7 @@ Unknown types, procedural curves without an available exact representation, full
 
 All **562 focused checks outside NX**, including **122 using C fixtures**, pass. The 44 new checks cover analytic geometry, a rational spline with an independent closed form, oblique reflection, trim/repeated knots, C structures/arrays, partial failures, rejection of approximating fallback and context restoration. These use our fixtures, not Siemens DLLs; new UF_EVAL calls remain untested in DC 2606.
 
-**Next NX check:** V1.28, the saved source PRT and the same plane. Expect edge-definition and in-memory reflection-check lines, followed by mandatory outer rollback. This branch creates no supports, replaces no history, transfers no sketches/CAM or MCS/stock, and deletes no toolpaths. The experimental result does not need saving.
+The result of this run is recorded above under V1.29. The next run is the V1.29 standalone-curve experiment with mandatory rollback; its scope is described there.
 
 Contracts were checked against a [published Siemens `uf_eval.h` copy](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_eval.h) and the [NURBS definition in `uf_curve.h`](https://www.ugapi.com/doc/ufun/uf_curve/UF_CURVE_spline_s.html). These are older contracts; **SDK 2606 is unavailable**. [Outstanding API checks](#replacement-probe-sdk-2606).
 
@@ -36,7 +59,7 @@ Cleanup order is unchanged: UpdateFeature/Stop/Destroy when a manager was obtain
 
 The manager fixture now rejects invisible marks with code 690037. Add four regressions for rejection/verified return, missing Visible, use of the NX enum value, and separate context marks preserving existing marks. Previous MCS, manager-failure, CAM and rollback scenarios run under this requirement. All **518 focused checks outside NX** pass, including **97 using C fixtures**. These test logic with synthetic data, not successful historical access in DC 2606.
 
-The next trial uses **V1.28** from the saved source PRT with the same plane. The experimental result does not need saving. Complete historical-support and mirrored-CAM transfer remain unconfirmed; the [SDK 2606 checklist](#replacement-probe-sdk-2606) is retained.
+The current trial uses **V1.29** from the saved source PRT with the same plane. The experimental result does not need saving. Complete historical-support and mirrored-CAM transfer remain unconfirmed; the [SDK 2606 checklist](#replacement-probe-sdk-2606) is retained.
 
 <a id="mcs-phase-v12701"></a>
 ## V1.27.01: expected MCS support state
@@ -49,7 +72,7 @@ Independent-body preparation, reflection of the separate candidate only, and che
 
 Add **15 regressions** using actual MCS validators over synthetic objects: X = −79, an oblique mirror, direct Face and Plane supports, exact selection order, damaged positions/normals/definitions, candidate preparation, and external sketches with restoration checks after Stop/Undo. Two new scenarios reproduce the premature −158 mm expectation against published V1.27 and pass with the fix. All **514 focused checks outside NX** pass, including the existing **97 using C fixtures**. These do not prove manager or CAM operation in DC 2606.
 
-The next check after this revision uses **V1.28**, described above. The experiment still ends with outer rollback even after successful reads; its result does not need saving. V1.27.01 introduced no new API; the [SDK 2606 checklist](#replacement-probe-sdk-2606) now also lists V1.28's curve readers. Complete project mirroring is still unconfirmed.
+After this revision, checks continued in V1.28; the current trial is **V1.29**, described above. The experiment still ends with outer rollback even after successful reads; its result does not need saving. V1.27.01 introduced no new API; the [SDK 2606 checklist](#replacement-probe-sdk-2606) now also lists V1.28's curve readers. Complete project mirroring is still unconfirmed.
 
 <a id="historical-probe-v127"></a>
 ## V1.27: historical-support access experiment
@@ -66,7 +89,7 @@ Even successful reading ends this branch and invokes the outer copy rollback. Ex
 
 **Checked outside NX:** 499 focused checks, including 97 using C fixtures. New scenarios cover the report's six links, external/internal contexts, Start/Update/Stop/Destroy/Undo failures, preserved R1 curves and On, rejection after damage, and exact C outputs. These test the protocol and ABI against our fixtures, not Siemens DLLs or DC 2606 compatibility.
 
-**Next NX run:** install V1.28, open the saved source PRT and run the same test with the selected plane. The complete report should show which contexts opened, which exact supports were readable, and whether each restoration and the outer rollback succeeded. The experimental result does not need saving; the disk file remains the initial PRT copy.
+The result of this run and the next V1.29 experiment with mandatory rollback are described above. The experimental result does not need saving; the disk file remains the initial PRT copy.
 
 The manager sequence comes from [older Siemens C++ documentation](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a56381.html), the start signature from [FeatureCollection, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.FeatureCollection.html), and bounds from [uf_modl_utilities.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl_utilities.html). **SDK 2606 is unavailable**: Python signatures, read-only manager use without a feature-editing Builder, intermediate-object visibility and actual restoration require DC 2606 verification. [Separate API checklist](#replacement-probe-sdk-2606).
 
@@ -151,7 +174,10 @@ V1.26 reads application data for the boundary and **each member**, using `UF_CAM
 
 | Methods / definitions | Outstanding verification |
 | --- | --- |
-| `UF_EVAL_initialize_2`, `UF_EVAL_is_line/is_arc/is_ellipse/is_spline/is_periodic`, `UF_EVAL_ask_limits/ask_arc/ask_ellipse/ask_spline/ask_spline_control_pts/ask_spline_knots/evaluate/free`, `UF_free`; `UF_EVAL_arc_t/ellipse_t/spline_t` | All new V1.28 calls: Windows 2606 exports/C ABI, struct/logical sizes and alignment, exact procedural-edge representations, ABS/parameterization/trim/periodicity, weights/knots, allocation ownership and release. Older contracts and C fixtures do not establish compatibility. |
+| `Part.Curves`, `CreateLine(Point3d, Point3d)`, `CreateArc(Point3d, Vector3d, Vector3d, radius, startAngle, endAngle)`, `CreateEllipse(Point3d, Vector3d, Vector3d, major, minor, startAngle, endAngle)` | V1.29: Python overloads in DC 2606, collection coverage, ABS directions, angle/trim semantics and actual periodicity, independent new tags and Undo removal. No creation run is confirmed yet. |
+| `UF_CURVE_create_spline(UF_CURVE_spline_t*, tag_t*, int*, UF_CURVE_state_t**)`, `UF_free` | V1.29: Windows C ABI, int rational flag, double-pointer states output, pole[4]/knot ownership, trim/periodicity and normalized domain. Every returned state is rejected; real kernel behavior and readback remain unverified. |
+| Sketch/support association definitions, complete constraints and Edge → Curve compatibility | Not implemented by V1.29. Native curve creation does not establish a valid replacement reference; never silently convert the definition or substitute a geometrically similar object. |
+| `UF_EVAL_initialize_2`, `UF_EVAL_is_line/is_arc/is_ellipse/is_spline/is_periodic`, `UF_EVAL_ask_limits/ask_arc/ask_ellipse/ask_spline/ask_spline_control_pts/ask_spline_knots/evaluate/free`, `UF_free`; `UF_EVAL_arc_t/ellipse_t/spline_t` | V1.28 read two Arc supports on this PRT; Line/Ellipse/Spline and all variants remain untested. Verify: Windows 2606 exports/C ABI, struct/logical sizes and alignment, exact procedural-edge representations, ABS/parameterization/trim/periodicity, weights/knots, allocation ownership and release. Older contracts and C fixtures do not establish compatibility. |
 | `StartEditWithRollbackManager(feature, mark)`, `EditWithRollbackManager.UpdateFeature/Stop/Destroy` | V1.27.02 passed Start/UpdateFeature/Stop/Destroy and checks after local Undo in three external sketch contexts on this PRT. Other consumer types and definition methods remain unverified. |
 | `Feature.Timestamp/Suppressed/IsInternal`, `UF_MODL_ask_current_feature` | Property types, eligible external consumers, current-feature values inside/after the manager, and complete history-state preservation. |
 | `UF_MODL_ask_bounding_box`, `Edge.GetVertices` | C ABI, reading intermediate/suppressed objects in the open context, ABS coordinates. Approximate bounds/endpoints do not define complete geometry. |
@@ -204,7 +230,9 @@ Sources: [older Siemens `uf_modl.h` header](https://github.com/feifeiwang/NXOPEN
 
 ## Latest release
 
-Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.28**. [Updater upgrade](updater.md#upgrading-to-v120).
+Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.29**. [Updater upgrade](updater.md#upgrading-to-v120).
+
+**V1.29 · 2026-11-16** — Create standalone reflected Curves after history restoration, read them back and perform mandatory local/outer Undo. Sketch/CAM references are not transferred yet. V1.28 established two Arc definitions. [Result and next stage](#native-curves-v129).
 
 **V1.28 · 2026-11-16** — Read Line/Arc/Ellipse/Spline through UF_EVAL_initialize_2 and check reflection in memory; mandatory rollback. V1.27.02 confirmed two-edge access across three NX contexts. [Definitions and result](#curve-definitions-v128).
 
@@ -280,13 +308,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. Y/Z are reflected and X completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.28 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.28 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.29 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.29 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.28**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.29**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. **If the historical-access or one-body experiment ran, it must roll back; do not save the experimental result.** The following inspection/save steps apply only to a successful full-project branch. Read the report; its text is available through **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -406,7 +434,7 @@ The V1.23 report passed the previous MCS “2” stop and both Three Planes rebu
 
 ## Files and validation
 
-V1.28: **562 focused checks outside NX**, including **122 C-fixture checks**. Curve definitions and in-memory reflection are also checked; new UF_EVAL calls remain untested in DC 2606. Coverage includes historical context/restoration, exact supports, expressions/warnings, R1 curves and On, primary/secondary failures, and protection against Undo in another part. Existing history, geometry, MCS/stock and CAM guards remain. This is not a real NX/SDK 2606 compatibility test.
+V1.29: **601 focused checks outside NX**, including **137 using C fixtures**. Definitions, reflection, candidate creation/readback and local rollback are tested with synthetic APIs. Regressions use the two measured Arc definitions from the V1.28 report; they do not reproduce the NX kernel. Existing exact-support, history, sketch, MCS/stock, CAM, primary/secondary failure and foreign-part Undo protections remain. Native creation in DC 2606 is untested; whole-project transfer remains unconfirmed.
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 

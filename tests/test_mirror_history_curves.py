@@ -134,9 +134,10 @@ class HistoricalCurveProtocolTests(unittest.TestCase):
             read.append((h.current,tag,h.events[-1][0]));return h.curve(tag)
         h.t.native.history_curve.side_effect=curve
         with self.assertRaises(M.HistoricalProbeComplete):h.p.run()
-        self.assertEqual(read,[(69574,64791,'start'),(69578,73591,'start'),(69582,73591,'start')])
+        self.assertEqual(read[:3],[(69574,64791,'start'),(69578,73591,'start'),(69582,73591,'start')])
+        self.assertEqual(read[3:],[(69595,900001,'mark'),(69595,900002,'mark')])
         self.assertEqual(h.snapshot(),before)
-        self.assertEqual(len([e for e in h.events if e[0]=='undo']),3)
+        self.assertEqual(len([e for e in h.events if e[0]=='undo']),4)
         self.assertIn('контекстов/рёбер 3; уникальных рёбер 2','\n'.join(h.t.lines))
         h.assert_no_geometry_edits(self)
 
