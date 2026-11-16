@@ -135,11 +135,12 @@ class HistoricalCurveProtocolTests(unittest.TestCase):
         h.t.native.history_curve.side_effect=curve
         with self.assertRaises(M.HistoricalProbeComplete):h.p.run()
         self.assertEqual(read[:3],[(69574,64791,'start'),(69578,73591,'start'),(69582,73591,'start')])
-        self.assertEqual(read[3:],[(69595,900001,'mark'),(69595,900002,'mark')])
+        self.assertEqual(read[3:5],[(69595,900001,'mark'),(69595,900002,'mark')])
+        self.assertEqual(read[5:],[(41,900001,'mark'),(41,900002,'mark')]*3)
         self.assertEqual(h.snapshot(),before)
         self.assertEqual(len([e for e in h.events if e[0]=='undo']),4)
         self.assertIn('контекстов/рёбер 3; уникальных рёбер 2','\n'.join(h.t.lines))
-        h.assert_no_geometry_edits(self)
+        h.assert_probe_candidates_only(self)
 
     def test_full_definition_exports_missing_stop_before_first_visible_mark(self):
         h=HistoryWorld();h.t.native.prepare_history_curve_api.side_effect=RuntimeError('missing UF_EVAL export')

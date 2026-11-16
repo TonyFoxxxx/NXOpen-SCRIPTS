@@ -120,7 +120,7 @@ class CandidateProtocolTests(unittest.TestCase):
         self.assertEqual(h.candidate_events,[(69595,'Arc',22),(69595,'Arc',22)])
         self.assertEqual(h.snapshot(),before)
         self.assertEqual(h.events[-3:],[('mark',103,1),('undo',103),('delete-mark',103)])
-        h.assert_no_geometry_edits(self)
+        h.assert_probe_candidates_only(self)
 
     def test_ellipse_constructor_receives_radii_and_reflected_axes_in_order(self):
         h=HistoryWorld();c=arc();c['kind']='Ellipse';del c['data']['radius']

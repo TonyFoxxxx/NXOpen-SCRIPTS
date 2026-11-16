@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock
 
-from test_mirror_replacement_probe import M, Body, Curve, Edge, Face, ownerless_support_report_world
+from test_mirror_replacement_probe import M, Body, Curve, Edge, Face, Selection, ownerless_support_report_world
 
 
 class VisibleUndoMarkRequired(RuntimeError):
@@ -27,6 +27,8 @@ class HistoryWorld:
         self.next_mark = 100
         self.next_curve = 900000
         self.candidates, self.candidate_events = {}, []
+        self.map_events = []
+        self.after_map = self.after_match = self.after_destroy_map = lambda:None
         self.after_create = lambda obj: None
         self.t.nx.Point3d = self.t.nx.Vector3d = lambda x,y,z:NS(X=x,Y=y,Z=z)
         self.t.part.Curves = CurveCollection(self)
@@ -40,6 +42,14 @@ class HistoryWorld:
         self.t.nx.Body = Body
         self.t.nx.Session = NS(MarkVisibility=NS(Invisible=0,Visible=1))
         self.t.nx.Features.EditWithRollbackManager = HistoryManager
+        self.t.nx.Features.MatchedReferenceBuilder = NS(Types=NS(Curve=71,Face=72,Object=73),
+            ResolvedStatus=NS(ByUser=81,BySystem=82,Initial=83,Unresolved=84))
+        self.t.part.Features.CreateReplaceFeatureBuilder = Mock(side_effect=self.map_builder)
+        self.w.after_extract = self.complete_candidate_body
+        self.t.native.delete_candidate_parameters.side_effect = self.remove_candidate_parameters
+        for index,obj in enumerate(self.w.body.faces+self.w.body.edges):
+            self.w.boxes[obj.Tag]=(2.,index+20.,0.,6.,index+21.,1.)
+        self.t.bounds = dict(self.w.boxes)
         self.t.part.Features.StartEditWithRollbackManager = Mock(side_effect=self.start)
         self.t.session = NS(Parts=NS(Work=self.t.part, Display=self.t.part),
             SetUndoMark=Mock(side_effect=self.mark), UndoToMark=Mock(side_effect=self.undo),
@@ -80,7 +90,7 @@ class HistoryWorld:
 
     def snapshot(self):
         return dict(current=self.current, objects=dict(self.w.objects), edges=self.w.body.edges[:], faces=self.w.body.faces[:],
-            features=self.t.part.Features[:], expressions=self.t.part.Expressions[:],
+            features=self.t.part.Features[:], bodies=self.t.part.Bodies[:], expressions=self.t.part.Expressions[:],
             feature_data={f.Tag:(f.Timestamp,f.Suppressed,f.IsInternal,f.warnings[:],f.parents[:])
                           for f in self.t.part.Features},
             expression_data={e.Tag:(e.Name,e.Type,e.RightHandSide,e.Units.Name) for e in self.t.part.Expressions},
@@ -93,6 +103,7 @@ class HistoryWorld:
         self.w.objects = dict(saved['objects'])
         self.w.body.edges, self.w.body.faces = saved['edges'][:], saved['faces'][:]
         self.t.part.Features[:] = saved['features']
+        self.t.part.Bodies[:] = saved['bodies']
         self.t.part.Expressions[:] = saved['expressions']
         for f in self.t.part.Features:
             stamp,suppressed,internal,warnings,parents = saved['feature_data'][f.Tag]
@@ -162,6 +173,51 @@ class HistoryWorld:
         self.t.transfer_mcs_and_stock.assert_not_called()
         self.t.setup.DeleteToolPath.assert_not_called()
 
+    def complete_candidate_body(self):
+        # Copy topology only in the fixture; real extraction/identity matching
+        # is deliberately unconfirmed until NX executes the new stage.
+        b=self.w.candidate
+        b.edges=[self.w.register(Edge(4010+i,b)) for i,_ in enumerate(self.w.body.edges)]
+        for original,new in zip(self.w.body.faces+self.w.body.edges,b.faces+b.edges):
+            self.w.boxes[new.Tag]=self.w.boxes[original.Tag]
+        f=b.features[0];f.Timestamp,f.Suppressed,f.IsInternal=101,False,False
+        self.current=f.Tag
+
+    def remove_candidate_parameters(self, tag):
+        self.w.remove_copy_parameters(tag)
+        f=self.w.candidate.features[0];f.Timestamp,f.Suppressed,f.IsInternal=102,False,False
+        self.current=f.Tag
+
+    def map_builder(self):
+        types=self.t.nx.Features.MatchedReferenceBuilder
+        parents=sorted({tag for feature in self.p.retained for tag,_ in self.w.references[feature]
+                        if isinstance(self.w.objects[tag],Edge)} | {11})
+        self.rows=[NS(ParentEntity=self.w.objects[tag],MatchedEntity=None,ReverseDirection=False,
+            Type=types.Types.Face if isinstance(self.w.objects[tag],Face) else types.Types.Curve if isinstance(self.w.objects[tag],Edge) else types.Types.Object,
+            MatchedStatus=types.ResolvedStatus.Initial,Validate=Mock(return_value=True)) for tag in parents]
+        def update():self.map_events.append('update');self.after_map()
+        def match(parent,target):
+            self.map_events.append(('match',parent.Tag,target.Tag))
+            for row in self.rows:
+                if row.ParentEntity.Tag==parent.Tag:row.MatchedEntity=target;row.MatchedStatus=types.ResolvedStatus.ByUser
+            self.after_match()
+        def destroy():self.map_events.append('destroy');self.after_destroy_map()
+        self.w.replace=NS(SelectFeature=Selection(),ReplacementFeature=Selection(),
+            FeatureReferences=NS(GetMatchedReferences=Mock(side_effect=lambda:self.rows[:]),Validate=Mock(return_value=True)),
+            UpdateMap=Mock(side_effect=update),SetMatchingForParent=Mock(side_effect=match),
+            Validate=Mock(return_value=True),Commit=Mock(side_effect=AssertionError('Historical map must not Commit')),
+            Destroy=Mock(side_effect=destroy))
+        return self.w.replace
+
+    def assert_probe_candidates_only(self, test):
+        test.assertEqual(self.w.events,['extract',('remove-parameters',(4000,)),('reflect',(4000,))])
+        self.t.part.Features.CreateReplaceFeatureBuilder.assert_called_once_with()
+        self.w.replace.Commit.assert_not_called()
+        self.w.replace.Destroy.assert_called_once_with()
+        self.t.native.delete_candidate_parameters.assert_called_once_with(4000)
+        self.t.transfer_mcs_and_stock.assert_not_called()
+        self.t.setup.DeleteToolPath.assert_not_called()
+
 
 class CurveCollection(list):
     def __init__(self, history):
@@ -221,7 +277,7 @@ class HistoricalProtocolTests(unittest.TestCase):
         self.assertIn('успешно 3; ошибок 0',report)
         for tag in (69574,69578,69582): self.assertIn('элемент '+str(tag),report)
         for tag in (64791,73591): h.w.objects[tag].GetBody.assert_not_called()
-        h.assert_no_geometry_edits(self)
+        h.assert_probe_candidates_only(self)
 
     def test_invisible_mark_reproduces_690037_and_local_return_without_reading_supports(self):
         h=HistoryWorld();before=h.snapshot()
@@ -263,14 +319,14 @@ class HistoricalProtocolTests(unittest.TestCase):
         self.assertEqual([e[1] for e in h.events if e[0]=='delete-mark'],created)
         self.assertEqual(set(h.marks),{55})
         self.assertEqual(h.mark_visibility,{55:1})
-        h.assert_no_geometry_edits(self)
+        h.assert_probe_candidates_only(self)
 
     def test_external_sketch_consumers_get_their_own_contexts(self):
         h=HistoryWorld()
         for tag in (69574,69578,69582): h.w.objects[tag].IsInternal=False
         with self.assertRaises(M.HistoricalProbeComplete): h.p.run()
         self.assertEqual([e[1] for e in h.events if e[0]=='start'],[69573,69574,69576,69578,69579,69582])
-        h.assert_no_geometry_edits(self)
+        h.assert_probe_candidates_only(self)
 
     def test_historical_face_requires_exact_membership_without_edge_vertices(self):
         h=HistoryWorld(); face=h.w.register(Face(64791,h.w.body))

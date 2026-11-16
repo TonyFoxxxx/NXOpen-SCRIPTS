@@ -155,7 +155,7 @@ class ProbeMcsTests(unittest.TestCase):
         self.assertEqual([e[1] for e in h.events if e[0]=='start'],[69574,69578,69582])
         self.assertEqual(len([e for e in h.events if e[0]=='undo']),4)
         self.assertEqual(trial.csys_frame(world.csys.Tag),before)
-        h.assert_no_geometry_edits(self)
+        h.assert_probe_candidates_only(self)
 
     def test_damaged_mcs_before_history_still_prevents_manager_start(self):
         h,world,trial,planes=self.historical_world()

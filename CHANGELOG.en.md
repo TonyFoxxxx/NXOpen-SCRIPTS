@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.30
+
+The V1.29 report confirms two standalone reflected Arcs, native readback with deviation 0.0, local/outer Undo and successful source checks. V1.30 extends this branch with an independent reflected BREP and explicit final/historical-support map in ReplaceFeatureBuilder. Require complete available rows, exact targets, Curve type and unchanged historical-reference direction, resolved status, both selections and Validate. Recheck candidate curves/body after map preparation and builder destruction.
+
+Do not call replacement Commit or rebind original history, sketches or CAM. The owned mark undoes all candidates, then verifies original membership/positions/references/MCS/stock/CAM before outer rollback. Preserve errors, codes, tracebacks and other-part protection. Add 34 regressions; all 635 focused checks outside NX pass, including 137 using C fixtures. The real map and actual replacement in DC 2606 remain unconfirmed. Synchronize version, SHA-256 and both documentation languages. [Result and limits](docs/en/mirror-project.md#historical-map-v130).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.29
 
 The V1.28 report establishes two historical Arc definitions with radii near 0.5 mm across three contexts, in-memory reflection checks and all restoration/source checks. After context cleanup, V1.29 creates one standalone Curve per unique edge, reads it back through UF_EVAL and compares its complete available definition and sample points. Line/Arc/Ellipse use CurveCollection; Spline uses UF_CURVE_create_spline with explicit parameter normalization and rejection of automatic fixes.

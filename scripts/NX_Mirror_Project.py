@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.29
-SCRIPT_VERSION = "V1.29"
+# SCRIPT_VERSION: V1.30
+SCRIPT_VERSION = "V1.30"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -1896,7 +1896,9 @@ class BodyReplacementProbe:
         if self.t.operation_snapshot() != self.operations:
             raise RuntimeError("Подготовка кандидата изменила состав операций")
 
-    def independent_copy(self):
+    def independent_copy(self, guard=None):
+        guard = (lambda:None) if guard is None else guard
+        guard()
         self.stage("Создание независимой копии тела / ExtractFaceBuilder")
         builder = self.t.part.Features.CreateExtractFaceBuilder(None)
         try:
@@ -1913,6 +1915,7 @@ class BodyReplacementProbe:
                     builder.HideOriginal or builder.BodyReverseDirection or builder.DeleteHoles or
                     builder.ParentPart != types.ParentPartType.WorkPart or not builder.Validate()):
                 raise RuntimeError("Не подтверждены параметры независимого извлечения тела")
+            guard()
             feature = builder.CommitFeature()
             bodies = probe_array(feature.GetBodies(), "Extract / GetBodies")
             if len(bodies) != 1 or int(bodies[0].Tag) in self.topology:
@@ -1921,6 +1924,7 @@ class BodyReplacementProbe:
             self.object(self.copy.Tag)
         finally:
             builder.Destroy()
+        guard()
         self.check_originals()
         # Removal is limited to the NEW independent candidate, never source
         # body history, sketches, Tooling Boxes or MCS.
@@ -1940,7 +1944,9 @@ class BodyReplacementProbe:
                         {int(e.Tag) for e in probe_array(expression.GetReferencingExpressions(), "Candidate / GetReferencingExpressions")} - candidate_expressions):
                     raise RuntimeError("У параметров кандидата есть внешние потребители")
         self.stage("Снятие параметров только нового тела / UF_MODL_delete_object_parms")
+        guard()
         self.t.native.delete_candidate_parameters(int(self.copy.Tag))
+        guard()
         self.copy_feature = self.plain_brep(self.copy)
         self.check_originals()
 
@@ -2012,11 +2018,21 @@ class BodyReplacementProbe:
         self.t.lines.append("Карта независимой копии: граней " + str(len(face_map)) +
                             "; рёбер " + str(len(edge_map)) + ". Соответствие взаимно однозначно.")
 
-    def reflect_candidate(self):
+    def reflect_candidate(self, guard=None):
+        guard = (lambda:None) if guard is None else guard
+        guard()
         self.stage("Отражение только нового независимого BREP")
         self.t.lines.append("Прямой вызов отражения кандидата: только тело " + str(self.copy.Tag))
         self.t.native.transform_entities([int(self.copy.Tag)], self.t.native.reflection_matrix(self.t.plane))
+        guard()
         self.copy_feature = self.plain_brep(self.copy)
+        self.check_reflected_candidate()
+        self.check_originals()
+
+    def check_reflected_candidate(self):
+        self.stage("Проверка отражённого тела-кандидата " + str(self.copy.Tag))
+        if int(self.plain_brep(self.copy).Tag) != int(self.copy_feature.Tag):
+            raise RuntimeError("Изменилась история отражённого тела-кандидата")
         actual = (tuple(sorted(int(f.Tag) for f in self.copy.GetFaces())),
                   tuple(sorted(int(e.Tag) for e in self.copy.GetEdges())))
         if actual != self.copy_topology:
@@ -2024,68 +2040,110 @@ class BodyReplacementProbe:
         for tag, box in self.copy_boxes.items():
             if not close_values(self.t.bounding_box(tag), reflected_box(box, 0, 0.0)):
                 raise RuntimeError("Не подтверждено отражение геометрии кандидата " + str(tag))
+
+    def prepare_replacement_map(self, builder, extra_curves=None, guard=None):
+        guard = (lambda:None) if guard is None else guard
+        guard()
+        # Additional historical curves are allowed only by the non-committing
+        # experiment. Its caller has already read and checked their geometry.
+        extra_curves = {} if extra_curves is None else dict(extra_curves)
+        if (set(extra_curves) & (set(self.map) | self.old) or
+                len(set(extra_curves.values())) != len(extra_curves) or
+                set(extra_curves.values()) & set(self.map.values())):
+            raise RuntimeError("Неоднозначная дополнительная карта исторических кривых")
+        for source,target in extra_curves.items():
+            parent, matched = self.object(source), self.object(target)
+            if (not isinstance(parent,self.t.nx.Edge) or not isinstance(matched,self.t.nx.Curve) or
+                    isinstance(matched,self.t.nx.Edge) or int(source) == int(target)):
+                raise RuntimeError("Карта исторической опоры требует Edge → отдельная Curve")
+        reference_type = self.t.nx.Features.MatchedReferenceBuilder if extra_curves else None
+        method = self.t.nx.Features.ReplaceFeatureBuilder.MappingMethodType.MapOnlyObjectsWithModelingDependencies
+        builder.MappingMethod = method
+        builder.DoAutomaticGeomMatch = False
+        builder.CopyReplacementFeature = True
+        builder.DeleteOriginalFeature = True
+        original = [f for tag, f in self.features.items() if tag in self.old]
+        builder.SelectFeature.Add(original)
+        builder.ReplacementFeature.Add([self.copy_feature])
+        def check_selections():
+            selected = probe_array(builder.SelectFeature.GetArray(), "SelectFeature.GetArray")
+            replacement = probe_array(builder.ReplacementFeature.GetArray(), "ReplacementFeature.GetArray")
+            if (Counter(int(f.Tag) for f in selected) != Counter(self.old) or
+                    tuple(int(f.Tag) for f in replacement) != (int(self.copy_feature.Tag),)):
+                raise RuntimeError("Редактор замены содержит другой выбор исходных/заменяющих элементов")
+        check_selections()
+        if (builder.MappingMethod != method or builder.DoAutomaticGeomMatch or
+                not builder.CopyReplacementFeature or not builder.DeleteOriginalFeature):
+            raise RuntimeError("NX не подтвердил режим явной замены с копированием кандидата")
+        self.stage("Заполнение карты / ReplaceFeatureBuilder.UpdateMap")
+        guard()
+        builder.UpdateMap()
+        self.stage("Чтение опор / FeatureReferences.GetMatchedReferences")
+        guard()
+        rows = probe_array(builder.FeatureReferences.GetMatchedReferences(), "GetMatchedReferences")
+        parents, directions = [], {}
+        mapping = dict(self.map)
+        mapping.update(extra_curves)
+        mapping.update((tag, int(self.copy_feature.Tag)) for tag in self.old)
+        for row in rows:
+            parent = row.ParentEntity
+            tag = probe_tag(parent.Tag, "ParentEntity")
+            self.object(tag)
+            if tag not in mapping:
+                raise RuntimeError("Нет проверенного соответствия опоре редактора: " +
+                                   type(parent).__name__ + " " + str(tag))
+            if type(row.ReverseDirection) is not bool:
+                raise RuntimeError("Не прочитан ReverseDirection опоры " + str(tag))
+            if tag in directions and directions[tag] != row.ReverseDirection:
+                raise RuntimeError("Неоднозначные направления повторной опоры " + str(tag))
+            if tag in extra_curves:
+                self.t.lines.append("Строка исторической опоры: " + str(tag) +
+                    "; Type=" + str(row.Type) + "; ReverseDirection=" + str(row.ReverseDirection))
+                if row.Type != reference_type.Types.Curve or row.ReverseDirection:
+                    raise RuntimeError("Не подтверждена одиночная Curve-строка без разворота для исторического Edge " + str(tag))
+            parents.append(tag)
+            directions[tag] = row.ReverseDirection
+        required = {p for tag in self.retained for p, _ in self.initial_refs[tag] if p in self.map} | set(extra_curves)
+        if required - set(parents):
+            raise RuntimeError("Редактор не включил в явную карту используемые геометрические опоры: " +
+                               str(sorted(required - set(parents))))
+        for tag in dict.fromkeys(parents):
+            self.stage("Сопоставление опоры " + str(tag) + " → " + str(mapping[tag]) + " / SetMatchingForParent")
+            guard()
+            builder.SetMatchingForParent(self.object(tag), self.object(mapping[tag]))
+        self.stage("Повторное чтение явной карты")
+        guard()
+        checked = probe_array(builder.FeatureReferences.GetMatchedReferences(), "Повторное GetMatchedReferences")
+        if Counter(int(row.ParentEntity.Tag) for row in checked) != Counter(parents):
+            raise RuntimeError("Изменился состав опор редактора замены")
+        for row in checked:
+            tag = int(row.ParentEntity.Tag)
+            self.stage("Проверка строки карты " + str(tag) + " → " + str(mapping[tag]))
+            if (row.MatchedEntity is None or int(row.MatchedEntity.Tag) != mapping[tag] or
+                    row.ReverseDirection != directions[tag] or not row.Validate()):
+                raise RuntimeError("Не подтверждено явное сопоставление опоры " + str(tag))
+            if tag in extra_curves:
+                self.object(row.MatchedEntity.Tag)
+                if (row.Type != reference_type.Types.Curve or type(row.ReverseDirection) is not bool or
+                        row.MatchedStatus not in (reference_type.ResolvedStatus.ByUser,reference_type.ResolvedStatus.BySystem)):
+                    raise RuntimeError("Не подтверждены тип/статус строки исторической опоры " + str(tag))
+                self.t.lines.append("Историческая опора в карте: " + str(tag) + " → " + str(mapping[tag]) +
+                    "; Curve; статус=" + str(row.MatchedStatus) + ". Это чтение карты, не перенос связи.")
+            self.t.lines.append("Карта редактора: " + str(tag) + " → " + str(mapping[tag]) +
+                                "; ReverseDirection=" + str(row.ReverseDirection))
+        self.stage("Проверка полной карты / Validate")
+        guard()
+        if not builder.FeatureReferences.Validate() or not builder.Validate():
+            raise RuntimeError("Редактор замены отклонил полную карту опор")
+        guard()
+        check_selections()
         self.check_originals()
 
     def replace(self):
         self.stage("Явная карта замены / ReplaceFeatureBuilder")
         builder = self.t.part.Features.CreateReplaceFeatureBuilder()
         try:
-            method = self.t.nx.Features.ReplaceFeatureBuilder.MappingMethodType.MapOnlyObjectsWithModelingDependencies
-            builder.MappingMethod = method
-            builder.DoAutomaticGeomMatch = False
-            builder.CopyReplacementFeature = True
-            builder.DeleteOriginalFeature = True
-            original = [f for tag, f in self.features.items() if tag in self.old]
-            builder.SelectFeature.Add(original)
-            builder.ReplacementFeature.Add([self.copy_feature])
-            def check_selections():
-                selected = probe_array(builder.SelectFeature.GetArray(), "SelectFeature.GetArray")
-                replacement = probe_array(builder.ReplacementFeature.GetArray(), "ReplacementFeature.GetArray")
-                if (Counter(int(f.Tag) for f in selected) != Counter(self.old) or
-                        tuple(int(f.Tag) for f in replacement) != (int(self.copy_feature.Tag),)):
-                    raise RuntimeError("Редактор замены содержит другой выбор исходных/заменяющих элементов")
-            check_selections()
-            if (builder.MappingMethod != method or builder.DoAutomaticGeomMatch or
-                    not builder.CopyReplacementFeature or not builder.DeleteOriginalFeature):
-                raise RuntimeError("NX не подтвердил режим явной замены с копированием кандидата")
-            builder.UpdateMap()
-            rows = probe_array(builder.FeatureReferences.GetMatchedReferences(), "GetMatchedReferences")
-            parents, directions = [], {}
-            mapping = dict(self.map)
-            mapping.update((tag, int(self.copy_feature.Tag)) for tag in self.old)
-            for row in rows:
-                parent = row.ParentEntity
-                tag = probe_tag(parent.Tag, "ParentEntity")
-                self.object(tag)
-                if tag not in mapping:
-                    raise RuntimeError("Нет проверенного соответствия опоре редактора: " +
-                                       type(parent).__name__ + " " + str(tag))
-                if type(row.ReverseDirection) is not bool:
-                    raise RuntimeError("Не прочитан ReverseDirection опоры " + str(tag))
-                if tag in directions and directions[tag] != row.ReverseDirection:
-                    raise RuntimeError("Неоднозначные направления повторной опоры " + str(tag))
-                parents.append(tag)
-                directions[tag] = row.ReverseDirection
-            required = {p for tag in self.retained for p, _ in self.initial_refs[tag] if p in self.map}
-            if required - set(parents):
-                raise RuntimeError("Редактор не включил в явную карту используемые геометрические опоры: " +
-                                   str(sorted(required - set(parents))))
-            for tag in dict.fromkeys(parents):
-                builder.SetMatchingForParent(self.object(tag), self.object(mapping[tag]))
-            checked = probe_array(builder.FeatureReferences.GetMatchedReferences(), "Повторное GetMatchedReferences")
-            if Counter(int(row.ParentEntity.Tag) for row in checked) != Counter(parents):
-                raise RuntimeError("Изменился состав опор редактора замены")
-            for row in checked:
-                tag = int(row.ParentEntity.Tag)
-                if (row.MatchedEntity is None or int(row.MatchedEntity.Tag) != mapping[tag] or
-                        row.ReverseDirection != directions[tag] or not row.Validate()):
-                    raise RuntimeError("Не подтверждено явное сопоставление опоры " + str(tag))
-                self.t.lines.append("Карта редактора: " + str(tag) + " → " + str(mapping[tag]) +
-                                    "; ReverseDirection=" + str(row.ReverseDirection))
-            if not builder.FeatureReferences.Validate() or not builder.Validate():
-                raise RuntimeError("Редактор замены отклонил полную карту опор")
-            check_selections()
-            self.check_originals()
+            self.prepare_replacement_map(builder)
             self.stage("Пробная замена истории одного тела / ReplaceFeatureBuilder.Commit")
             builder.Commit()
         finally:
@@ -2170,11 +2228,7 @@ class BodyReplacementProbe:
 
 
 class HistoricalReferenceProbe:
-    """Read historical curve definitions, check reflection, then outer Undo.
-
-    Reflection is plain-data arithmetic only. No extraction, feature edits,
-    reference remapping or NX geometry creation/transformation is performed.
-    """
+    """Read history without edits; restored state gates later candidate probes."""
     def __init__(self, replacement, supports):
         self.p, self.t = replacement, replacement.t
         self.supports = tuple(supports)
@@ -2199,7 +2253,7 @@ class HistoricalReferenceProbe:
                 self.t.lines.append("Код NX/API (" + attribute + "): " + str(code))
         self.t.lines.append("".join(traceback.format_exception(type(error), error, error.__traceback__)))
 
-    def feature_states(self):
+    def feature_states(self, extra_features=()):
         result = {}
         for feature in self.t.part.Features:
             tag = probe_tag(feature.Tag, "Состояние истории")
@@ -2209,7 +2263,7 @@ class HistoricalReferenceProbe:
                     type(internal) is not bool or tag in result):
                 raise RuntimeError("Не прочитаны Timestamp/Suppressed/IsInternal элемента " + str(tag))
             result[tag] = (stamp, suppressed, internal)
-        if set(result) != set(self.p.features):
+        if set(result) != set(self.p.features) | set(extra_features):
             raise RuntimeError("Изменился состав элементов при проверке исторических опор")
         return result
 
@@ -2468,6 +2522,8 @@ class HistoricalCurveCandidateProbe:
     def preflight(self):
         self.stage("Проверка исходного состояния и API")
         self.h.verify_restored("до создания отдельных кривых")
+        if self.p.copy is not None or self.p.copy_feature is not None or self.p.map:
+            raise RuntimeError("До прототипа кривых уже существует кандидат замены тела")
         self.initial = self.inventory()
         self.planned = {tag:history_curve_candidate_definition(reflected_history_curve(curve,self.t.plane))
                         for tag,(_,curve) in self.h.shared_curves.items()}
@@ -2530,6 +2586,7 @@ class HistoricalCurveCandidateProbe:
                     "; отклонение=" + str(error) + ". Это новая отдельная кривая, а не подмена исходного ребра.")
             self.h.verify_restored("после проверки всех новых кривых")
             self.check_inventory()
+            HistoricalReplacementMapProbe(self).run()
         except Exception as error:
             primary, primary_trace, failure_stage = error, error.__traceback__, self.t.stage
         finally:
@@ -2537,9 +2594,12 @@ class HistoricalCurveCandidateProbe:
                 self.stage("Локальный Undo новых кривых")
                 self.h.require_copy()
                 self.t.session.UndoToMark(mark,None)
+                # Restoration must require ONLY original bodies/features. Do
+                # not keep a stale candidate exemption after Undo returns.
+                self.p.copy, self.p.copy_feature, self.p.map = None, None, {}
                 self.h.verify_restored("локальный Undo новых кривых")
                 self.check_inventory(include_candidates=False)
-                self.t.lines.append("Локальный Undo новых кривых выполнен; исходная коллекция, история, MCS/заготовки и CAM проверены.")
+                self.t.lines.append("Локальный Undo новых кривых выполнен; исходная коллекция, состав тел, история, MCS/заготовки и CAM проверены.")
                 self.stage("Удаление собственной метки новых кривых")
                 self.t.session.DeleteUndoMark(mark,None)
             except Exception as error:
@@ -2553,8 +2613,71 @@ class HistoricalCurveCandidateProbe:
             self.t.stage,error = cleanup[0]
             raise error
         raise HistoricalProbeComplete("Созданы и проверены отдельные отражённые кривые: " + str(len(self.created)) +
-            ". Локальный откат проверен; выполняется общий откат. Привязки эскизов, ограничения и CAM не переносились. " +
-            "Кандидаты Curve не объявляются заменами исходных Edge.")
+            ". Подготовлена и проверена карта с отражённым телом-кандидатом без Commit. " +
+            "Локальный откат проверен; выполняется общий откат. Привязки эскизов, ограничения и CAM не переносились.")
+
+
+class HistoricalReplacementMapProbe:
+    """Check a proposed complete replacement map. NEVER commit this branch."""
+    def __init__(self, curves):
+        self.c, self.h, self.p, self.t = curves, curves.h, curves.p, curves.t
+
+    def verify_candidates(self):
+        self.h.require_copy()
+        self.p.check_originals()
+        self.p.check_reflected_candidate()
+        feature = probe_tag(self.p.plain_brep(self.p.copy).Tag,"BREP кандидата карты")
+        states = self.h.feature_states((feature,))
+        if {tag:states[tag] for tag in self.h.states} != self.h.states:
+            raise RuntimeError("Подготовка карты изменила состояние исходных элементов")
+        if self.h.expression_state() != self.h.expressions:
+            raise RuntimeError("Подготовка карты изменила определения выражений")
+        if self.t.native.current_feature(int(self.t.part.Tag)) not in (self.h.current,feature):
+            raise RuntimeError("Текущий элемент при подготовке карты не исходный и не BREP кандидата")
+        self.c.check_inventory()
+        for source,tag in sorted(self.c.created.items()):
+            self.t.stage = "Прототип карты / повторная проверка кривой " + str(source) + " → " + str(tag)
+            check_created_history_curve(self.c.planned[source],self.t.native.history_curve(tag))
+
+    def run(self):
+        if set(self.c.created) != set(self.h.shared_curves):
+            raise RuntimeError("Нет проверенной кривой для каждой исторической опоры")
+        if any(owner != self.p.body_tag for owner,_ in self.h.shared_curves.values()):
+            raise RuntimeError("Исторические опоры карты не принадлежат выбранному телу")
+        self.h.require_copy()
+        self.t.lines.append("ПРОТОТИП КАРТЫ ЗАМЕНЫ: независимое отражённое тело и отдельные кривые; " +
+            "проверка полной доступной карты через ReplaceFeatureBuilder БЕЗ Commit. Затем обязательный откат.")
+        self.p.independent_copy(self.h.require_copy)
+        self.h.require_copy()
+        self.p.match_topology()
+        self.h.require_copy()
+        self.p.reflect_candidate(self.h.require_copy)
+        self.verify_candidates()
+        self.t.stage = "Прототип карты / CreateReplaceFeatureBuilder"
+        self.h.require_copy()
+        builder = self.t.part.Features.CreateReplaceFeatureBuilder()
+        primary, primary_trace, failure_stage, cleanup = None, None, None, None
+        try:
+            self.p.prepare_replacement_map(builder,self.c.created,self.h.require_copy)
+            self.verify_candidates()
+            self.t.lines.append("Карта отражённого тела и исторических кривых проверена редактором. " +
+                "Commit не вызывался; допустимость фактической замены и сохранение ограничений ещё не доказаны.")
+        except Exception as error:
+            primary, primary_trace, failure_stage = error, error.__traceback__, self.t.stage
+        finally:
+            try:
+                self.t.stage = "Прототип карты / Destroy редактора без Commit"
+                self.h.require_copy()
+                builder.Destroy()
+            except Exception as error:
+                cleanup = error
+                self.h.record_error("Ошибка закрытия редактора карты",self.t.stage,error)
+        if primary is not None:
+            self.t.stage = failure_stage
+            raise primary.with_traceback(primary_trace)
+        if cleanup is not None:
+            raise cleanup
+        self.verify_candidates()
 
 
 class Trial:
