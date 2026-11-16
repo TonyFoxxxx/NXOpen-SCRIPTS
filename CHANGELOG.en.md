@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.30.06
+
+V1.30.05 confirmed UF cycling, first-collector copying/unfiltered comparison, destruction and preserved original settings. It then stopped at Part Box collector modes without printing their actual values. V1.30.06 prints/preserves both bools and checks them before/after reading and across later stages. Locality is established from each exact BodyDumb object's ownership, not an option permitting broader selection. Errors/non-booleans, foreign bodies, occurrences, unknown rules and incomplete maps still stop progress. Tooling Box modes/offsets remain unchanged; no Commit is added.
+
+Add 19 regressions: 763 focused checks outside NX in total, including the existing 147 using C fixtures. Actual Part Box options and the map remain unconfirmed in DC 2606. V1.30.06, SHA-256, README and RU/EN guides are aligned. [Result and next run](docs/en/mirror-project.md#collector-modes-v13006).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.30.05
 
 V1.30.04 confirmed SleepyEntity=True and one BodyDumb read through AskRulesAndCollectedEntities, then stopped before CopyCollector: the internal source collector was absent from Part.ScCollectors. Replace that inventory with read-only UF_OBJ_cycle_all / UF_OBJ_ask_type_and_subtype using the installed UF_smart_container_type. Check complete/bounded cycling, freshness against all preexisting tags, exactly one new internal container, destruction and no remnants after Undo. Unreadable data is never empty; original rules/filters remain untouched and no Commit is added.

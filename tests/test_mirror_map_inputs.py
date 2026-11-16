@@ -230,10 +230,10 @@ class MapInputsTests(unittest.TestCase):
         h=CollectorWorld();h.rules.append(BodyDumbRule(h))
         self.rejected(h,'Определение и вычисленный выбор')
 
-    def test_nonlocal_nonfeature_or_unreadable_modes_are_rejected(self):
-        for modes in ([True,False],[False,True],[0,False],[False,None]):
+    def test_unreadable_modes_are_rejected_without_boolean_coercion(self):
+        for modes in ([0,False],[False,None],[1,False],[False,'True']):
             h=CollectorWorld();h.modes=modes
-            with self.subTest(modes=modes):self.rejected(h,'локальный модельный режим')
+            with self.subTest(modes=modes):self.rejected(h,'Не прочитан bool режима')
 
     def test_collector_row_type_and_reverse_are_checked(self):
         for field,value in [('Type',999),('ReverseDirection',True)]:

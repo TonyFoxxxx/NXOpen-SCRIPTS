@@ -32,16 +32,16 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.30.05 | CAM-copy trial; historical-support access and one-body experiments with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.30.06 | CAM-copy trial; historical-support access and one-body experiments with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.20 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.30.05 · 2026-11-16
+### Latest update — Mirrored CAM project trial V1.30.06 · 2026-11-16
 
-V1.30.04 read BodyDumb and filter values, but the source ScCollector was absent from the public collection. V1.30.05 uses UF database cycling to inventory internal objects and verify clone creation/deletion. Original rules/filters remain unchanged. [Report, checks and limits](docs/en/mirror-project.md#collector-inventory-v13005).
+V1.30.05 confirmed UF cycling and temporary ScCollector checks, then stopped at Part Box modes. V1.30.06 preserves these options, prints their values and verifies locality through every BodyDumb input. Tooling Box settings, map completeness and rollback remain guarded. [Report, checks and limits](docs/en/mirror-project.md#collector-modes-v13006).
 
-All **744 focused checks outside NX** pass, including **147 using C fixtures**. New cycling and the temporary collector remain untested in DC 2606. Next run: **V1.30.05** from the saved source PRT with the same plane. This branch still has no Commit and requires rollback; do not save the experimental copy.
+All **763 focused checks outside NX** pass, including **147 using C fixtures**. Next run: **V1.30.06** from the saved source PRT with the same plane, to check actual options and map behavior in DC 2606. This branch still has no Commit and requires rollback; do not save the experimental copy.
 
 ### Also released — Setup sheets V2.70 · 2026-11-16
 

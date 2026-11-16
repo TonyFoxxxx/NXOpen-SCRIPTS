@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.30.05
-SCRIPT_VERSION = "V1.30.05"
+# SCRIPT_VERSION: V1.30.06
+SCRIPT_VERSION = "V1.30.06"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -1791,6 +1791,33 @@ class ReplacementMapInputs:
             self.rule_reports.add(key)
         return result
 
+    def mode_state(self, collector, report=True):
+        """Preserve collector options; establish locality from rule objects.
+
+        MultiComponent permits multi-part selection but does not prove that
+        one was made. NonFeatureMode controls references to feature data, not
+        body ownership. Neither option is changed or inferred from the owner
+        feature's name/type. This reader is confined to explicit local
+        BodyDumb inputs and the no-Commit map probe.
+        """
+        tag, modes = int(collector.Tag), []
+        names = ("MultiComponent", "NonFeatureMode")
+        for name in names:
+            self.p.stage("ScCollector " + str(tag) + " / Get" + name)
+            value = getattr(collector, "Get" + name)()
+            if type(value) is not bool:
+                raise RuntimeError("Не прочитан bool режима ScCollector " + str(tag) + " / " + name +
+                                   ": тип=" + type(value).__name__ + "; значение=" + repr(value)[:256])
+            modes.append(value)
+        modes = tuple(modes)
+        key = ("modes", tag, modes)
+        if report and key not in self.rule_reports:
+            self.t.lines.append("Режимы ScCollector " + str(tag) + ": " +
+                "; ".join(name + "=" + str(value) + " (bool)" for name, value in zip(names, modes)) +
+                ". Опции не изменялись; принадлежность проверяется по объектам правил.")
+            self.rule_reports.add(key)
+        return modes
+
     def inventory(self):
         self.guard()
         self.p.stage("Состав внутренних коллекций / UF_OBJ_cycle_all")
@@ -1917,7 +1944,8 @@ class ReplacementMapInputs:
             raise RuntimeError("Изменился класс коллекции опор " + str(tag))
         state, grouped = self.read_state(collector)
         if tag in self.observed and state != self.observed[tag]:
-            raise RuntimeError("Изменилось определение/фильтры ScCollector " + str(tag) + ": " + str(state[3]))
+            raise RuntimeError("Изменилось определение/фильтры ScCollector " + str(tag) +
+                               "; режимы=" + str(state[2]) + "; фильтры=" + str(state[3]))
         self.observed.setdefault(tag, state)
         if grouped and any(enabled for _, _, enabled in state[3]):
             self.unfiltered_check(collector, state)
@@ -1927,6 +1955,7 @@ class ReplacementMapInputs:
         """Read without editing or recursively checking another clone."""
         self.guard()
         tag = int(collector.Tag)
+        modes = self.mode_state(collector, report)
         filters = self.filter_state(collector, report)
         def bodies(values, context):
             tags = []
@@ -1963,9 +1992,8 @@ class ReplacementMapInputs:
                 raise RuntimeError("Изменился вычисленный выбор ScCollector при чтении: " + str(tag))
         if Counter(members) != Counter(body for _, tags in definitions for body in tags):
             raise RuntimeError("Определение и вычисленный выбор ScCollector различаются: " + str(tag))
-        modes = (collector.GetMultiComponent(), collector.GetNonFeatureMode())
-        if any(type(value) is not bool for value in modes) or any(modes):
-            raise RuntimeError("Не подтверждён локальный модельный режим ScCollector " + str(tag))
+        if self.mode_state(collector, report=False) != modes:
+            raise RuntimeError("Изменились режимы при чтении ScCollector " + str(tag))
         if self.filter_state(collector, report=False) != filters:
             raise RuntimeError("Изменились фильтры при чтении ScCollector " + str(tag))
         self.guard()
@@ -1985,7 +2013,7 @@ class ReplacementMapInputs:
             current = self.read_state(self.p.object(tag), report=False)[0]
             if current != saved:
                 raise RuntimeError("Изменилось прочитанное состояние ScCollector " + str(tag) +
-                                   "; фильтры=" + str(current[3]))
+                                   "; режимы=" + str(current[2]) + "; фильтры=" + str(current[3]))
         for tag, saved in self.states.items():
             if self.state(tag) != saved:
                 raise RuntimeError("Изменилось определение ScCollector " + str(tag))
