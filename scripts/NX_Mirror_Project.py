@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.30.02
-SCRIPT_VERSION = "V1.30.02"
+# SCRIPT_VERSION: V1.30.03
+SCRIPT_VERSION = "V1.30.03"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -1661,6 +1661,80 @@ class ReplacementMapInputs:
         self.p, self.t, self.states = probe, probe.t, {}
         self.rule_reports = set()
 
+    def rule_types(self, rules, tag):
+        expected = self.t.nx.SelectionIntentRule.RuleType.BodyDumb
+        kinds = []
+        for index, rule in enumerate(rules, 1):
+            self.p.stage("ScCollector " + str(tag) + " / правило " + str(index) + " / SelectionIntentRule.Type")
+            kind = rule.Type
+            if not isinstance(rule, self.t.nx.SelectionIntentRule) or kind != expected:
+                raise RuntimeError("Нет проверенного чтения правила ScCollector " + str(tag) + ": " +
+                                   type(rule).__name__ + "; Type=" + str(kind) +
+                                   "; BodyDumb установленного NX=" + str(expected))
+            kinds.append(kind)
+        if not kinds:
+            raise RuntimeError("Не прочитаны правила ScCollector " + str(tag))
+        return tuple(kinds)
+
+    def collected_body_rules(self, collector, rules, kinds, bodies):
+        """NX 2312+ per-rule membership query, only for explicit BodyDumb.
+
+        This is not GetObjects used as a rule definition. The API supplies a
+        separate object count for each rule. Reject filtering, incomplete
+        partitions and any other intent. No casts or rule writes are needed.
+        The installed DC 2606 binding/semantics still need a real NX check;
+        this reader is used only by the no-Commit replacement-map probe.
+        """
+        tag = int(collector.Tag)
+        self.p.stage("ScCollector " + str(tag) + " / фильтры вычисления")
+        enum = self.t.nx.ScEvaluationFiltertype
+        names = tuple(sorted(name for name in dir(enum) if not name.startswith("_") and name != "ValueOf"))
+        if not {"SleepyEntity", "LaminarEdge", "MinimumBody", "SheetBody", "FacetEntity"}.issubset(names):
+            raise RuntimeError("Не прочитано перечисление фильтров ScCollector " + str(tag))
+        # Query every exposed member, including new installed filter values.
+        # Unknown members/errors must not be treated as disabled filters.
+        for name in names:
+            enabled = collector.IsEvaluationFilterEnabled(getattr(enum, name))
+            if type(enabled) is not bool or enabled:
+                raise RuntimeError("Не подтверждено отсутствие фильтра ScCollector " + str(tag) + ": " + name)
+        self.p.stage("ScCollector " + str(tag) + " / AskRulesAndCollectedEntities")
+        result = probe_array(collector.AskRulesAndCollectedEntities(), "AskRulesAndCollectedEntities")
+        if len(result) != 3:
+            raise RuntimeError("AskRulesAndCollectedEntities: требуется (objects, rules, counts)")
+        objects = probe_array(result[0], "AskRulesAndCollectedEntities.objects")
+        returned = probe_array(result[1], "AskRulesAndCollectedEntities.rules")
+        counts = probe_array(result[2], "AskRulesAndCollectedEntities.counts")
+        if self.rule_types(returned, tag) != kinds:
+            raise RuntimeError("AskRulesAndCollectedEntities: изменился состав/порядок правил " + str(tag))
+        if (len(counts) != len(rules) or any(type(n) is not int or n <= 0 for n in counts) or
+                sum(counts) != len(objects)):
+            raise RuntimeError("AskRulesAndCollectedEntities: неполное или неоднозначное разбиение объектов " + str(tag))
+        definitions, start = [], 0
+        for index, (rule, kind, count) in enumerate(zip(returned, kinds, counts), 1):
+            context = "AskRulesAndCollectedEntities / ScCollector " + str(tag) + " / правило " + str(index)
+            self.p.stage(context)
+            tags = bodies(objects[start:start + count], context)
+            # If either query supplies a derived wrapper, cross-check its
+            # explicit data too. A failed GetData is never bypassed.
+            for view in (rules[index - 1], rule):
+                if isinstance(view, self.t.nx.BodyDumbRule):
+                    self.p.stage(context + " / BodyDumbRule.GetData")
+                    if bodies(view.GetData(), "BodyDumbRule.GetData " + str(tag)) != tags:
+                        raise RuntimeError(context + ": GetData и объекты правила различаются")
+            definitions.append((kind, tags))
+            start += count
+        if (self.rule_types(rules, tag) != kinds or self.rule_types(returned, tag) != kinds or
+                self.rule_types(probe_array(collector.GetRules(), "ScCollector.GetRules повторно"), tag) != kinds):
+            raise RuntimeError("Изменился тип/состав правил при чтении ScCollector " + str(tag))
+        report = (tag, "AskRulesAndCollectedEntities", tuple(counts), tuple(definitions))
+        if report not in self.rule_reports:
+            self.t.lines.append("Чтение правил ScCollector " + str(tag) +
+                ": AskRulesAndCollectedEntities; только BodyDumb; counts=" + str(counts) +
+                "; тела по правилам=" + str(tuple(tags for _, tags in definitions)) +
+                "; включённых фильтров нет: " + ", ".join(names))
+            self.rule_reports.add(report)
+        return definitions
+
     def state(self, tag):
         self.p.stage("Чтение определения ScCollector " + str(tag))
         collector = self.p.object(tag)
@@ -1678,18 +1752,11 @@ class ReplacementMapInputs:
             return tuple(tags)
         members = bodies(collector.GetObjects(), "ScCollector.GetObjects " + str(tag))
         rules, definitions = probe_array(collector.GetRules(), "ScCollector.GetRules"), []
-        if not rules:
-            raise RuntimeError("Не прочитаны правила ScCollector " + str(tag))
-        for index, rule in enumerate(rules, 1):
-            self.p.stage("ScCollector " + str(tag) + " / правило " + str(index) + " / SelectionIntentRule.Type")
+        kinds = self.rule_types(rules, tag)
+        grouped = any(not isinstance(rule, self.t.nx.BodyDumbRule) for rule in rules)
+        for index, (rule, kind) in enumerate(zip(rules, kinds), 1):
             expected = self.t.nx.SelectionIntentRule.RuleType.BodyDumb
-            kind = rule.Type
-            if not isinstance(rule, self.t.nx.SelectionIntentRule) or kind != expected:
-                raise RuntimeError("Нет проверенного чтения правила ScCollector " + str(tag) + ": " +
-                                   type(rule).__name__ + "; Type=" + str(kind) +
-                                   "; BodyDumb установленного NX=" + str(expected))
-            typed = isinstance(rule, self.t.nx.BodyDumbRule)
-            route = "rule.GetData()" if typed else "BodyDumbRule.GetData(rule)"
+            route = "AskRulesAndCollectedEntities" if grouped else "rule.GetData()"
             self.p.stage("ScCollector " + str(tag) + " / правило " + str(index) + " / " + route)
             report = (tag, index, type(rule).__name__, str(kind), str(expected), route)
             if report not in self.rule_reports:
@@ -1697,15 +1764,15 @@ class ReplacementMapInputs:
                     ": оболочка=" + type(rule).__name__ + "; Type=" + str(kind) +
                     "; BodyDumb установленного NX=" + str(expected) + "; вызов=" + route)
                 self.rule_reports.add(report)
-            # GetRules returned a base SelectionIntentRule in the DC 2606
-            # report. Semantic type is checked before this public read call.
-            # The binding may reject the explicit receiver: propagate that
-            # error, never cast handles, reconstruct rules or use GetObjects
-            # as a substitute for unreadable rule data.
-            data = rule.GetData() if typed else self.t.nx.BodyDumbRule.GetData(rule)
-            if rule.Type != kind:
-                raise RuntimeError("Изменился тип правила при чтении ScCollector " + str(tag))
-            definitions.append((kind, bodies(data, "BodyDumbRule.GetData " + str(tag))))
+            if not grouped:
+                data = rule.GetData()
+                if rule.Type != kind:
+                    raise RuntimeError("Изменился тип правила при чтении ScCollector " + str(tag))
+                definitions.append((kind, bodies(data, "BodyDumbRule.GetData " + str(tag))))
+        if grouped:
+            definitions = self.collected_body_rules(collector, rules, kinds, bodies)
+            if bodies(collector.GetObjects(), "ScCollector.GetObjects повторно " + str(tag)) != members:
+                raise RuntimeError("Изменился вычисленный выбор ScCollector при чтении: " + str(tag))
         if Counter(members) != Counter(body for _, tags in definitions for body in tags):
             raise RuntimeError("Определение и вычисленный выбор ScCollector различаются: " + str(tag))
         modes = (collector.GetMultiComponent(), collector.GetNonFeatureMode())

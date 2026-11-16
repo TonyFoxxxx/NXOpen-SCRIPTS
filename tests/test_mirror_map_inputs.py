@@ -12,7 +12,12 @@ class SelectionIntentRule:
 
 
 class BodyDumbRule(SelectionIntentRule):
-    def GetData(self): return [self.h.w.objects[t] for t in self.tags]
+    def GetData(self):
+        # Model the real DC 2606 descriptor, not Python's permissive unbound
+        # function behavior (which masked the V1.30.02 binding problem).
+        if not isinstance(self, BodyDumbRule):
+            raise TypeError("descriptor 'GetData' for 'NXOpen.BodyDumbRule' objects doesn't apply to a 'NXOpen.SelectionIntentRule' object")
+        return [self.h.w.objects[t] for t in self.tags]
 
 
 class CollectorWorld(HistoryWorld):
@@ -34,6 +39,10 @@ class CollectorWorld(HistoryWorld):
         self.members, self.rules, self.modes = [1000], [BodyDumbRule(self)], [False,False]
         self.collector.GetObjects = Mock(side_effect=lambda:[self.w.objects[t] for t in self.members])
         self.collector.GetRules = Mock(side_effect=lambda:self.rules[:])
+        self.t.nx.ScEvaluationFiltertype = NS(SleepyEntity=10,LaminarEdge=20,MinimumBody=30,SheetBody=40,FacetEntity=50)
+        self.filters = {value:False for value in vars(self.t.nx.ScEvaluationFiltertype).values()}
+        self.collector.IsEvaluationFilterEnabled = Mock(side_effect=lambda value:self.filters[value])
+        self.collector.AskRulesAndCollectedEntities = Mock(side_effect=self.collected_rules)
         self.collector.GetMultiComponent = lambda:self.modes[0]
         self.collector.GetNonFeatureMode = lambda:self.modes[1]
         # Existing retained fixture feature stands for the external EXTRACT_BODY.
@@ -43,16 +52,23 @@ class CollectorWorld(HistoryWorld):
 
     def snapshot(self):
         result = super().snapshot()
-        result['collector'] = (self.members[:], [(type(r),r.Type,r.tags[:]) for r in self.rules], self.modes[:])
+        result['collector'] = (self.members[:], [(type(r),r.Type,r.tags[:]) for r in self.rules], self.modes[:],self.filters.copy())
         return result
 
     def restore(self,saved):
         super().restore(saved)
-        members,rules,modes = saved['collector']
+        members,rules,modes,filters = saved['collector']
         self.members,self.modes = members[:],modes[:]
+        self.filters=filters.copy()
         self.rules=[]
         for cls,kind,tags in rules:
             rule=cls(self);rule.Type,rule.tags=kind,tags[:];self.rules.append(rule)
+
+    def collected_rules(self):
+        # Contract fixture: independent per-rule membership and partition,
+        # deliberately separate from the collector's evaluated GetObjects.
+        return ([self.w.objects[t] for r in self.rules for t in r.tags],
+                self.rules[:], [len(r.tags) for r in self.rules])
 
     def row(self, obj, kind):
         return NS(ParentEntity=obj,MatchedEntity=None,ReverseDirection=False,Type=kind,

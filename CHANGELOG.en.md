@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.30.03
+
+The DC 2606 report confirmed rule Type equals installed BodyDumb, but the GetData descriptor rejects the base SelectionIntentRule wrapper. Remove that call route; base wrappers now use the published per-rule object query AskRulesAndCollectedEntities. Validate both rule lists, a complete partition, exact bodies, repeated selection, GetData on available specialized wrappers, and absence of enabled filters. Do not bypass errors or rewrite rules/filters. Retain map, history, sketch, MCS/stock/CAM, active-copy and rollback guards; no Commit added.
+
+694 focused checks outside NX, including the existing 137 using C fixtures; the reader suite has 29 scenarios instead of 14. The GetData fixture reproduces real base-wrapper rejection. These do not test Siemens DLLs. The Python contract comes from NX 2512 files; DC 2606 availability/semantics need verification. Patch release V1.30.03, SHA-256, README and RU/EN guides are synchronized. [Result and next run](docs/en/mirror-project.md#rule-members-v13003).
+
 ## 2026-11-16 — Setup sheets V2.70
 
 Fix the source body appearing beside mirrored IPW: before each set of views, show existing Part Geometry bodies of the current Workpiece and hide part bodies of other Workpieces. Support shared bodies, face/edge selections and inherited parent Workpiece geometry. Preserve blank/fixture bodies outside Part Geometry and selected components. Restore original visibility after capture and on failure; restoration errors stop export.
