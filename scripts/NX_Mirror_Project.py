@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.30.06
-SCRIPT_VERSION = "V1.30.06"
+# SCRIPT_VERSION: V1.30.07
+SCRIPT_VERSION = "V1.30.07"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -1689,6 +1689,66 @@ def unique_probe_mapping(originals, copies, matches, context):
     return result
 
 
+class ProbeCheckFailures(RuntimeError):
+    def __init__(self, phase, errors):
+        self.errors = tuple(errors)
+        super().__init__(phase + ": ошибок " + str(len(errors)) + "\n" + "\n".join(
+            str(i) + ". " + stage + ": " + type(error).__name__ + ": " + str(error)
+            for i, (stage, error, _) in enumerate(errors, 1)))
+
+
+class ProbeChecks:
+    """Accumulate independent reads, never authorize a dependent mutation.
+
+    Losing the active owned copy aborts the batch immediately. A failed read
+    has an explicit False result, not a fabricated empty value. Call finish
+    before proceeding to a stage that depends on any of these checks.
+    """
+    def __init__(self, trial, guard, phase):
+        self.t, self.guard, self.phase = trial, guard, phase
+        self.errors, self.passed = [], 0
+
+    def run(self, label, read):
+        self.guard()
+        self.t.stage = self.phase + " / " + label
+        ok, value = False, None
+        try:
+            value = read()
+            ok = True
+        except Exception as error:
+            stage, trace = self.t.stage, error.__traceback__
+            self.errors.append((stage, error, trace))
+            self.t.lines.append("Ошибка независимой проверки / " + stage + ": " +
+                                type(error).__name__ + ": " + str(error))
+            for attribute in ("ErrorCode", "code"):
+                try:
+                    code = getattr(error, attribute, None)
+                except Exception:
+                    continue
+                if isinstance(code, int) and not isinstance(code, bool):
+                    self.t.lines.append("Код NX/API (" + attribute + "): " + str(code))
+            self.t.lines.append("".join(traceback.format_exception(type(error), error, trace)))
+        self.guard()
+        if ok:
+            self.passed += 1
+        return ok, value
+
+    def summary(self):
+        self.t.lines.append(self.phase + ": пройдено " + str(self.passed) +
+                            "; ошибок " + str(len(self.errors)))
+
+    def finish(self, blocked):
+        self.summary()
+        if not self.errors:
+            return
+        self.t.lines.append("Не выполнялись из-за неподтверждённых данных: " + blocked)
+        self.t.stage = self.errors[0][0]
+        if len(self.errors) == 1:
+            _, error, trace = self.errors[0]
+            raise error.with_traceback(trace)
+        raise ProbeCheckFailures(self.phase, self.errors) from self.errors[0][1]
+
+
 class ReplacementMapInputs:
     """Read a BodyDumb collector, then request the builder's unique-input view.
 
@@ -2030,12 +2090,34 @@ class ReplacementMapInputs:
             if self.p.body_tag in {probe_tag(o.Tag, "ScCollector member") for o in members}:
                 self.states[tag] = self.state(tag)
 
+    def describe_unmapped(self, tag, parent, checks):
+        """Read provenance only; an owner is not a replacement mapping."""
+        kind = "Face" if isinstance(parent, self.t.nx.Face) else "Edge" if isinstance(parent, self.t.nx.Edge) else None
+        consumers = [(feature, reference_name(name)) for feature, refs in self.p.initial_refs.items()
+                     for entity, name in refs if entity == tag]
+        self.t.lines.append("Опора без соответствия: tag=" + str(tag) + "; класс=" + type(parent).__name__ +
+                            "; прямые ссылки снимка=" + str(consumers))
+        if kind is not None:
+            owners = [body for body, topology in self.p.topology.items() if tag in topology[0 if kind == "Face" else 1]]
+            self.t.lines.append("  Конечная топология снимка: тела=" + str(owners) +
+                                "; выбранное тело=" + str(self.p.body_tag))
+            ok, owner = checks.run("Принадлежность неподтверждённой " + kind + " " + str(tag),
+                                   lambda:self.t.native.reference_body(tag, kind))
+            self.t.lines.append("  UF-владелец " + str(tag) + ": " + (str(owner) if ok else "не прочитан; ошибка выше") +
+                                ". Соответствие не назначалось.")
+
     def expand(self, builder, rows, mapping, guard):
         expected, direct, collectors = set(), {}, set()
         reference_type = self.t.nx.Features.MatchedReferenceBuilder
-        for row in rows:
+        checks = ProbeChecks(self.t, guard, "Проверка всех исходных строк карты")
+        def inspect(row):
             tag = probe_tag(row.ParentEntity.Tag, "ParentEntity")
             parent = self.p.object(tag)
+            self.p.stage("Исходная строка карты / " + type(parent).__name__ + " " + str(tag))
+            self.t.lines.append("Исходная строка карты: tag=" + str(tag) + "; класс=" + type(parent).__name__ +
+                                "; Type=" + str(row.Type) + "; ReverseDirection=" + str(row.ReverseDirection))
+            if isinstance(parent, self.t.nx.ScCollector):
+                collectors.add(tag)
             if type(row.ReverseDirection) is not bool:
                 raise RuntimeError("Не прочитан ReverseDirection опоры " + str(tag))
             if isinstance(parent, self.t.nx.ScCollector):
@@ -2046,23 +2128,36 @@ class ReplacementMapInputs:
                     raise RuntimeError("Не подтверждена строка BodyCollector без разворота: " + str(tag))
                 if tag not in self.states:
                     raise RuntimeError("Нет исходного определения ScCollector до UpdateMap: " + str(tag))
-                state = self.state(tag)
+                # Read every row before attempting another temporary filter
+                # clone. A failed row must not authorize further proof writes.
+                state = self.read_state(parent)[0]
                 if self.states[tag] != state:
                     raise RuntimeError("Изменилось исходное определение коллекции " + str(tag))
                 expected.update(state[0])
-                collectors.add(tag)
                 self.t.lines.append("ScCollector " + str(tag) + ": BodyDumb; тела " + str(state[0]) +
                                     ". Исходные правила только прочитаны.")
             else:
                 if tag not in mapping:
+                    self.describe_unmapped(tag, parent, checks)
+                    self.p.stage("Нет соответствия / " + type(parent).__name__ + " " + str(tag))
                     raise RuntimeError("Нет проверенного соответствия опоре редактора: " + type(parent).__name__ + " " + str(tag))
                 value = (row.Type, row.ReverseDirection)
                 if tag in direct and direct[tag] != value:
                     raise RuntimeError("Неоднозначное определение повторной опоры " + str(tag))
                 direct[tag] = value
                 expected.add(tag)
-        if collectors != set(self.states):
-            raise RuntimeError("Редактор не включил исходные коллекции в карту: " + str(sorted(set(self.states) - collectors)))
+        for index, row in enumerate(rows, 1):
+            checks.run("Строка " + str(index), lambda row=row:inspect(row))
+        def completeness():
+            if collectors != set(self.states):
+                raise RuntimeError("Редактор не включил исходные коллекции в карту: " + str(sorted(set(self.states) - collectors)) +
+                                   "; лишние коллекции: " + str(sorted(collectors - set(self.states))))
+        checks.run("Полнота исходных коллекций", completeness)
+        checks.finish("раскрытие карты, SetMatchingForParent и Validate полной карты; Commit этой ветвью не предусмотрен")
+        # Preserve the full unfiltered proof, gated by the read-only batch.
+        for tag in sorted(collectors):
+            if self.state(tag) != self.states[tag]:
+                raise RuntimeError("Изменилось исходное определение коллекции " + str(tag))
         self.p.stage("Карта по отдельным родителям / DisplayUniqueInputsToMap")
         guard()
         builder.DisplayUniqueInputsToMap = True
@@ -2071,22 +2166,39 @@ class ReplacementMapInputs:
         guard()
         builder.UpdateMap()
         guard()
-        self.check()
-        self.p.stage("Чтение полной карты отдельных родителей")
-        expanded = probe_array(builder.FeatureReferences.GetMatchedReferences(), "GetMatchedReferences unique inputs")
-        actual = {probe_tag(row.ParentEntity.Tag, "ParentEntity") for row in expanded}
-        if actual != expected:
-            raise RuntimeError("Карта отдельных родителей не совпала с прочитанными опорами: отсутствуют " +
-                               str(sorted(expected - actual)) + "; лишние " + str(sorted(actual - expected)))
-        for row in expanded:
-            tag = int(row.ParentEntity.Tag)
+        checks = ProbeChecks(self.t, guard, "Проверка всех раскрытых строк карты")
+        def original_state(tag, saved):
+            current = self.read_state(self.p.object(tag), report=False)[0]
+            if current != saved:
+                raise RuntimeError("Изменилось прочитанное состояние ScCollector " + str(tag) +
+                                   "; режимы=" + str(current[2]) + "; фильтры=" + str(current[3]))
+        for tag, saved in self.observed.items():
+            checks.run("ScCollector после UpdateMap " + str(tag),
+                       lambda tag=tag,saved=saved:original_state(tag,saved))
+        ok, expanded = checks.run("Чтение полной карты отдельных родителей", lambda:probe_array(
+            builder.FeatureReferences.GetMatchedReferences(), "GetMatchedReferences unique inputs"))
+        if not ok:
+            checks.finish("проверка непрочитанных строк, SetMatchingForParent и Validate полной карты")
+        actual = set()
+        def inspect_expanded(row):
+            tag = probe_tag(row.ParentEntity.Tag, "ParentEntity")
+            actual.add(tag)
             self.p.object(tag)
             if (type(row.ReverseDirection) is not bool or
                     (tag in direct and (row.Type, row.ReverseDirection) != direct[tag]) or
                     (tag not in direct and row.ReverseDirection)):
                 raise RuntimeError("Изменилось определение строки при раскрытии карты: " + str(tag))
-        if builder.DisplayUniqueInputsToMap is not True:
-            raise RuntimeError("Изменился режим DisplayUniqueInputsToMap")
+        for index, row in enumerate(expanded, 1):
+            checks.run("Строка " + str(index), lambda row=row:inspect_expanded(row))
+        def expanded_completeness():
+            if actual != expected:
+                raise RuntimeError("Карта отдельных родителей не совпала с прочитанными опорами: отсутствуют " +
+                                   str(sorted(expected - actual)) + "; лишние " + str(sorted(actual - expected)))
+            if builder.DisplayUniqueInputsToMap is not True:
+                raise RuntimeError("Изменился режим DisplayUniqueInputsToMap")
+        checks.run("Полнота и режим раскрытой карты", expanded_completeness)
+        checks.finish("SetMatchingForParent и Validate полной карты; Commit этой ветвью не предусмотрен")
+        self.check()
         self.t.lines.append("Карта по отдельным родителям: раскрыто коллекций " + str(len(collectors)) +
                             "; уникальных опор " + str(len(actual)) + "; пропущенных/лишних нет. Правила не заменялись.")
         return expanded
@@ -2270,8 +2382,13 @@ class BodyReplacementProbe:
             supports = historical if len(historical) == len(issues) else ()
             raise UnresolvedProbeReferences(issues, first_error, supports) from first_error
 
-    def check_stock_and_frames(self, unchanged_positions):
-        for tag, (feature, bodies, state, _) in self.t.stock_features.items():
+    def check_stock_and_frames(self, unchanged_positions, checks=None):
+        def visit(label, read):
+            if checks is None:
+                read()
+            else:
+                checks.run(label, read)
+        def stock(tag, feature, bodies, state):
             self.stage("Параметры заготовки " + str(tag))
             builder = self.t.tooling_builder(feature)
             try:
@@ -2280,19 +2397,27 @@ class BodyReplacementProbe:
                 if tuple(int(b.Tag) for b in feature.GetBodies()) != bodies:
                     raise RuntimeError("Изменились тела защищённой заготовки " + str(tag))
             finally:
+                if checks is not None:
+                    checks.guard()
                 builder.Destroy()
-        for tag, graph in self.frame_graphs.items():
+        def graph_state(tag, graph):
             self.stage("Опоры MCS/RCS " + str(tag))
             if self.t.smart_graph(tag) != graph:
                 raise RuntimeError("Изменилось определение MCS/RCS до его отдельного переноса: " + str(tag))
+        for tag, (feature, bodies, state, _) in self.t.stock_features.items():
+            visit("Заготовка " + str(tag), lambda:stock(tag, feature, bodies, state))
+        for tag, graph in self.frame_graphs.items():
+            visit("Определение MCS/RCS " + str(tag), lambda:graph_state(tag, graph))
             if unchanged_positions:
                 origin, axes = self.t.frames[tag]
-                self.t.require_csys_frame(tag, origin, axes, "подготовка независимой копии тела")
+                visit("Координаты MCS/RCS " + str(tag),
+                      lambda:self.t.require_csys_frame(tag, origin, axes, "подготовка независимой копии тела"))
         for tag in self.t.mcs_definitions:
             # Preparation and every history-access return must preserve the
             # original planes. Reflected supports are required only after the
             # original model has actually been replaced by its mirror.
-            self.t.verify_three_plane_selections(tag, reflected=not unchanged_positions)
+            visit("Выбор Three Planes " + str(tag),
+                  lambda:self.t.verify_three_plane_selections(tag, reflected=not unchanged_positions))
 
     def check_cam(self, context):
         self.t.check_geometry_snapshot(self.geometry, context, "Изменились CAM-ссылки или параметры границ")
@@ -2556,11 +2681,16 @@ class BodyReplacementProbe:
                     (self.map_inputs is not None and builder.DisplayUniqueInputsToMap is not True)):
                 raise RuntimeError("Изменился режим явной карты замены")
         check_mode()
-        for row in rows:
+        checks = ProbeChecks(self.t, guard, "Проверка всех целей карты до назначения")
+        def inspect_target(row):
             parent = row.ParentEntity
             tag = probe_tag(parent.Tag, "ParentEntity")
             self.object(tag)
+            self.stage("Цель строки карты / " + type(parent).__name__ + " " + str(tag))
+            parents.append(tag)
             if tag not in mapping:
+                (self.map_inputs or ReplacementMapInputs(self,guard)).describe_unmapped(tag,parent,checks)
+                self.stage("Нет соответствия / " + type(parent).__name__ + " " + str(tag))
                 raise RuntimeError("Нет проверенного соответствия опоре редактора: " +
                                    type(parent).__name__ + " " + str(tag))
             if type(row.ReverseDirection) is not bool:
@@ -2572,16 +2702,20 @@ class BodyReplacementProbe:
                     "; Type=" + str(row.Type) + "; ReverseDirection=" + str(row.ReverseDirection))
                 if row.Type != reference_type.Types.Curve or row.ReverseDirection:
                     raise RuntimeError("Не подтверждена одиночная Curve-строка без разворота для исторического Edge " + str(tag))
-            parents.append(tag)
             directions[tag] = row.ReverseDirection
             if self.map_inputs is not None:
                 if tag in row_types and row_types[tag] != row.Type:
                     raise RuntimeError("Неоднозначные типы повторной опоры " + str(tag))
                 row_types[tag] = row.Type
+        for index,row in enumerate(rows,1):
+            checks.run("Строка " + str(index),lambda row=row:inspect_target(row))
         required = {p for tag in self.retained for p, _ in self.initial_refs[tag] if p in self.map} | set(extra_curves)
-        if required - set(parents):
-            raise RuntimeError("Редактор не включил в явную карту используемые геометрические опоры: " +
-                               str(sorted(required - set(parents))))
+        def required_parents():
+            if required - set(parents):
+                raise RuntimeError("Редактор не включил в явную карту используемые геометрические опоры: " +
+                                   str(sorted(required - set(parents))))
+        checks.run("Полнота обязательных опор",required_parents)
+        checks.finish("SetMatchingForParent и Validate полной карты")
         for tag in dict.fromkeys(parents):
             self.stage("Сопоставление опоры " + str(tag) + " → " + str(mapping[tag]) + " / SetMatchingForParent")
             guard()
@@ -2590,10 +2724,11 @@ class BodyReplacementProbe:
         guard()
         check_mode()
         checked = probe_array(builder.FeatureReferences.GetMatchedReferences(), "Повторное GetMatchedReferences")
-        if Counter(int(row.ParentEntity.Tag) for row in checked) != Counter(parents):
-            raise RuntimeError("Изменился состав опор редактора замены")
-        for row in checked:
-            tag = int(row.ParentEntity.Tag)
+        checks = ProbeChecks(self.t, guard, "Проверка всех назначенных строк карты")
+        checked_tags = []
+        def inspect_checked(row):
+            tag = probe_tag(row.ParentEntity.Tag,"ParentEntity после назначения")
+            checked_tags.append(tag)
             self.stage("Проверка строки карты " + str(tag) + " → " + str(mapping[tag]))
             if (row.MatchedEntity is None or int(row.MatchedEntity.Tag) != mapping[tag] or
                     row.ReverseDirection != directions[tag] or not row.Validate()):
@@ -2611,6 +2746,13 @@ class BodyReplacementProbe:
                     "; Curve; статус=" + str(row.MatchedStatus) + ". Это чтение карты, не перенос связи.")
             self.t.lines.append("Карта редактора: " + str(tag) + " → " + str(mapping[tag]) +
                                 "; ReverseDirection=" + str(row.ReverseDirection))
+        for index,row in enumerate(checked,1):
+            checks.run("Строка " + str(index),lambda row=row:inspect_checked(row))
+        def checked_parents():
+            if Counter(checked_tags) != Counter(parents):
+                raise RuntimeError("Изменился состав опор редактора замены")
+        checks.run("Состав назначенных опор",checked_parents)
+        checks.finish("Validate полной карты и следующие этапы")
         self.stage("Проверка полной карты / Validate")
         guard()
         if not builder.FeatureReferences.Validate() or not builder.Validate():
@@ -3120,6 +3262,87 @@ class HistoricalReplacementMapProbe:
             self.t.stage = "Прототип карты / повторная проверка кривой " + str(source) + " → " + str(tag)
             check_created_history_curve(self.c.planned[source],self.t.native.history_curve(tag))
 
+    def diagnose_after_failure(self):
+        """Read independent state after the map editor is closed, before Undo.
+
+        This audit never retries mapping, creates candidates/filter clones,
+        edits history, transfers stock/MCS/CAM or authorizes Commit. Normal
+        post-Undo verification remains mandatory and separate.
+        """
+        checks = ProbeChecks(self.t, self.h.require_copy, "Независимая диагностика после ошибки карты")
+        self.t.lines.append("Продолжаются независимые проверки после закрытия редактора. " +
+                            "Сопоставления и перенос не выполняются; затем обязателен Undo.")
+        def equal(actual, saved, label):
+            if actual != saved:
+                raise RuntimeError("Изменилось состояние: " + label)
+        try:
+            feature_ok, candidate_feature = checks.run("Идентификатор элемента кандидата",
+                lambda:probe_tag(self.p.copy_feature.Tag, "Элемент кандидата"))
+            if feature_ok:
+                def feature_states():
+                    states = self.h.feature_states((candidate_feature,))
+                    equal({tag:states[tag] for tag in self.h.states},self.h.states,"исходные элементы")
+                checks.run("Состав и состояния элементов", feature_states)
+                checks.run("Текущий элемент", lambda:equal(
+                    self.t.native.current_feature(int(self.t.part.Tag)) in (self.h.current,candidate_feature),True,"текущий элемент"))
+            else:
+                self.t.lines.append("Не проверялись состав/состояния и текущий элемент с кандидатом: его tag не прочитан.")
+            def history(current):
+                original = {tag:state for tag,state in current.items() if tag in self.p.features}
+                changes = model_history_changes(self.t.history_baseline, original)
+                if changes:
+                    raise RuntimeError("Изменилась исходная история:\n" +
+                                       "\n".join(line for _,lines in changes for line in lines))
+            def warnings(current):
+                added = [(tag, messages) for tag,messages,_ in model_warning_changes(self.t.history_baseline,current) if messages]
+                if added:
+                    raise RuntimeError("Новые предупреждения NX:\n" + "\n".join(
+                        history_feature_label(tag,current[tag]) + ": " + "; ".join(messages) for tag,messages in added))
+            history_ok, current_history = checks.run("Чтение истории и сообщений модели",
+                lambda:self.t.model_history("диагностика после ошибки карты", check_errors=True))
+            if history_ok:
+                checks.run("Сравнение исходной истории", lambda:history(current_history))
+                checks.run("Новые предупреждения модели", lambda:warnings(current_history))
+            else:
+                self.t.lines.append("Не сравнивались история и предупреждения: текущий снимок не прочитан полностью.")
+            checks.run("Определения выражений", lambda:equal(self.h.expression_state(),self.h.expressions,"выражения"))
+            def bodies():
+                current = {probe_tag(b.Tag,"Тело диагностики"):b for b in self.t.part.Bodies}
+                equal(set(current),set(self.p.topology)|{int(self.p.copy.Tag)},"состав тел")
+                return current
+            ok, current_bodies = checks.run("Состав тел", bodies)
+            if ok:
+                for tag, topology in self.p.topology.items():
+                    checks.run("Топология тела " + str(tag), lambda tag=tag,topology=topology:equal(
+                        (tuple(sorted(int(f.Tag) for f in current_bodies[tag].GetFaces())),
+                         tuple(sorted(int(e.Tag) for e in current_bodies[tag].GetEdges()))),topology,"топология " + str(tag)))
+            else:
+                self.t.lines.append("Не проверялась топология по списку тел: состав тел не подтверждён.")
+            for tag, box in self.p.initial_boxes.items():
+                checks.run("Положение объекта " + str(tag), lambda tag=tag,box=box:equal(
+                    close_values(self.t.bounding_box(tag),box),True,"положение " + str(tag)))
+            for tag, refs in self.p.initial_refs.items():
+                checks.run("Опоры элемента " + str(tag), lambda tag=tag,refs=refs:equal(
+                    Counter(self.t.native.feature_references(tag)),Counter(refs),"опоры " + str(tag)))
+            checks.run("Геометрия и выражения эскизов", lambda:equal(
+                self.p.curve_state({tag:self.p.features[tag] for tag in self.p.retained})[0],self.p.sketches,"эскизы"))
+            if self.p.map_inputs is not None:
+                for tag, saved in self.p.map_inputs.observed.items():
+                    checks.run("Прочитанное состояние ScCollector " + str(tag), lambda tag=tag,saved=saved:equal(
+                        self.p.map_inputs.read_state(self.p.object(tag),report=False)[0],saved,"ScCollector " + str(tag)))
+            self.p.check_stock_and_frames(True,checks)
+            checks.run("CAM-ссылки, границы и точки", lambda:self.p.check_cam("диагностика после ошибки карты"))
+            checks.run("Состав операций", lambda:equal(self.t.operation_snapshot(),self.p.operations,"операции"))
+            checks.run("Геометрия отражённого тела-кандидата", self.p.check_reflected_candidate)
+            checks.run("Коллекция исходных и новых кривых", self.c.check_inventory)
+            for source,tag in sorted(self.c.created.items()):
+                checks.run("Кривая-кандидат " + str(source) + " → " + str(tag), lambda source=source,tag=tag:
+                    check_created_history_curve(self.c.planned[source],self.t.native.history_curve(tag)))
+        finally:
+            checks.summary()
+            self.t.lines.append("Диагностика не заменяет проверку карты или отката; " +
+                                "последующие сопоставления, перенос истории и расчёт CAM не выполнялись.")
+
     def run(self):
         if set(self.c.created) != set(self.h.shared_curves):
             raise RuntimeError("Нет проверенной кривой для каждой исторической опоры")
@@ -3154,6 +3377,13 @@ class HistoricalReplacementMapProbe:
                 cleanup = error
                 self.h.record_error("Ошибка закрытия редактора карты",self.t.stage,error)
         if primary is not None:
+            if cleanup is None:
+                try:
+                    self.diagnose_after_failure()
+                except Exception as error:
+                    self.h.record_error("Продолжение независимой диагностики остановлено",self.t.stage,error)
+            else:
+                self.t.lines.append("Независимая диагностика не запускалась: закрытие редактора карты не подтверждено.")
             self.t.stage = failure_stage
             raise primary.with_traceback(primary_trace)
         if cleanup is not None:

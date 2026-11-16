@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.30.07
+
+After a map-row failure, read the remaining accessible rows and preserve every error's stage/object, full message, NX/API code and traceback. Unknown Face/Edge inputs receive direct-consumer, final-topology and UF-owner diagnostics without automatic mapping. Dependent assignments, expansion and further filter clones require successful prerequisite checks; the unfiltered proof remains mandatory. After an error and editor destruction, continue independent history, geometry, sketch, MCS/stock/CAM and candidate checks. Losing the active copy stops diagnostics immediately; rollback is verified separately. No Commit is added.
+
+V1.30.06 confirmed Part Box MultiComponent=True, NonFeatureMode=False and stopped at unmatched Edge 581793. Its origin and target remain unknown; new diagnostics require DC 2606 verification. Add 23 regressions: 786 focused checks outside NX, including the existing 147 using C fixtures. These do not validate Siemens binaries or CAM transfer. V1.30.07, SHA-256, README and RU/EN guides are aligned. [Result and next run](docs/en/mirror-project.md#batch-diagnostics-v13007).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.30.06
 
 V1.30.05 confirmed UF cycling, first-collector copying/unfiltered comparison, destruction and preserved original settings. It then stopped at Part Box collector modes without printing their actual values. V1.30.06 prints/preserves both bools and checks them before/after reading and across later stages. Locality is established from each exact BodyDumb object's ownership, not an option permitting broader selection. Errors/non-booleans, foreign bodies, occurrences, unknown rules and incomplete maps still stop progress. Tooling Box modes/offsets remain unchanged; no Commit is added.
