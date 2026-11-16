@@ -1,8 +1,10 @@
-# CAM operation coverage audit — V1.30.01
+# CAM operation coverage audit — V1.30.02
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-16**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
+
+V1.30.02 checks BodyDumb reading when GetRules returns a base SelectionIntentRule wrapper. Compare the type to the installed NX constant; GetData rejection stops the trial. This is a no-Commit experiment with mandatory rollback, not confirmed support/CAM transfer. [V1.30.01 report and API verification list](mirror-project.md#rule-reader-v13002). Operation coverage and numerical spatial limitations are unchanged.
 
 V1.30.01 adds checked expansion of a BodyDumb collector into individual map parents without Commit. V1.30 confirmed a reflected body and matching of 118 faces / 298 edges, then stopped at ScCollector. Original associations are not transferred yet. [Result and limits](mirror-project.md#collector-map-v13001). Operation coverage is unchanged; availability of a Builder does not establish transformation of all its spatial data.
 

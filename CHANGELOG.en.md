@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.30.02
+
+The V1.30.01 report exposed a base SelectionIntentRule wrapper, Type=34, instead of the expected BodyDumbRule class. Require SelectionIntentRule and the installed BodyDumb enum, then try the public BodyDumbRule.GetData reader with an explicit receiver for a base wrapper. No numeric type is hardcoded and rules/pointers are not substituted. Read errors are not replaced by GetObjects or retried through alternate calls; preserve code/traceback, definition/map checks and rollback without Commit.
+
+14 new regressions; 679 focused checks outside NX, including 137 using C fixtures. Acceptance of the base wrapper by real Python DC 2606 is still unconfirmed. Patch release V1.30.02, SHA-256 and both documentation languages are synchronized. [Result and next trial](docs/en/mirror-project.md#rule-reader-v13002).
+
 ## 2026-11-16 — Setup sheets V2.69
 
 Fix mirrored-operation ownership: NX `Operation.GetParent(Geometry)` may return the source MCS. Build one actual Geometry membership index through `GetMembers()` and use it for setup names, operation-table MCS, Workpiece/blank geometry and separate view/IPW operation lists. Preserve Program Order and distinguish identically named MCS objects. Missing nodes, cycles and ambiguous membership stop ownership resolution with an explanation.

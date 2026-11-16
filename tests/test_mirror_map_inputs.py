@@ -6,9 +6,12 @@ from unittest.mock import Mock
 from test_mirror_historical_probe import M, HistoryWorld
 
 
-class BodyDumbRule:
+class SelectionIntentRule:
     def __init__(self, h):
         self.h, self.Type, self.tags = h, h.body_rule_type, [1000]
+
+
+class BodyDumbRule(SelectionIntentRule):
     def GetData(self): return [self.h.w.objects[t] for t in self.tags]
 
 
@@ -22,7 +25,8 @@ class CollectorWorld(HistoryWorld):
         super().__init__()
         self.body_rule_type = 'installed-BodyDumb-enum'
         self.t.nx.BodyDumbRule = BodyDumbRule
-        self.t.nx.SelectionIntentRule = NS(RuleType=NS(BodyDumb=self.body_rule_type))
+        self.t.nx.SelectionIntentRule = SelectionIntentRule
+        SelectionIntentRule.RuleType = NS(BodyDumb=self.body_rule_type)
         self.t.nx.Features.MatchedReferenceBuilder.Types.BodyCollector = 'installed-BodyCollector-enum'
         self.collector = self.t.nx.ScCollector()
         self.collector.Tag = 170651
@@ -124,10 +128,13 @@ class MapInputsTests(unittest.TestCase):
         self.assertFalse(h.w.replace.DisplayUniqueInputsToMap)
         h.w.replace.SetMatchingForParent.assert_not_called()
 
-    def test_rule_class_must_match_installed_api_and_not_only_type_name(self):
-        class OtherRule(BodyDumbRule):pass
-        h=CollectorWorld();h.t.nx.BodyDumbRule=OtherRule
+    def test_non_nx_rule_with_matching_type_is_rejected_before_reading_data(self):
+        class OtherRule:
+            def __init__(self,h):self.Type,self.tags=h.body_rule_type,[1000]
+            GetData=Mock(side_effect=AssertionError('Untrusted wrapper must not be read'))
+        h=CollectorWorld();h.rules=[OtherRule(h)]
         self.rejected(h,'Нет проверенного чтения правила')
+        OtherRule.GetData.assert_not_called()
 
     def test_unreadable_rules_are_not_empty_selection(self):
         h=CollectorWorld();h.collector.GetRules.side_effect=lambda:None

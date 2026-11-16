@@ -32,22 +32,22 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.30.01 | CAM-copy trial; historical-support access and one-body experiments with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.30.02 | CAM-copy trial; historical-support access and one-body experiments with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.20 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Setup sheets V2.69 · 2026-11-16
+### Latest update — Mirrored CAM project trial V1.30.02 · 2026-11-16
+
+In NX, V1.30.01 reconfirmed arcs, the reflected body, matching of 118 faces / 298 edges and rollback. Rule reading stopped at a base SelectionIntentRule wrapper with Type=34. V1.30.02 compares the type against the installed BodyDumb constant and tries GetData for that wrapper; definition and map guards remain. [Cause and next trial](docs/en/mirror-project.md#rule-reader-v13002).
+
+All **679 focused checks outside NX** pass, including **137 using C fixtures**. Python DC 2606 acceptance of the base wrapper still needs confirmation. The next trial uses **V1.30.02** from the saved source PRT with the same plane. Replacement remains without Commit and requires rollback; the copy does not need saving.
+
+### Also released — Setup sheets V2.69 · 2026-11-16
 
 Mirrored operations use their own MCS and Workpiece from actual Geometry tree membership. The fix covers setup names, operation-table MCS, blank geometry and operation selection for each set of views. [Details and validation](docs/en/setup-card.md#latest-release).
 
 Update **«Карта наладки»** to **V2.69** in the updater and regenerate the HTML. Ownership was verified on a PRT in a background NX 2606 session; final IPW screenshots still require an interactive NX check.
-
-### Also released — Mirrored CAM project trial V1.30.01 · 2026-11-16
-
-In NX, V1.30 confirmed a separate reflected body and matching of 118 faces / 298 edges, then stopped at an EXTRACT_BODY ScCollector. Rollback was verified. V1.30.01 checks expansion of a BodyDumb collector into individual map parents, including completeness and unchanged original rules. Replacement remains without Commit; local and outer rollback are mandatory. [Result and next trial](docs/en/mirror-project.md#collector-map-v13001).
-
-All **665 focused checks outside NX** pass, including **137 using C fixtures**. The actual collector rule and new map remain unconfirmed in DC 2606. The next trial uses **V1.30.01** from the saved source PRT with the same plane; the experimental copy does not need saving.
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 

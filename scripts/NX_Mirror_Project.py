@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.30.01
-SCRIPT_VERSION = "V1.30.01"
+# SCRIPT_VERSION: V1.30.02
+SCRIPT_VERSION = "V1.30.02"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -1659,6 +1659,7 @@ class ReplacementMapInputs:
     """
     def __init__(self, probe):
         self.p, self.t, self.states = probe, probe.t, {}
+        self.rule_reports = set()
 
     def state(self, tag):
         self.p.stage("Чтение определения ScCollector " + str(tag))
@@ -1679,13 +1680,32 @@ class ReplacementMapInputs:
         rules, definitions = probe_array(collector.GetRules(), "ScCollector.GetRules"), []
         if not rules:
             raise RuntimeError("Не прочитаны правила ScCollector " + str(tag))
-        for rule in rules:
-            self.p.stage("ScCollector " + str(tag) + " / " + type(rule).__name__ + ".GetData")
-            if (not isinstance(rule, self.t.nx.BodyDumbRule) or
-                    rule.Type != self.t.nx.SelectionIntentRule.RuleType.BodyDumb):
+        for index, rule in enumerate(rules, 1):
+            self.p.stage("ScCollector " + str(tag) + " / правило " + str(index) + " / SelectionIntentRule.Type")
+            expected = self.t.nx.SelectionIntentRule.RuleType.BodyDumb
+            kind = rule.Type
+            if not isinstance(rule, self.t.nx.SelectionIntentRule) or kind != expected:
                 raise RuntimeError("Нет проверенного чтения правила ScCollector " + str(tag) + ": " +
-                                   type(rule).__name__ + "; Type=" + str(rule.Type))
-            definitions.append((rule.Type, bodies(rule.GetData(), "BodyDumbRule.GetData " + str(tag))))
+                                   type(rule).__name__ + "; Type=" + str(kind) +
+                                   "; BodyDumb установленного NX=" + str(expected))
+            typed = isinstance(rule, self.t.nx.BodyDumbRule)
+            route = "rule.GetData()" if typed else "BodyDumbRule.GetData(rule)"
+            self.p.stage("ScCollector " + str(tag) + " / правило " + str(index) + " / " + route)
+            report = (tag, index, type(rule).__name__, str(kind), str(expected), route)
+            if report not in self.rule_reports:
+                self.t.lines.append("Чтение правила ScCollector " + str(tag) + " / " + str(index) +
+                    ": оболочка=" + type(rule).__name__ + "; Type=" + str(kind) +
+                    "; BodyDumb установленного NX=" + str(expected) + "; вызов=" + route)
+                self.rule_reports.add(report)
+            # GetRules returned a base SelectionIntentRule in the DC 2606
+            # report. Semantic type is checked before this public read call.
+            # The binding may reject the explicit receiver: propagate that
+            # error, never cast handles, reconstruct rules or use GetObjects
+            # as a substitute for unreadable rule data.
+            data = rule.GetData() if typed else self.t.nx.BodyDumbRule.GetData(rule)
+            if rule.Type != kind:
+                raise RuntimeError("Изменился тип правила при чтении ScCollector " + str(tag))
+            definitions.append((kind, bodies(data, "BodyDumbRule.GetData " + str(tag))))
         if Counter(members) != Counter(body for _, tags in definitions for body in tags):
             raise RuntimeError("Определение и вычисленный выбор ScCollector различаются: " + str(tag))
         modes = (collector.GetMultiComponent(), collector.GetNonFeatureMode())
