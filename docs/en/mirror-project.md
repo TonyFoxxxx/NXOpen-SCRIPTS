@@ -2,10 +2,31 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.27.02**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.28**.
+
+<a id="curve-definitions-v128"></a>
+## Latest changes — V1.28 · 2026-11-16
+
+**V1.27.02 NX result:** the access experiment completed successfully. Three external sketch contexts `128710`, `128714`, `128718` opened; exact edges `120469` and `251637` of body `134471` were read, the latter in two contexts. The report records three successful reads and zero errors. Manager cleanup, local Undo and restoration checks passed for each context, followed by outer Undo, source restoration, an unchanged checksum and a clear modification flag. This establishes access and return on this PRT, not complete curve definitions or mirroring. Tags identify this run only.
+
+V1.28 extends the experiment: read an edge definition inside each historical context using `UF_EVAL_initialize_2`, then check its reflection **in memory only**. Do not use legacy `UF_EVAL_initialize`: its published header permits spline approximation of procedural edges. A missing new initializer stops before opening a context; there is no approximating fallback.
+
+- **Line:** confirmed type, actual parameter limits and trimmed endpoints; intermediate UF evaluations check linear parameterization.
+- **Arc / Ellipse:** ABS center/axes, radius or both semiaxes, periodicity, definition and trim limits. Both curve axes follow reflection; the MCS axis rule does not apply.
+- **Spline:** order, periodic/rational flags, complete knots and homogeneous poles `(wx, wy, wz, w)`. Array sizes must match `UF_EVAL_ask_spline`; knots, trim and positive weights are checked. Reflection applies weighted translation to homogeneous coordinates; knots, weights and limits are retained.
+
+An independent evaluation of the definition is compared with `UF_EVAL_evaluate`: nine parameters across the range plus interior samples in every nonempty spline span. Endpoints must match `Edge.GetVertices`, allowing the two vertex points in reverse order. Evaluate the reflected definition against reflected sample points. The tolerance is `1e-5` part units. This checks a curve representation; it is **not an NX replacement map or proof of constraint transfer**. All parameters, not just samples, remain in memory. Different definitions of the same tag across contexts prevent treating it as a shared support.
+
+Unknown types, procedural curves without an available exact representation, full surface definitions, unreadable or inconsistent data fail without approximation or substituted supports. Limits: 20,000 poles, order 2–64, up to 4096 sample parameters. Returned arrays use `UF_free`; evaluators use `UF_EVAL_free`, including partial outputs on failure. Unconfirmed evaluator release prevents further history contexts; manager cleanup and rollback are still attempted. Errors retain their code and traceback.
+
+All **562 focused checks outside NX**, including **122 using C fixtures**, pass. The 44 new checks cover analytic geometry, a rational spline with an independent closed form, oblique reflection, trim/repeated knots, C structures/arrays, partial failures, rejection of approximating fallback and context restoration. These use our fixtures, not Siemens DLLs; new UF_EVAL calls remain untested in DC 2606.
+
+**Next NX check:** V1.28, the saved source PRT and the same plane. Expect edge-definition and in-memory reflection-check lines, followed by mandatory outer rollback. This branch creates no supports, replaces no history, transfers no sketches/CAM or MCS/stock, and deletes no toolpaths. The experimental result does not need saving.
+
+Contracts were checked against a [published Siemens `uf_eval.h` copy](https://github.com/feifeiwang/NXOPEN/blob/main/%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/%E7%A8%8B%E5%BA%8F%E4%B8%8E%E5%AE%98%E6%96%B9%E7%A4%BA%E4%BE%8B/uf_eval.h) and the [NURBS definition in `uf_curve.h`](https://www.ugapi.com/doc/ufun/uf_curve/UF_CURVE_spline_s.html). These are older contracts; **SDK 2606 is unavailable**. [Outstanding API checks](#replacement-probe-sdk-2606).
 
 <a id="visible-undo-v12702"></a>
-## Latest changes — V1.27.02 · 2026-11-16
+## V1.27.02: visible Undo marks
 
 Fix confirmed NX error **690037** at the first `StartEditWithRollbackManager` call: the manager requires **a visible Undo mark**, while V1.27/V1.27.01 supplied an invisible one. Each historical context now receives a separate `Session.SetUndoMark(Session.MarkVisibility.Visible, ...)` mark. The outer copy mark is not reused. The report records the mark kind; a missing Visible enum value stops execution before mark creation and manager start.
 
@@ -15,7 +36,7 @@ Cleanup order is unchanged: UpdateFeature/Stop/Destroy when a manager was obtain
 
 The manager fixture now rejects invisible marks with code 690037. Add four regressions for rejection/verified return, missing Visible, use of the NX enum value, and separate context marks preserving existing marks. Previous MCS, manager-failure, CAM and rollback scenarios run under this requirement. All **518 focused checks outside NX** pass, including **97 using C fixtures**. These test logic with synthetic data, not successful historical access in DC 2606.
 
-The next trial uses **V1.27.02** from the saved source PRT with the same plane. The experimental result does not need saving. Complete historical-support and mirrored-CAM transfer remain unconfirmed; the [SDK 2606 checklist](#replacement-probe-sdk-2606) is retained.
+The next trial uses **V1.28** from the saved source PRT with the same plane. The experimental result does not need saving. Complete historical-support and mirrored-CAM transfer remain unconfirmed; the [SDK 2606 checklist](#replacement-probe-sdk-2606) is retained.
 
 <a id="mcs-phase-v12701"></a>
 ## V1.27.01: expected MCS support state
@@ -28,7 +49,7 @@ Independent-body preparation, reflection of the separate candidate only, and che
 
 Add **15 regressions** using actual MCS validators over synthetic objects: X = −79, an oblique mirror, direct Face and Plane supports, exact selection order, damaged positions/normals/definitions, candidate preparation, and external sketches with restoration checks after Stop/Undo. Two new scenarios reproduce the premature −158 mm expectation against published V1.27 and pass with the fix. All **514 focused checks outside NX** pass, including the existing **97 using C fixtures**. These do not prove manager or CAM operation in DC 2606.
 
-The next check after this revision uses **V1.27.02**, described above. The experiment still ends with outer rollback even after successful reads; its result does not need saving. No new API is introduced; the [SDK 2606 checklist](#replacement-probe-sdk-2606) remains applicable. Complete project mirroring is still unconfirmed.
+The next check after this revision uses **V1.28**, described above. The experiment still ends with outer rollback even after successful reads; its result does not need saving. V1.27.01 introduced no new API; the [SDK 2606 checklist](#replacement-probe-sdk-2606) now also lists V1.28's curve readers. Complete project mirroring is still unconfirmed.
 
 <a id="historical-probe-v127"></a>
 ## V1.27: historical-support access experiment
@@ -45,7 +66,7 @@ Even successful reading ends this branch and invokes the outer copy rollback. Ex
 
 **Checked outside NX:** 499 focused checks, including 97 using C fixtures. New scenarios cover the report's six links, external/internal contexts, Start/Update/Stop/Destroy/Undo failures, preserved R1 curves and On, rejection after damage, and exact C outputs. These test the protocol and ABI against our fixtures, not Siemens DLLs or DC 2606 compatibility.
 
-**Next NX run:** install V1.27.02, open the saved source PRT and run the same test with the selected plane. The complete report should show which contexts opened, which exact supports were readable, and whether each restoration and the outer rollback succeeded. The experimental result does not need saving; the disk file remains the initial PRT copy.
+**Next NX run:** install V1.28, open the saved source PRT and run the same test with the selected plane. The complete report should show which contexts opened, which exact supports were readable, and whether each restoration and the outer rollback succeeded. The experimental result does not need saving; the disk file remains the initial PRT copy.
 
 The manager sequence comes from [older Siemens C++ documentation](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a56381.html), the start signature from [FeatureCollection, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.FeatureCollection.html), and bounds from [uf_modl_utilities.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl_utilities.html). **SDK 2606 is unavailable**: Python signatures, read-only manager use without a feature-editing Builder, intermediate-object visibility and actual restoration require DC 2606 verification. [Separate API checklist](#replacement-probe-sdk-2606).
 
@@ -130,10 +151,11 @@ V1.26 reads application data for the boundary and **each member**, using `UF_CAM
 
 | Methods / definitions | Outstanding verification |
 | --- | --- |
-| `StartEditWithRollbackManager(feature, mark)`, `EditWithRollbackManager.UpdateFeature/Stop/Destroy` | 2606 Python signatures, access through external-consumer contexts without a feature-editing Builder, cleanup order, and valid Undo after Stop/Destroy. Available methods do not prove the result. |
+| `UF_EVAL_initialize_2`, `UF_EVAL_is_line/is_arc/is_ellipse/is_spline/is_periodic`, `UF_EVAL_ask_limits/ask_arc/ask_ellipse/ask_spline/ask_spline_control_pts/ask_spline_knots/evaluate/free`, `UF_free`; `UF_EVAL_arc_t/ellipse_t/spline_t` | All new V1.28 calls: Windows 2606 exports/C ABI, struct/logical sizes and alignment, exact procedural-edge representations, ABS/parameterization/trim/periodicity, weights/knots, allocation ownership and release. Older contracts and C fixtures do not establish compatibility. |
+| `StartEditWithRollbackManager(feature, mark)`, `EditWithRollbackManager.UpdateFeature/Stop/Destroy` | V1.27.02 passed Start/UpdateFeature/Stop/Destroy and checks after local Undo in three external sketch contexts on this PRT. Other consumer types and definition methods remain unverified. |
 | `Feature.Timestamp/Suppressed/IsInternal`, `UF_MODL_ask_current_feature` | Property types, eligible external consumers, current-feature values inside/after the manager, and complete history-state preservation. |
 | `UF_MODL_ask_bounding_box`, `Edge.GetVertices` | C ABI, reading intermediate/suppressed objects in the open context, ABS coordinates. Approximate bounds/endpoints do not define complete geometry. |
-| `Part.Expressions`, `Expression.Name/Type/RightHandSide/Units`, `Session.MarkVisibility.Visible`, `Session.SetUndoMark/UndoToMark/DeleteUndoMark` | DC 2606 error 690037 confirms the visible-mark requirement; successful manager entry/cleanup remain untested. Complete expression definitions, restoration after each transition, local mark interaction with the manager and outer rollback. |
+| `Part.Expressions`, `Expression.Name/Type/RightHandSide/Units`, `Session.MarkVisibility.Visible`, `Session.SetUndoMark/UndoToMark/DeleteUndoMark` | Error 690037 confirms the visible-mark requirement; V1.27.02 subsequently opened and completed three contexts successfully. Complete expression definitions, restoration after each transition, local mark interaction with the manager and outer rollback. |
 | `UF_MODL_ask_alive_edge`; `ExtractFaceBuilder.FixAtCurrentTimestamp/FrecAtTimeStamp`; `UF_MODL_set_current_feature`, `Feature.MakeCurrentFeature` | Research options, not executable paths. Null ownership does not imply merged labels; changing the insertion point does not prove historical-geometry access. |
 | `Body.GetFaces/GetEdges`, `UF_MODL_ask_face_body`, `UF_MODL_ask_edge_body` | Completeness of current topology and C owner-query behavior for intermediate/suppressed references. An exact indexed tag replaces a redundant GetBody; an absent tag requires separate evidence, not substituted geometry. |
 | `UF_MODL_ask_references_of_features`, `UF_free`, `UF_free_string_array` | Windows 2606 ABI, complete intermediate-history references, part ownership and names/allocator ownership. The missing Python method is no longer required. |
@@ -182,7 +204,9 @@ Sources: [older Siemens `uf_modl.h` header](https://github.com/feifeiwang/NXOPEN
 
 ## Latest release
 
-Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.27.02**. [Updater upgrade](updater.md#upgrading-to-v120).
+Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.28**. [Updater upgrade](updater.md#upgrading-to-v120).
+
+**V1.28 · 2026-11-16** — Read Line/Arc/Ellipse/Spline through UF_EVAL_initialize_2 and check reflection in memory; mandatory rollback. V1.27.02 confirmed two-edge access across three NX contexts. [Definitions and result](#curve-definitions-v128).
 
 **V1.27.02 · 2026-11-16** — Fix error 690037: each EditWithRollbackManager receives its own visible Undo mark. Preserve restoration checks and outer rollback. [Report and correction](#visible-undo-v12702).
 
@@ -256,13 +280,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. Y/Z are reflected and X completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.27.02 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.27.02 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.28 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.28 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.27.02**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.28**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. **If the historical-access or one-body experiment ran, it must roll back; do not save the experimental result.** The following inspection/save steps apply only to a successful full-project branch. Read the report; its text is available through **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -382,7 +406,7 @@ The V1.23 report passed the previous MCS “2” stop and both Three Planes rebu
 
 ## Files and validation
 
-V1.27.02: **518 focused checks outside NX**, including **97 C-fixture checks**. Coverage includes historical context/restoration, exact supports, expressions/warnings, R1 curves and On, primary/secondary failures, and protection against Undo in another part. Existing history, geometry, MCS/stock and CAM guards remain. This is not a real NX/SDK 2606 compatibility test.
+V1.28: **562 focused checks outside NX**, including **122 C-fixture checks**. Curve definitions and in-memory reflection are also checked; new UF_EVAL calls remain untested in DC 2606. Coverage includes historical context/restoration, exact supports, expressions/warnings, R1 curves and On, primary/secondary failures, and protection against Undo in another part. Existing history, geometry, MCS/stock and CAM guards remain. This is not a real NX/SDK 2606 compatibility test.
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 

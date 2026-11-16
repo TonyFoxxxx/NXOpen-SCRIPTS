@@ -32,16 +32,16 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Save_Project_And_Archive.py](scripts/NX_Save_Project_And_Archive.py) | V1 | Save the work-part PRT and replace one sibling ZIP without temporary files. | [All features](docs/en/save-project-archive.md) |
 | [NX_Open_Project_Folder.cs](scripts/NX_Open_Project_Folder.cs) | V1.01 | Open the current PRT folder in Windows Explorer. | [All features](docs/en/open-project-folder.md) |
 | [NX_Open_Setup_Cards_Folder.py](scripts/NX_Open_Setup_Cards_Folder.py) | V1.01 | Open the current project's setup-sheet folder. | [All features](docs/en/open-setup-cards-folder.md) |
-| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.27.02 | CAM-copy trial; historical-support access and one-body experiments with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
+| [NX_Mirror_Project.py](scripts/NX_Mirror_Project.py) | V1.28 | CAM-copy trial; historical-support access and one-body experiments with mandatory rollback. No components or automatic save. | [All features](docs/en/mirror-project.md) |
 | [NX_Update_Scripts.py](scripts/NX_Update_Scripts.py) | V1.20 | Install and update selected scripts from GitHub or a folder. | [All features](docs/en/updater.md) |
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.27.02 · 2026-11-16
+### Latest update — Mirrored CAM project trial V1.28 · 2026-11-16
 
-Fix NX error 690037: EditWithRollbackManager requires a visible Undo mark. Each historical context now gets its own visible mark; local restoration, model checks and outer copy rollback remain intact. [Report and correction](docs/en/mirror-project.md#visible-undo-v12702).
+V1.27.02 confirmed two historical edges across three NX contexts with verified restoration. V1.28 reads Line/Arc/Ellipse/Spline definitions and checks their reflection in memory. Exact references and mandatory rollback remain protected. [Result and next stage](docs/en/mirror-project.md#curve-definitions-v128).
 
-All **518 focused checks outside NX** pass, including **97 using test C libraries**. The real V1.27.01 run passed the previous MCS check, but the manager rejected an invisible mark. Historical supports remain unread. The next trial uses **V1.27.02** from the saved source PRT; the experimental result does not need saving.
+All **562 focused checks outside NX** pass, including **122 using test C libraries**. New UF_EVAL calls still require DC 2606 verification. The next trial uses **V1.28** from the saved source PRT with the same plane; the experimental result does not need saving.
 
 ### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
 

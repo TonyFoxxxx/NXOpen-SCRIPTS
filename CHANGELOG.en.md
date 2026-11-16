@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.28
+
+The V1.27.02 report confirms two historical-edge reads across three contexts, local restoration and outer rollback with successful source checks. The next experiment reads Line/Arc/Ellipse/Spline definitions through UF_EVAL_initialize_2 and checks reflection in memory. Validate parameters, sample evaluations, endpoints, weights/knots and repeated reads of one tag; no approximating fallback, geometry creation or reference replacement. Preserve model/MCS/stock/CAM checks and mandatory rollback.
+
+Add 44 checks; all 562 focused tests outside NX pass, including 122 using C fixtures. New C calls remain untested in DC 2606. Synchronize source, catalog version, SHA-256 and documentation. [Result and limits](docs/en/mirror-project.md#curve-definitions-v128).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.27.02
 
 Fix confirmed error 690037: supply Session.MarkVisibility.Visible instead of Invisible to StartEditWithRollbackManager. Each context owns its mark; the outer copy mark is not reused. Preserve manager cleanup order, local Undo with restoration checks before mark deletion, rejection after incomplete restoration and mandatory outer rollback. Include the mark kind in diagnostics.

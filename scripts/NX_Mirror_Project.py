@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.27.02
-SCRIPT_VERSION = "V1.27.02"
+# SCRIPT_VERSION: V1.28
+SCRIPT_VERSION = "V1.28"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -11,6 +11,7 @@ _old_bytecode = sys.dont_write_bytecode
 try:
     sys.dont_write_bytecode = True
     import ctypes
+    import bisect
     from collections import Counter
     from ctypes import wintypes as W
     import hashlib
@@ -502,6 +503,178 @@ class NativeApiError(RuntimeError):
         super().__init__(context + ": " + str(code) + " — " + message)
 
 
+class CurveEvaluatorCleanupError(RuntimeError):
+    """An unconfirmed evaluator release forbids opening another context."""
+    def __init__(self, error):
+        self.code = getattr(error, "code", None)
+        super().__init__("Не подтверждено освобождение UF_EVAL: " + str(error))
+
+
+def curve_numbers(values, size, label):
+    values = tuple(values)
+    if len(values) != size or any(isinstance(v, bool) or not isinstance(v, (int, float)) or
+                                  not math.isfinite(v) for v in values):
+        raise RuntimeError("Не прочитаны конечные числа кривой / " + label)
+    return values
+
+
+def validate_history_curve(curve):
+    """Validate an owned, plain-data definition; never infer missing fields."""
+    lo, hi = curve_numbers(curve["limits"], 2, "пределы")
+    if lo >= hi or not math.isfinite(hi-lo) or type(curve["periodic"]) is not bool:
+        raise RuntimeError("Некорректные пределы/периодичность кривой")
+    kind, data = curve["kind"], curve["data"]
+    if kind == "Line":
+        start = curve_numbers(data["start"], 3, "начало линии")
+        end = curve_numbers(data["end"], 3, "конец линии")
+        if start == end or curve["periodic"]:
+            raise RuntimeError("Вырожденная или периодическая линия")
+    elif kind in ("Arc", "Ellipse"):
+        a, b = curve_numbers(data["limits"], 2, "углы дуги")
+        radii = (data["radius"],)*2 if kind == "Arc" else (data["major"],data["minor"])
+        major, minor = curve_numbers(radii, 2, "радиусы")
+        curve_numbers(data["center"], 3, "центр")
+        x = curve_numbers(data["x_axis"], 3, "ось X дуги")
+        y = curve_numbers(data["y_axis"], 3, "ось Y дуги")
+        if (a >= b or b-a > 2*math.pi+1e-10 or lo < a-1e-10 or hi > b+1e-10 or
+                minor <= 0 or major < minor or type(data["periodic"]) is not bool or
+                data["periodic"] != curve["periodic"] or
+                max(abs(dot(x,x)-1), abs(dot(y,y)-1), abs(dot(x,y))) > 1e-6):
+            raise RuntimeError("Некорректное определение дуги")
+    elif kind == "Spline":
+        poles, knots, order = data["poles"], data["knots"], data["order"]
+        if (type(order) is not int or not 2 <= order <= min(64, len(poles)) or
+                not len(poles) <= MAX_OBJECTS or len(knots) != len(poles)+order):
+            raise RuntimeError("Некорректные размеры/порядок сплайна (порядок 2…64)")
+        curve_numbers(knots, len(knots), "узлы сплайна")
+        for pole in poles:
+            curve_numbers(pole, 4, "однородный полюс сплайна")
+            if pole[3] <= 0:
+                raise RuntimeError("Для сплайна требуется положительный вес каждого полюса")
+        if (any(a > b for a,b in zip(knots,knots[1:])) or max(Counter(knots).values()) > order or
+                knots[order-1] >= knots[len(poles)] or lo < knots[order-1] or hi > knots[len(poles)]):
+            raise RuntimeError("Неверная последовательность узлов или обрезка сплайна")
+        if type(data["rational"]) is not bool or data["rational"] != any(p[3] != 1.0 for p in poles):
+            raise RuntimeError("Не согласованы веса и рациональность сплайна")
+    else:
+        raise RuntimeError("Полное определение кривой ещё не реализовано: " + str(kind))
+
+
+def history_curve_point(curve, parameter):
+    """Evaluate previously validated data, using the original UF parameters."""
+    lo, hi = curve["limits"]
+    if not math.isfinite(parameter) or not lo <= parameter <= hi:
+        raise RuntimeError("Параметр вне прочитанных пределов кривой")
+    data = curve["data"]
+    if curve["kind"] == "Line":
+        fraction = (parameter-lo)/(hi-lo)
+        point = tuple((1-fraction)*a + fraction*b for a,b in zip(data["start"],data["end"]))
+    elif curve["kind"] in ("Arc", "Ellipse"):
+        major, minor = (data["radius"],)*2 if curve["kind"] == "Arc" else (data["major"],data["minor"])
+        point = tuple(c + major*x*math.cos(parameter) + minor*y*math.sin(parameter)
+                      for c,x,y in zip(data["center"],data["x_axis"],data["y_axis"]))
+    elif curve["kind"] == "Spline":
+        poles, knots, order = data["poles"], data["knots"], data["order"]
+        degree = order-1
+        span = min(len(poles)-1, bisect.bisect_right(knots, parameter)-1)
+        work = [list(poles[j]) for j in range(span-degree,span+1)]
+        for level in range(1,order):
+            for j in range(degree,level-1,-1):
+                index = span-degree+j
+                denominator = knots[index+order-level]-knots[index]
+                if denominator <= 0:
+                    raise RuntimeError("Вырожденный интервал при вычислении сплайна")
+                alpha = (parameter-knots[index])/denominator
+                work[j] = [(1-alpha)*a + alpha*b for a,b in zip(work[j-1],work[j])]
+        if work[degree][3] <= 0:
+            raise RuntimeError("Неположительный вычисленный вес сплайна")
+        point = tuple(v/work[degree][3] for v in work[degree][:3])
+    else:
+        raise RuntimeError("Неизвестная кривая: " + str(curve["kind"]))
+    return curve_numbers(point, 3, "вычисленная точка")
+
+
+def history_curve_parameters(curve):
+    lo, hi = curve["limits"]
+    values = {lo, hi} | {lo+(hi-lo)*i/8 for i in range(1,8)}
+    if curve["kind"] == "Spline":
+        knots = sorted({lo, hi} | {u for u in curve["data"]["knots"] if lo < u < hi})
+        # Sample both sides of each nonempty span without imposing derivative
+        # continuity at repeated knots. Full knots/poles, not samples, are kept.
+        for a,b in zip(knots,knots[1:]):
+            values.update(a+(b-a)*fraction for fraction in (0.25,0.5,0.75))
+    if len(values) > 4096:
+        raise RuntimeError("Превышен лимит 4096 контрольных параметров кривой")
+    return tuple(sorted(values))
+
+
+def reflected_history_curve(curve, plane):
+    """Reflect geometry in memory; retain trim parameters and weighted poles.
+
+    Curve X/Y both follow R. This is not the MCS right-handed-frame rule.
+    No NX objects, reattachment, tag substitution or approximate fitting.
+    """
+    validate_history_curve(curve)
+    data = dict(curve["data"])
+    if curve["kind"] == "Line":
+        for key in ("start", "end"):
+            data[key] = tuple(plane.point(data[key]))
+    elif curve["kind"] in ("Arc", "Ellipse"):
+        data["center"] = tuple(plane.point(data["center"]))
+        for key in ("x_axis", "y_axis"):
+            data[key] = tuple(plane.vector(data[key]))
+    else:
+        shift = [2*dot(plane.origin,plane.normal)*v for v in plane.normal]
+        data["poles"] = tuple(tuple(v+w*d for v,d in zip(plane.vector(p[:3]),shift)) + (w,)
+                              for p in data["poles"] for w in (p[3],))
+    result = dict(curve, data=data)
+    result["samples"] = tuple((u,tuple(plane.point(point))) for u,point in curve["samples"])
+    validate_history_curve(result)
+    return result
+
+
+def check_history_curve(curve, vertices, plane):
+    validate_history_curve(curve)
+    if len(vertices) != 2:
+        raise RuntimeError("Не прочитаны две точки Edge.GetVertices")
+    vertices = tuple(curve_numbers(point,3,"Edge.GetVertices") for point in vertices)
+    parameters = history_curve_parameters(curve)
+    if tuple(u for u,_ in curve["samples"]) != parameters:
+        raise RuntimeError("Не прочитан полный набор контрольных параметров UF_EVAL")
+    reflected = reflected_history_curve(curve,plane)
+    error = 0.0
+    for candidate in (curve, reflected):
+        for parameter, point in candidate["samples"]:
+            point = curve_numbers(point, 3, "UF_EVAL_evaluate")
+            computed = history_curve_point(candidate,parameter)
+            error = max(error, *(abs(a-b) for a,b in zip(point,computed)))
+    if error > 1e-5:
+        raise RuntimeError("Определение кривой не совпало с UF_EVAL/отражением; ошибка=" + str(error))
+    ends = [history_curve_point(curve,u) for u in curve["limits"]]
+    if not (all(close_values(a,b) for a,b in zip(ends,vertices)) or
+            all(close_values(a,b) for a,b in zip(ends,reversed(vertices)))):
+        raise RuntimeError("Пределы кривой не совпали с точками Edge.GetVertices")
+    return reflected, error
+
+
+class _EvalArc(ctypes.Structure):
+    # UF_EVAL_arc_t in published uf_eval.h; logical occupies one byte.
+    _fields_ = [("is_periodic", ctypes.c_ubyte), ("limits", ctypes.c_double*2),
+                ("radius", ctypes.c_double), ("center", ctypes.c_double*3),
+                ("x_axis", ctypes.c_double*3), ("y_axis", ctypes.c_double*3)]
+
+
+class _EvalEllipse(ctypes.Structure):
+    _fields_ = [("is_periodic", ctypes.c_ubyte), ("limits", ctypes.c_double*2),
+                ("minor", ctypes.c_double), ("major", ctypes.c_double),
+                ("center", ctypes.c_double*3), ("x_axis", ctypes.c_double*3), ("y_axis", ctypes.c_double*3)]
+
+
+class _EvalSpline(ctypes.Structure):
+    _fields_ = [("is_periodic", ctypes.c_ubyte), ("is_rational", ctypes.c_ubyte),
+                ("order", ctypes.c_int), ("num_knots", ctypes.c_int), ("num_control", ctypes.c_int)]
+
+
 class _BoundaryData(ctypes.Structure):
     """UF_CAMBND_boundary_data_t from uf_cambnd.h, native C alignment.
 
@@ -719,6 +892,123 @@ class NativeCam:
         if not all(math.isfinite(v) for v in values) or any(values[i] > values[i+3] for i in range(3)):
             raise RuntimeError("Не прочитаны корректные габариты ABS опоры " + str(tag))
         return values
+
+    def prepare_history_curve_api(self):
+        if hasattr(self, "_history_curve_api"):
+            return
+        u, i, p, d = ctypes.c_uint32, ctypes.c_int, ctypes.c_void_p, ctypes.c_double
+        dp, pp, ip, bp = ctypes.POINTER(d), ctypes.POINTER(p), ctypes.POINTER(i), ctypes.POINTER(ctypes.c_ubyte)
+        # initialize_2 explicitly avoids approximation of procedural edges.
+        # Never fall back to UF_EVAL_initialize, which may fit a spline.
+        specs = [("UF_EVAL_initialize_2", (u, pp)), ("UF_EVAL_free", (p,)),
+                 ("UF_EVAL_ask_limits", (p, dp)), ("UF_EVAL_evaluate", (p, i, d, dp, dp)),
+                 ("UF_EVAL_ask_arc", (p, ctypes.POINTER(_EvalArc))),
+                 ("UF_EVAL_ask_ellipse", (p, ctypes.POINTER(_EvalEllipse))),
+                 ("UF_EVAL_ask_spline", (p, ctypes.POINTER(_EvalSpline))),
+                 ("UF_EVAL_ask_spline_control_pts", (p, ip, pp)),
+                 ("UF_EVAL_ask_spline_knots", (p, ip, pp))]
+        specs.extend(("UF_EVAL_is_"+kind, (p,bp)) for kind in ("line","arc","ellipse","spline","periodic"))
+        self._history_curve_api = {name:self.bind(name,args) for name,args in specs}
+
+    def history_curve(self, tag):
+        """Read owned curve data before leaving the historical context.
+
+        UF_EVAL owns the evaluator; UF_free owns returned knot/pole arrays.
+        Partial output is released on error. A failed evaluator release is
+        fatal to the history experiment, not a missing/empty definition.
+        """
+        tag = probe_tag(tag, "Определение исторического ребра")
+        self.prepare_history_curve_api()
+        api, handle = self._history_curve_api, ctypes.c_void_p()
+        primary, primary_trace, result = None, None, None
+
+        def call(name, *args):
+            self.check(api[name](*args), name + " / ребро " + str(tag))
+
+        def logical(kind):
+            flag = ctypes.c_ubyte(255)
+            call("UF_EVAL_is_"+kind, handle, ctypes.byref(flag))
+            if flag.value not in (0,1):
+                raise RuntimeError("Не прочитан UF_EVAL_is_" + kind)
+            return bool(flag.value)
+
+        def evaluate(parameter):
+            point = (ctypes.c_double*3)(*[float("nan")]*3)
+            unused = (ctypes.c_double*3)()  # zero derivatives requested
+            call("UF_EVAL_evaluate", handle, 0, parameter, point, unused)
+            return curve_numbers(point,3,"UF_EVAL_evaluate")
+
+        def spline_array(name, width):
+            count, pointer = ctypes.c_int(-1), ctypes.c_void_p()
+            try:
+                call(name,handle,ctypes.byref(count),ctypes.byref(pointer))
+                if not 1 <= count.value <= MAX_OBJECTS+64 or not pointer.value:
+                    raise RuntimeError("Не прочитан размер/массив " + name)
+                raw = ctypes.cast(pointer,ctypes.POINTER(ctypes.c_double))
+                return curve_numbers((raw[j] for j in range(count.value*width)), count.value*width, name)
+            finally:
+                if pointer.value:
+                    self.free(pointer)
+
+        try:
+            call("UF_EVAL_initialize_2", tag, ctypes.byref(handle))
+            if not handle.value:
+                raise RuntimeError("UF_EVAL_initialize_2 не вернул evaluator для " + str(tag))
+            kinds = [kind for kind in ("line","arc","ellipse","spline") if logical(kind)]
+            if len(kinds) != 1:
+                raise RuntimeError("Нет однозначного полного определения Line/Arc/Ellipse/Spline для ребра " + str(tag) +
+                                   "; признаки=" + str(kinds) + ". Другие типы не заменяются приближением.")
+            limits = (ctypes.c_double*2)(float("nan"),float("nan"))
+            call("UF_EVAL_ask_limits",handle,limits)
+            limits = curve_numbers(limits,2,"UF_EVAL_ask_limits")
+            if limits[0] >= limits[1] or not math.isfinite(limits[1]-limits[0]):
+                raise RuntimeError("Некорректные пределы UF_EVAL")
+            result = {"kind":kinds[0].capitalize(), "limits":limits, "periodic":logical("periodic")}
+            if kinds[0] == "line":
+                result["data"] = {"start":evaluate(limits[0]), "end":evaluate(limits[1])}
+            elif kinds[0] in ("arc", "ellipse"):
+                arc = _EvalArc() if kinds[0] == "arc" else _EvalEllipse()
+                arc.is_periodic = 255
+                radii = ("radius",) if kinds[0] == "arc" else ("major","minor")
+                for name in radii:
+                    setattr(arc,name,float("nan"))
+                for name in ("limits","center","x_axis","y_axis"):
+                    for index in range(len(getattr(arc,name))):
+                        getattr(arc,name)[index] = float("nan")
+                call("UF_EVAL_ask_"+kinds[0],handle,ctypes.byref(arc))
+                if arc.is_periodic not in (0,1):
+                    raise RuntimeError("Не прочитана периодичность UF_EVAL_ask_" + kinds[0])
+                result["data"] = {name:tuple(getattr(arc,name)) for name in ("limits","center","x_axis","y_axis")}
+                result["data"].update({name:getattr(arc,name) for name in radii})
+                result["data"]["periodic"] = bool(arc.is_periodic)
+            else:
+                spline = _EvalSpline(255,255,-1,-1,-1)
+                call("UF_EVAL_ask_spline",handle,ctypes.byref(spline))
+                if (spline.is_periodic not in (0,1) or spline.is_rational not in (0,1) or
+                        bool(spline.is_periodic) != result["periodic"] or
+                        not 2 <= spline.order <= min(64,spline.num_control) or
+                        not spline.num_control <= MAX_OBJECTS or spline.num_knots != spline.num_control+spline.order):
+                    raise RuntimeError("Не прочитаны корректные флаги/порядок/размеры UF_EVAL_ask_spline")
+                flat = spline_array("UF_EVAL_ask_spline_control_pts",4)
+                poles = tuple(flat[j:j+4] for j in range(0,len(flat),4))
+                knots = spline_array("UF_EVAL_ask_spline_knots",1)
+                if len(poles) != spline.num_control or len(knots) != spline.num_knots:
+                    raise RuntimeError("Массивы не совпали с размерами UF_EVAL_ask_spline")
+                result["data"] = {"poles":poles,"knots":knots,"order":spline.order,
+                                  "rational":bool(spline.is_rational)}
+            validate_history_curve(result)
+            result["samples"] = tuple((u,evaluate(u)) for u in history_curve_parameters(result))
+        except Exception as error:
+            primary, primary_trace = error, error.__traceback__
+        finally:
+            if handle.value:
+                try:
+                    call("UF_EVAL_free",handle)
+                except Exception as error:
+                    raise CurveEvaluatorCleanupError(error) from (primary if primary is not None else error)
+        if primary is not None:
+            raise primary.with_traceback(primary_trace)
+        return result
 
     def reference_body(self, tag, kind):
         tag = probe_tag(tag, "Тело опоры")
@@ -1766,14 +2056,15 @@ class BodyReplacementProbe:
 
 
 class HistoricalReferenceProbe:
-    """Read exact historical supports, restore each context, then outer Undo.
+    """Read historical curve definitions, check reflection, then outer Undo.
 
-    No extraction, feature edits, reference remapping or reflection. Bounding
-    boxes/endpoints establish access only, not a complete geometric definition.
+    Reflection is plain-data arithmetic only. No extraction, feature edits,
+    reference remapping or NX geometry creation/transformation is performed.
     """
     def __init__(self, replacement, supports):
         self.p, self.t = replacement, replacement.t
         self.supports = tuple(supports)
+        self.curves, self.shared_curves = {}, {}
 
     def stage(self, text):
         self.t.stage = "Прототип исторических опор / " + text
@@ -1830,6 +2121,9 @@ class HistoricalReferenceProbe:
         self.require_copy()
         self.t.native.prepare_history_probe_api()
         self.t.lines.append("UF-функции чтения текущего элемента и габаритов исторических опор найдены.")
+        if any(kind == "Edge" for _,_,kind in self.supports):
+            self.t.native.prepare_history_curve_api()
+            self.t.lines.append("Функции UF_EVAL_initialize_2 и чтения Line/Arc/Ellipse/Spline найдены; выполнение в NX ещё проверяется.")
         manager_class = self.t.nx.Features.EditWithRollbackManager
         required = [self.t.part.Features.StartEditWithRollbackManager,
                     self.t.session.SetUndoMark, self.t.session.UndoToMark, self.t.session.DeleteUndoMark]
@@ -1934,10 +2228,32 @@ class HistoricalReferenceProbe:
                 self.stage(label + " / чтение " + kind + " " + str(tag))
                 try:
                     value = self.read_support(tag, kind)
-                    readings.append((consumer, tag, kind, value))
                     self.t.lines.append("Историческая опора прочитана: " + str(tag) + "; " + kind +
                         "; тело=" + str(value[0]) + "; габариты ABS=" + str(value[1]) +
                         "; точки GetVertices ABS=" + str(value[2]))
+                    self.stage(label + " / полное определение " + kind + " " + str(tag))
+                    if kind != "Edge":
+                        raise RuntimeError("Полное определение исторической поверхности ещё не реализовано: " + str(tag))
+                    curve = self.t.native.history_curve(tag)
+                    self.t.lines.append("Определение ребра " + str(tag) + ": " + str(curve["kind"]) +
+                        "; пределы=" + str(curve["limits"]) + "; периодичность=" + str(curve["periodic"]) +
+                        "; контрольных параметров=" + str(len(curve["samples"])) +
+                        ("; порядок=" + str(curve["data"]["order"]) + "; полюсов=" + str(len(curve["data"]["poles"])) +
+                         "; узлов=" + str(len(curve["data"]["knots"])) if curve["kind"] == "Spline" else
+                         "; данные=" + str(curve["data"])))
+                    reflected, deviation = check_history_curve(curve,value[2],self.t.plane)
+                    if tag in self.shared_curves and self.shared_curves[tag] != (value[0],curve):
+                        raise RuntimeError("Одинаковый tag имеет разные определения в исторических контекстах: " +
+                                           str(tag) + ". Единая карта опор не подтверждена.")
+                    self.shared_curves[tag] = (value[0],curve)
+                    self.curves[(consumer,tag)] = (value[0],curve,reflected)
+                    readings.append((consumer, tag, kind, value))
+                    self.t.lines.append("Проверено определение и отражение в памяти: ребро " + str(tag) +
+                        "; максимальное отклонение=" + str(deviation) +
+                        "; отражённые концы ABS=" + str(tuple(history_curve_point(reflected,u) for u in reflected["limits"])) +
+                        ". Создание геометрии и замена ссылок не выполнялись.")
+                except CurveEvaluatorCleanupError:
+                    raise  # Do not open another context after an unconfirmed release.
                 except Exception as error:
                     read_errors.append((self.t.stage, error))
                     self.record_error("Не прочитана историческая опора", self.t.stage, error)
@@ -1981,7 +2297,8 @@ class HistoricalReferenceProbe:
 
     def run(self):
         self.t.lines.append("ПРОВЕРКА ИСТОРИЧЕСКИХ ОПОР: чтение через EditWithRollbackManager; " +
-            "без создания геометрии, правки элементов, замены истории и отражения. В конце обязателен откат.")
+            "определения кривых и отражение только в памяти, без создания геометрии, правки элементов и замены истории. " +
+            "В конце обязателен откат.")
         self.preflight()
         readings, errors = [], []
         for consumer, supports in self.contexts:
@@ -1993,9 +2310,12 @@ class HistoricalReferenceProbe:
         if errors:
             self.t.stage, first = errors[0]
             raise UnresolvedProbeReferences([stage + ": " + str(error) for stage, error in errors], first) from first
+        self.t.lines.append("Определения исторических рёбер проверены: контекстов/рёбер " + str(len(self.curves)) +
+                            "; уникальных рёбер " + str(len(self.shared_curves)) +
+                            ". Отражённые определения существуют только в памяти.")
         raise HistoricalProbeComplete("Доступ к указанным историческим опорам и возврат модели проверены. " +
-            "Прочитаны владельцы, габариты и точки GetVertices рёбер. Полные кривые/поверхности, ограничения эскизов " +
-            "и карта отражения ещё не построены. Эксперимент отменяется.")
+            "Прочитаны определения Line/Arc/Ellipse/Spline и проверено их отражение в памяти. " +
+            "Создание новых опор, перенос ограничений эскизов и связей CAM ещё не выполнялись. Эксперимент отменяется.")
 
 
 class Trial:

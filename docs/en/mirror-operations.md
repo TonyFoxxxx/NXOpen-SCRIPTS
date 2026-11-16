@@ -1,8 +1,10 @@
-# CAM operation coverage audit — V1.27.02
+# CAM operation coverage audit — V1.28
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-16**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
+
+V1.28 adds historical-edge definitions and in-memory reflection checks; CAM coverage and unverified spatial settings are unchanged. V1.27.02 confirmed access/restoration across three NX contexts, not project transfer. New UF_EVAL calls require DC 2606 verification. [Result and experiment](mirror-project.md#curve-definitions-v128).
 
 V1.27.02 fixes NX error 690037 at EditWithRollbackManager by supplying a separate visible Undo mark. The real V1.27.01 run passed original MCS-position checks, but no historical context opened. Operation coverage, spatial-data limitations and mandatory rollback are unchanged. [Confirmed rejection and correction](mirror-project.md#visible-undo-v12702).
 

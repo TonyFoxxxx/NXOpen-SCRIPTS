@@ -40,11 +40,22 @@ class HistoryWorld:
             SetUndoMark=Mock(side_effect=self.mark), UndoToMark=Mock(side_effect=self.undo),
             DeleteUndoMark=Mock(side_effect=self.delete_mark))
         self.t.native.prepare_history_probe_api = Mock()
+        self.t.native.prepare_history_curve_api = Mock()
+        self.t.native.history_curve = Mock(side_effect=self.curve)
         self.t.native.current_feature = Mock(side_effect=lambda part:self.current)
         self.t.native.reference_body = Mock(side_effect=self.owner)
         self.t.native.history_bounding_box = Mock(return_value=(-4.,2.,3.,5.,6.,7.))
         for tag in (64791,73591):
             self.w.objects[tag].GetVertices = Mock(return_value=(NS(X=-4.,Y=2.,Z=3.),NS(X=5.,Y=6.,Z=7.)))
+
+    def curve(self, tag):
+        # Synthetic straight edges only; the V1.27.02 report does not establish
+        # the actual curve type or parameters of the user's two edges.
+        self.owner(tag,'Edge')
+        result={'kind':'Line','limits':(2.,5.),'periodic':False,
+                'data':{'start':(-4.,2.,3.),'end':(5.,6.,7.)}}
+        result['samples']=tuple((u,M.history_curve_point(result,u)) for u in M.history_curve_parameters(result))
+        return result
 
     def snapshot(self):
         return dict(current=self.current, objects=dict(self.w.objects), edges=self.w.body.edges[:], faces=self.w.body.faces[:],
@@ -223,7 +234,7 @@ class HistoricalProtocolTests(unittest.TestCase):
                 h.w.body.edges.remove(face)
                 h.w.body.faces.append(face)
         h.after_start=activate_face
-        with self.assertRaises(M.HistoricalProbeComplete): h.p.run()
+        with self.assertRaisesRegex(M.UnresolvedProbeReferences,'поверхности ещё не реализовано'): h.p.run()
         self.assertIn('64791; Face; тело=1000','\n'.join(h.t.lines))
         face.GetVertices.assert_not_called()
         h.assert_no_geometry_edits(self)
