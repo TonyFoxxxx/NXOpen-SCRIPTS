@@ -46,6 +46,9 @@ class CollectorWorld(HistoryWorld):
         self.collector.GetMultiComponent = lambda:self.modes[0]
         self.collector.GetNonFeatureMode = lambda:self.modes[1]
         self.t.part.ScCollectors = [self.collector]
+        self.t.part.IsFullyLoaded = True
+        self.t.nx.UF.UFConstants.UF_smart_container_type = 113
+        self.t.native.object_inventory = Mock(side_effect=self.object_inventory)
         self.next_collector, self.clone_events, self.clones = 910000, [], []
         self.hidden_tags = set()
         self.after_clone = self.after_remove_filter = self.after_clone_destroy = lambda clone:None
@@ -77,6 +80,13 @@ class CollectorWorld(HistoryWorld):
         # Contract fixture: independent per-rule membership and partition,
         # deliberately separate from the collector's evaluated GetObjects.
         return self.rule_view(self.rules, self.filters)
+
+    def object_inventory(self, part_tag, kind):
+        assert part_tag == self.t.part.Tag and kind == 113
+        # Database membership is separate from the public factory collection.
+        # Internal collectors may be missing from Part.ScCollectors (DC 2606).
+        return (frozenset(self.w.objects), frozenset(t for t,o in self.w.objects.items()
+                if isinstance(o,self.t.nx.ScCollector)))
 
     def rule_view(self, rules, filters):
         # Filtering can mask a raw input; this is the adversarial case the
@@ -111,7 +121,8 @@ class CollectorWorld(HistoryWorld):
         clone.RemoveEvaluationFilter=Mock(side_effect=remove)
         def destroy():
             self.clone_events.append(('destroy',clone.Tag))
-            self.t.part.ScCollectors.remove(clone);del self.w.objects[clone.Tag]
+            if clone in self.t.part.ScCollectors:self.t.part.ScCollectors.remove(clone)
+            del self.w.objects[clone.Tag]
             self.after_clone_destroy(clone)
         clone.Destroy=Mock(side_effect=destroy)
         self.after_clone(clone)

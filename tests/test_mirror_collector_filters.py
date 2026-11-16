@@ -91,7 +91,10 @@ class CollectorFilterTests(unittest.TestCase):
             h.clones[0].RemoveEvaluationFilter.assert_not_called();h.clones[0].Destroy.assert_not_called()
 
     def test_clone_must_be_in_inventory_before_being_mutated(self):
-        h=self.world();h.after_clone=lambda c:h.t.part.ScCollectors.remove(c)
+        h=self.world()
+        def missing(c):
+            h.t.native.object_inventory.side_effect=lambda *args:(frozenset(h.w.objects)-{c.Tag},frozenset({h.collector.Tag}))
+        h.after_clone=missing
         self.rejected(h,'единственную новую коллекцию')
         h.clones[0].RemoveEvaluationFilter.assert_not_called();h.clones[0].Destroy.assert_not_called()
 

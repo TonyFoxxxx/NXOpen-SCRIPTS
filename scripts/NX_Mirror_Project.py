@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.30.04
-SCRIPT_VERSION = "V1.30.04"
+# SCRIPT_VERSION: V1.30.05
+SCRIPT_VERSION = "V1.30.05"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -28,6 +28,7 @@ _CREDIT = bytes((98, 121, 32, 64, 84, 111, 110, 121, 95, 70, 111, 120, 120, 120,
 TITLE = SCRIPT_NAME + " — " + SCRIPT_VERSION + " | " + _CREDIT
 GEOMETRY_KINDS = ("Part", "Blank", "Check", "Trim", "Cut Area", "Wall", "Drive")
 MAX_OBJECTS = 20000
+MAX_PART_OBJECTS = 1000000  # UF database includes internal/non-displayable objects.
 # UF_PARAM_status_t, documented in Siemens uf_param.h.
 PARAM_DEFAULT, PARAM_INHERITED, PARAM_OVERRIDDEN, PARAM_INVALID_INDEX = range(4)
 PARAM_STATUS_NAMES = ("по умолчанию NX", "наследуется", "собственное значение")
@@ -867,6 +868,44 @@ class NativeCam:
             self.fail_message(code, buffer)
             message = buffer.value.decode("utf-8", errors="replace")
             raise NativeApiError(code, context, message)
+
+    def object_inventory(self, part_tag, container_type):
+        """Read UF database tags, including internal/temporary containers.
+
+        uf_obj.h: cycle_all returns tag_t directly, not an error code. Unlike
+        typed cycling/Part.ScCollectors, it includes non-alive objects. Never
+        modify or instantiate their wrappers here. The caller must establish
+        that this is the fully loaded active test copy before this read.
+        uf_object_types.h defines UF_smart_container_type; use the installed
+        constant rather than assuming that every container is an ScCollector.
+        """
+        part_tag = probe_tag(part_tag, "UF_OBJ_cycle_all part")
+        if type(container_type) is not int or not 0 < container_type < 0x80000000:
+            raise RuntimeError("Не прочитан UF_smart_container_type установленного NX")
+        if not hasattr(self, "_object_inventory_api"):
+            u, i = ctypes.c_uint32, ctypes.c_int
+            api = (self.bind("UF_OBJ_cycle_all", (u, u), u),
+                   self.bind("UF_OBJ_ask_type_and_subtype", (u, ctypes.POINTER(i), ctypes.POINTER(i))))
+            self._object_inventory_api = api
+        cycle, ask_type = self._object_inventory_api
+        tags, containers, previous = set(), set(), 0
+        while True:
+            tag = cycle(part_tag, previous)
+            if tag == 0:
+                break
+            tag = probe_tag(tag, "UF_OBJ_cycle_all")
+            if tag in tags or len(tags) >= MAX_PART_OBJECTS:
+                raise RuntimeError("UF_OBJ_cycle_all: повтор tag или превышен предел обхода базы детали")
+            tags.add(tag)
+            kind, subtype = ctypes.c_int(-2147483648), ctypes.c_int(-2147483648)
+            self.check(ask_type(tag, ctypes.byref(kind), ctypes.byref(subtype)),
+                       "UF_OBJ_ask_type_and_subtype " + str(tag))
+            if kind.value == -2147483648 or subtype.value == -2147483648:
+                raise RuntimeError("UF_OBJ_ask_type_and_subtype: не прочитан тип/подтип " + str(tag))
+            if kind.value == container_type:
+                containers.add(tag)
+            previous = tag
+        return frozenset(tags), frozenset(containers)
 
     def prepare_replacement_api(self):
         """Bind the prototype's UF exports before creating a candidate body.
@@ -1754,14 +1793,12 @@ class ReplacementMapInputs:
 
     def inventory(self):
         self.guard()
-        result = set()
-        for obj in self.t.part.ScCollectors:
-            tag = probe_tag(obj.Tag, "ScCollectors")
-            if tag in result or not isinstance(self.p.object(tag), self.t.nx.ScCollector):
-                raise RuntimeError("Не подтверждён состав ScCollectors")
-            result.add(tag)
-            if len(result) > MAX_OBJECTS:
-                raise RuntimeError("Слишком много ScCollectors для проверки")
+        self.p.stage("Состав внутренних коллекций / UF_OBJ_cycle_all")
+        if self.t.part.IsFullyLoaded is not True:
+            raise RuntimeError("Для обхода ScCollectors тестовая копия должна быть полностью загружена")
+        kind = self.t.nx.UF.UFConstants.UF_smart_container_type
+        result = self.t.native.object_inventory(probe_tag(self.t.part.Tag, "ScCollectors part"), kind)
+        self.guard()
         return result
 
     def unfiltered_check(self, collector, saved):
@@ -1772,9 +1809,15 @@ class ReplacementMapInputs:
         evidence that a hidden rule input has stayed unchanged.
         """
         original_tag = int(collector.Tag)
-        baseline = self.inventory()
-        if original_tag not in baseline or self.pending_collectors is not None:
-            raise RuntimeError("Не подтверждён исходный состав ScCollectors перед CopyCollector")
+        existing, baseline = self.inventory()
+        self.p.stage("ScCollector " + str(original_tag) + " / исходный состав перед CopyCollector")
+        self.t.lines.append("Состав ScCollectors через UF_OBJ_cycle_all: объектов=" + str(len(existing)) +
+            "; внутренних контейнеров=" + str(len(baseline)) + "; исходная коллекция=" + str(original_tag) +
+            "; найдена=" + str(original_tag in baseline))
+        if original_tag not in baseline:
+            raise RuntimeError("Исходная ScCollector " + str(original_tag) + " не найдена в базе копии перед CopyCollector")
+        if self.pending_collectors is not None:
+            raise RuntimeError("Не завершена проверка удаления предыдущей временной ScCollector")
         self.pending_collectors = baseline
         clone, owned = None, False
         primary, trace, failure_stage, cleanup = None, None, None, []
@@ -1784,10 +1827,16 @@ class ReplacementMapInputs:
             clone = collector.CopyCollector()
             self.guard()
             clone_tag = probe_tag(clone.Tag, "CopyCollector")
-            if (clone_tag in baseline or not isinstance(clone, self.t.nx.ScCollector) or
-                    not isinstance(self.p.object(clone_tag), self.t.nx.ScCollector) or
-                    self.inventory() != baseline | {clone_tag}):
-                raise RuntimeError("CopyCollector не вернул единственную новую коллекцию в текущей копии PRT")
+            self.t.lines.append("CopyCollector " + str(original_tag) + ": возвращён tag=" + str(clone_tag) +
+                                "; класс=" + type(clone).__name__)
+            if (clone_tag in existing or not isinstance(clone, self.t.nx.ScCollector) or
+                    not isinstance(self.p.object(clone_tag), self.t.nx.ScCollector)):
+                raise RuntimeError("CopyCollector не вернул единственную новую коллекцию в текущей копии PRT; tag=" + str(clone_tag))
+            current = self.inventory()[1]
+            if current != baseline | {clone_tag}:
+                raise RuntimeError("CopyCollector не вернул единственную новую коллекцию в текущей копии PRT; tag=" +
+                    str(clone_tag) + "; добавлено " + str(sorted(current - baseline)) +
+                    "; отсутствуют " + str(sorted(baseline - current)))
             owned = True  # Only this verified new object may be changed/destroyed.
             if self.read_state(collector, report=False)[0] != saved:
                 raise RuntimeError("CopyCollector изменил исходную коллекцию " + str(original_tag))
@@ -1830,7 +1879,7 @@ class ReplacementMapInputs:
                     cleanup.append((self.t.stage, error))
             try:
                 self.p.stage("ScCollector " + str(original_tag) + " / проверка удаления временной коллекции")
-                if self.inventory() != baseline:
+                if self.inventory()[1] != baseline:
                     raise RuntimeError("После CopyCollector/Destroy изменился состав ScCollectors")
                 self.pending_collectors = None
                 if self.read_state(collector, report=False)[0] != saved:
@@ -1927,7 +1976,7 @@ class ReplacementMapInputs:
             # A failed/partial copy may not have returned a safe handle. Only
             # the enclosing owned Undo may remove such objects. Builder/candidate
             # collectors may also disappear during that Undo, so require a subset.
-            if not self.inventory().issubset(self.pending_collectors):
+            if not self.inventory()[1].issubset(self.pending_collectors):
                 raise RuntimeError("Не подтверждено удаление временных ScCollectors после отката")
             self.pending_collectors = None
         # Keep successfully read original settings protected even when the

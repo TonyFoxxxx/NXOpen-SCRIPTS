@@ -1,10 +1,10 @@
-# CAM operation coverage audit — V1.30.04
+# CAM operation coverage audit — V1.30.05
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-16**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
 
-V1.30.04 checks BodyDumb filter effects on a separate temporary collector, preserves original settings and requires verified cleanup/rollback. V1.30.03 stopped at the SleepyEntity guard before reading rules. No Commit or CAM transfer added; the catalog (21 routes / 31 builders) and numerical-setting limitations remain unchanged. [Result and next trial](mirror-project.md#filter-copy-v13004).
+V1.30.05 inventories internal ScCollectors through UF database cycling, with freshness/deletion/rollback checks. V1.30.04 confirmed BodyDumb/filter reads but stopped before CopyCollector at an incomplete public list. No Commit or CAM transfer added; the catalog (21 routes / 31 builders) and numerical-setting limitations remain unchanged. [Result and next trial](mirror-project.md#collector-inventory-v13005).
 
 V1.30.03 replaces the rejected Python GetData call on a base wrapper with AskRulesAndCollectedEntities per-rule object reading. Only BodyDumb with a complete partition and no enabled filters is accepted; Commit remains prohibited. The contract comes from NX 2512 API files, not SDK 2606. The operation catalog (21 routes / 31 builders) and numerical-setting limitations are unchanged. [V1.30.02 report and next run](mirror-project.md#rule-members-v13003).
 
