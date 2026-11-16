@@ -2,10 +2,23 @@
 
 [Русский](../mirror-project.md) | **English**
 
-Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.27**.
+Script: [`NX_Mirror_Project.py`](../../scripts/NX_Mirror_Project.py). Version: **V1.27.01**.
+
+<a id="mcs-phase-v12701"></a>
+## Latest changes — V1.27.01 · 2026-11-16
+
+Fix the preliminary MCS check exposed by the V1.27 report. Before the first historical context opened, unchanged Three Planes support `89014` was incorrectly compared with its future reflection. For the X = −79 mirror, the original point near `(0, 0, −12)` was rejected because the validator already expected `(-158, 0, −12)`. This is an incorrect expected-state choice in the journal; the report does not establish that NX moved the plane.
+
+Independent-body preparation, reflection of the separate candidate only, and checks before history access / after Stop / after local Undo now require **original support positions**. After replacing the original body with its mirror and during normal MCS transfer, **reflected support positions** remain required. Live objects, plane methods, exact ordered face selections, definition graphs, CSYS origins and axes remain checked. Actual displacement, a coplanar-face substitution or incomplete restoration still fails. The stage now names the CSYS, X/Y/Z field, support and expected state; general origin/axis checks no longer label other CSYS types as Three Planes.
+
+**Established by the V1.27 run:** manager methods and UF exports were found, feature/expression states and current feature `93080` were read. Two missing edges, `83410` and `83314`, again have six reference links. In this run the three Datum CSYS are internal, while sketches `93062`, `93066`, `93070` are external direct consumers. Three contexts were prepared, but `StartEditWithRollbackManager` was never called: the initial MCS check stopped execution. Historical-edge access, transitions/Stop/local Undo, extraction and reflection are therefore untested by this report. It records outer Undo, source restoration, an unchanged checksum and a clear source modification flag. Tags identify this run only.
+
+Add **15 regressions** using actual MCS validators over synthetic objects: X = −79, an oblique mirror, direct Face and Plane supports, exact selection order, damaged positions/normals/definitions, candidate preparation, and external sketches with restoration checks after Stop/Undo. Two new scenarios reproduce the premature −158 mm expectation against published V1.27 and pass with the fix. All **514 focused checks outside NX** pass, including the existing **97 using C fixtures**. These do not prove manager or CAM operation in DC 2606.
+
+The next check is **V1.27.01** from the saved source PRT with the same plane. The experiment still ends with outer rollback even after successful reads; its result does not need saving. No new API is introduced; the [SDK 2606 checklist](#replacement-probe-sdk-2606) remains applicable. Complete project mirroring is still unconfirmed.
 
 <a id="historical-probe-v127"></a>
-## Latest changes — V1.27 · 2026-11-16
+## V1.27: historical-support access experiment
 
 Following the V1.26.02 result, a separate experiment reads exact intermediate Face/Edge supports in a history context exposed by `EditWithRollbackManager`. This is **an access check with mandatory rollback**, not intermediate-geometry transfer or a completed mirrored CAM project. Both R1 centerlines remain selected sketch curves; body edges are not substituted.
 
@@ -19,7 +32,7 @@ Even successful reading ends this branch and invokes the outer copy rollback. Ex
 
 **Checked outside NX:** 499 focused checks, including 97 using C fixtures. New scenarios cover the report's six links, external/internal contexts, Start/Update/Stop/Destroy/Undo failures, preserved R1 curves and On, rejection after damage, and exact C outputs. These test the protocol and ABI against our fixtures, not Siemens DLLs or DC 2606 compatibility.
 
-**Next NX run:** install V1.27, open the saved source PRT and run the same test with the selected plane. The complete report should show which contexts opened, which exact supports were readable, and whether each restoration and the outer rollback succeeded. The experimental result does not need saving; the disk file remains the initial PRT copy.
+**Next NX run:** install V1.27.01, open the saved source PRT and run the same test with the selected plane. The complete report should show which contexts opened, which exact supports were readable, and whether each restoration and the outer rollback succeeded. The experimental result does not need saving; the disk file remains the initial PRT copy.
 
 The manager sequence comes from [older Siemens C++ documentation](https://docs.tech-plm.ru/documentation/external/PL20230425447184281/en-US/custom_api/nx_open_c_plus_plus_ref/a56381.html), the start signature from [FeatureCollection, NX 2022.1](https://nxopencsdocumentation.thescriptingengineer.com/NX2022_1/NXOpen.Features.FeatureCollection.html), and bounds from [uf_modl_utilities.h](https://www.ugapi.com/doc/UFun/uf_modl/uf_modl_utilities.html). **SDK 2606 is unavailable**: Python signatures, read-only manager use without a feature-editing Builder, intermediate-object visibility and actual restoration require DC 2606 verification. [Separate API checklist](#replacement-probe-sdk-2606).
 
@@ -156,7 +169,9 @@ Sources: [older Siemens `uf_modl.h` header](https://github.com/feifeiwang/NXOPEN
 
 ## Latest release
 
-Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.27**. [Updater upgrade](updater.md#upgrading-to-v120).
+Installation requires updater **V1.20**. If yours is older, update and restart it; then check the catalog and install **V1.27.01**. [Updater upgrade](updater.md#upgrading-to-v120).
+
+**V1.27.01 · 2026-11-16** — Fix premature reflected-support validation before history access. Original/reflected states are checked at their applicable stages; exact selections and rollback remain protected. [Report and correction](#mcs-phase-v12701).
 
 **V1.27 · 2026-11-16** — Separate EditWithRollbackManager access experiment for intermediate supports, with verified local restoration and mandatory outer rollback. Complete geometry and reflected correspondence are not yet built. [Sequence and limits](#historical-probe-v127).
 
@@ -226,13 +241,13 @@ Tooling Box solids are excluded from the general transformation. When needed, ed
 
 MCS transfer retains the existing CSYS. Recognized Three Planes definitions retain the original plane methods and direct selections. Direction correction uses copies of existing Plane definitions; direct Face/DatumPlane inputs use coincident planes. Y/Z are reflected and X completes a right-handed frame. Unknown associative definitions are not replaced by Dynamic. Verify position, axes, inheritance, the dependency graph and direct selections separately. Implicit NX defaults still receive explicit bindings in the copy.
 
-**This is a trial release. V1.27 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.27 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
+**This is a trial release. V1.27.01 has been checked outside NX. The user confirmed V1.16's face selections but reported an unwanted Y reversal. The new orientation, saving/reopening and toolpath generation require an NX / Designcenter 2606 test. Run V1.27.01 from a healthy original project. The experimental branches always roll back. The copy's body history may become BREP; the script does not save the source part. Other numerical directions and coordinates inside operation settings remain unchanged.**
 
 ## Workflow
 
 1. Open a simple test part without components. It must be fully loaded, be both work and displayed part, and have a normal `.prt` file on disk.
 2. Save it with the normal NX command. The journal stops if the source has unsaved changes; it does not save the source itself.
-3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.27**.
+3. Use **Tools → Journal → Play** to run the script. Updater entry: **«Зеркальная копия CAM-проекта — тест» V1.27.01**.
 4. In the geometry picker, click one **planar face** or **datum plane**, then click **OK**. No name or coordinate entry is required. Oblique planes are supported. The surface defines the plane, not the cursor position; reversing its normal does not change the reflection. Curved surfaces and objects from another component are rejected. Cancelling selection exits without creating a copy.
 5. After selecting the plane, the first unused sibling filename such as `name_MIRROR_TEST_001.prt` is created. Existing files and names of parts still open in NX are not reused. To retest the original model, activate it first: the journal copies the work part at launch, even if that is a previous test copy. Collapsing the suffix changes only the output name, not the source data.
 6. **If the historical-access or one-body experiment ran, it must roll back; do not save the experimental result.** The following inspection/save steps apply only to a successful full-project branch. Read the report; its text is available through **«Копировать всё» (Copy all)**. If checks pass, inspect bodies, MCS frames and the geometry of every operation. In Three Planes, check the original face choices for each X/Y/Z field, including opening the corresponding plane definition; the Three Planes type and correct coordinates alone are insufficient. Check Y and Z directions in both setups against the model and the report's ABS-axis lines. Then save the open test copy using the normal NX command and regenerate operations.
@@ -352,7 +367,7 @@ The V1.23 report passed the previous MCS “2” stop and both Three Planes rebu
 
 ## Files and validation
 
-V1.27: **499 focused checks outside NX**, including **97 C-fixture checks**. Coverage includes historical context/restoration, exact supports, expressions/warnings, R1 curves and On, primary/secondary failures, and protection against Undo in another part. Existing history, geometry, MCS/stock and CAM guards remain. This is not a real NX/SDK 2606 compatibility test.
+V1.27.01: **514 focused checks outside NX**, including **97 C-fixture checks**. Coverage includes historical context/restoration, exact supports, expressions/warnings, R1 curves and On, primary/secondary failures, and protection against Undo in another part. Existing history, geometry, MCS/stock and CAM guards remain. This is not a real NX/SDK 2606 compatibility test.
 
 Only the requested PRT copy is created. The journal writes no reports, INI files, logs, archives, temporary files or `.dlx` resources. It does not call Save, SaveAs or SaveAll. The report is held in memory and includes names, coordinates and the copy path. Nothing is sent automatically. A newly created PRT copy may remain on disk after a failed trial.
 

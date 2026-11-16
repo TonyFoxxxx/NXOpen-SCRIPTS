@@ -1,8 +1,10 @@
-# CAM operation coverage audit — V1.27
+# CAM operation coverage audit — V1.27.01
 
 [Русский](../mirror-operations.md) | **English** · [Guide](mirror-project.md)
 
 Audit date: **2026-11-16**. Baseline: published V1.18, commit `b7c881ce6850206977b249cb199f58ba01e23966`. There was no newer main-branch revision when work started. This environment has neither the DC 2606 SDK nor a running NX / Designcenter 2606. **DC 2606 compatibility and complete operation coverage remain unconfirmed.**
+
+V1.27.01 corrects the expected MCS position during original-state checks: V1.27 required a reflected support before opening a historical context. Exact selections and later reflection checks remain enforced; CAM coverage and spatial limitations are unchanged. [Failure cause and regressions](mirror-project.md#mcs-phase-v12701).
 
 V1.27 adds only a separate EditWithRollbackManager historical-access experiment with local restoration checks and mandatory outer rollback. Operation coverage and spatial-data limitations are unchanged. Even successful owner/bounds/endpoint reads do not prove sketch or CAM transfer. [Experiment and additional SDK 2606 methods](mirror-project.md#historical-probe-v127).
 

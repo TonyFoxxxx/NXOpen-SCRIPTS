@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.27.01
+
+Fix premature comparison of unchanged Three Planes supports with reflected positions. For X = −79, V1.27 expected x = −158 from an original support near x = 0 and stopped before StartEditWithRollbackManager. Candidate preparation and history-context restoration now require original supports; post-replacement validation still requires reflected supports. Preserve exact ordered face selections, Plane methods, CSYS graphs/origins/axes, live-object checks and rollback. Attribute failures to the actual CSYS/axis/support rather than the previous frame.
+
+Add 15 regressions; all 514 focused checks outside NX pass, including 97 using C fixtures. New tests reproduce the error against published V1.27 and verify rejection of damage before/after Stop and Undo. The real report establishes preliminary state reads, internal Datum CSYS and three external sketches, outer Undo and successful source checks; historical-manager operation and reflection remain untested. Update the revision, SHA-256 and both documentation languages. [Details](docs/en/mirror-project.md#mcs-phase-v12701).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.27
 
 After V1.26.02 stopped on two intermediate edges, add a separate EditWithRollbackManager access check. External direct consumers open with their own Undo marks; read exact tags, owners, current topology, ABS bounds and edge endpoints. Internal features are not edited separately, but their references remain checked. After Stop/Destroy and local Undo, verify the current feature, history/expression state, selected objects, sketches, CAM, MCS and stock. Failed restoration blocks the next context; loss of Work/Display prevents Undo in another part.

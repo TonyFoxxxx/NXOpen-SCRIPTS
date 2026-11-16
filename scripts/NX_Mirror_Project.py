@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.27
-SCRIPT_VERSION = "V1.27"
+# SCRIPT_VERSION: V1.27.01
+SCRIPT_VERSION = "V1.27.01"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -1442,7 +1442,10 @@ class BodyReplacementProbe:
                 origin, axes = self.t.frames[tag]
                 self.t.require_csys_frame(tag, origin, axes, "подготовка независимой копии тела")
         for tag in self.t.mcs_definitions:
-            self.t.verify_three_plane_selections(tag)
+            # Preparation and every history-access return must preserve the
+            # original planes. Reflected supports are required only after the
+            # original model has actually been replaced by its mirror.
+            self.t.verify_three_plane_selections(tag, reflected=not unchanged_positions)
 
     def check_cam(self, context):
         self.t.check_geometry_snapshot(self.geometry, context, "Изменились CAM-ссылки или параметры границ")
@@ -2328,10 +2331,12 @@ class Trial:
             self.require_plane_selection(self.refs[source], self.mcs_plane_selections[source],
                                          "исходная опора " + str(source))
 
-    def verify_three_plane_selections(self, tag):
+    def verify_three_plane_selections(self, tag, *, reflected=True):
         _, sources = self.mcs_definitions[tag]
         if sources is None:
             return
+        position = "отражённое положение" if reflected else "исходное положение"
+        self.stage = "Проверка Three Planes: " + str(tag) + " / " + position
         data = self.mcs_rebuilt.get(tag)
         # After ReplaceParameters, NX may delete the old, now unreferenced
         # Plane objects during update. Only the installed CSYS graph is live;
@@ -2343,6 +2348,8 @@ class Trial:
         active_tags = data["plane_tags"] if data is not None else sources
         active = []
         for axis, source, current in zip("XYZ", sources, active_tags):
+            self.stage = ("Проверка Three Planes: " + str(tag) + " / " + axis +
+                          " / опора " + str(current) + " / " + position)
             obj = self.current_mcs_object(current, (self.nx.Plane, self.nx.Face, self.nx.DatumPlane),
                                           "СК " + str(tag) + " / " + axis)
             expected = (data["selections"][len(active)] if data is not None
@@ -2353,7 +2360,7 @@ class Trial:
                 context = ("СК " + str(tag) + " / " + axis if data is not None
                            else "исходная опора " + str(source))
                 self.require_plane_selection(obj, expected, context)
-            self.verify_support_plane(source, obj)
+            self.verify_support_plane(source, obj, reflected=reflected)
             active.append(obj)
         if data is not None:
             data["planes"] = tuple(active)
@@ -2373,14 +2380,15 @@ class Trial:
         self.refs[int(tag)] = obj
         return obj
 
-    def verify_support_plane(self, source, current=None):
+    def verify_support_plane(self, source, current=None, *, reflected=True):
         old = self.mcs_supports[source]
-        expected = MirrorPlane(self.plane.point(old.origin), self.plane.vector(old.normal))
+        expected = MirrorPlane(self.plane.point(old.origin), self.plane.vector(old.normal)) if reflected else old
         obj = self.refs[source] if current is None else current
         actual = self.plane_data(obj)
         distance = dot(expected.normal, [a-b for a,b in zip(actual.origin, expected.origin)])
         if abs(dot(expected.normal, actual.normal)) < 1.0 - 1e-7 or abs(distance) > 1e-5:
-            details = ["Опорная плоскость MCS ещё не соответствует отражённой геометрии: " + str(source),
+            state = "отражённой геометрии" if reflected else "исходной геометрии"
+            details = ["Опорная плоскость MCS " + ("ещё " if reflected else "") + "не соответствует " + state + ": " + str(source),
                 "Исходная точка: " + str(list(old.origin)),
                 "Ожидаемая точка: " + str(list(expected.origin)) + "; нормаль: " + str(list(expected.normal)),
                 "Фактическая точка: " + str(list(actual.origin)) + "; нормаль: " + str(list(actual.normal)),
@@ -2414,10 +2422,10 @@ class Trial:
         self.lines.append("MCS " + str(tag) + ": проверено отражение трёх опор до построения СК.")
 
     def require_csys_frame(self, tag, origin, axes, context):
-        self.stage = "Проверка Three Planes: " + str(tag) + " / " + context
+        self.stage = "Проверка начала и осей СК: " + str(tag) + " / " + context
         actual_origin, actual_axes = self.csys_frame(tag)
         if not (close_values(actual_origin, origin) and close_values(actual_axes, axes)):
-            raise RuntimeError("Не подтверждена ориентация Three Planes " + str(tag) + " / " + context +
+            raise RuntimeError("Не подтверждены начало и оси СК " + str(tag) + " / " + context +
                 "\nНачало ожидаемое: " + str(list(origin)) + "; фактическое: " + str(actual_origin) +
                 "\nОси ожидаемые: " + str(list(axes)) + "; фактические: " + str(actual_axes))
 
