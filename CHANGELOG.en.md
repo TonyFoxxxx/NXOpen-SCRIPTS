@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Setup sheets V2.69
+
+Fix mirrored-operation ownership: NX `Operation.GetParent(Geometry)` may return the source MCS. Build one actual Geometry membership index through `GetMembers()` and use it for setup names, operation-table MCS, Workpiece/blank geometry and separate view/IPW operation lists. Preserve Program Order and distinguish identically named MCS objects. Missing nodes, cycles and ambiguous membership stop ownership resolution with an explanation.
+
+Add 9 regressions; all 166 setup-sheet checks pass. A PRT read in a background NX 2606 session confirms separate MCS, origins/axes, Workpiece, blank dimensions and operation lists for both setups; the source file remains unchanged. Final IPW and screenshots still require an interactive check. The Zmin algorithm was not updated. Synchronize the SHA-256 manifest, README and RU/EN guides.
+
 ## 2026-11-16 — Mirrored CAM project trial V1.30.01
 
 V1.30 confirmed separate BREP extraction/reflection and matching of 118 faces / 298 edges, then stopped at a retained EXTRACT_BODY ScCollector. Add a checked unique-parent map through DisplayUniqueInputsToMap. Read BodyDumb definitions and collector membership before UpdateMap; expansion must not lose/add parents, change types/directions or conceal unreadable data. Original rules are not rewritten and replacement Commit is never called; definition checks continue after Destroy and local Undo.

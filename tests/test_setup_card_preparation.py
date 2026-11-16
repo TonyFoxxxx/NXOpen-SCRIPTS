@@ -16,6 +16,10 @@ SPEC.loader.exec_module(CARD)
 class Group:
     def __init__(self, tag, name):
         self.Tag, self.Name = tag, name
+        self.members = []
+
+    def GetMembers(self):
+        return list(self.members)
 
 
 class Orient(Group):
@@ -76,9 +80,13 @@ class Model:
         self.mcs = Orient(600, '1_UST')
         self.mcs.OwningPart = self.part
         self.ops = [Operation(1, '02_ROUGH_Z-7', self), Operation(2, '01_FINISH', self), Operation(3, 'OUTSIDE', self)]
+        self.mcs.members = self.ops
+        self.geometry = Group(599, 'GEOMETRY')
+        self.geometry.members = [self.mcs]
         self.tools = [Tool(20, 'USED', self.part), Tool(21, 'UNUSED', self.part)]
         self.groups = Groups([self.mcs] + self.tools)
-        self.part.CAMSetup = NS(CAMOperationCollection=self.ops, CAMGroupCollection=self.groups)
+        self.part.CAMSetup = NS(CAMOperationCollection=self.ops, CAMGroupCollection=self.groups,
+                               GetRoot=lambda view: self.geometry)
         self.objects, self.writes, self.refuse = self.ops + self.groups, [], None
         self.selection, self.selection_error, self.general_selection = [], None, []
         self.marks, self.next_mark, self.undone = {}, 0, []

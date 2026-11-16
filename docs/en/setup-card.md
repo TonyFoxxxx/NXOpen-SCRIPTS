@@ -8,11 +8,13 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.68 · 2026-11-09**
+**V2.69 · 2026-11-16**
 
-- Operation-table headings wrap at word boundaries, including the wall-stock and floor-stock headings.
-- Automatic layout gives every column except Operations the minimum width required by its longest value and longest heading word. All operations in the setup are measured, including later sheets.
-- Operations receives all remaining space. If the minimum widths exceed the available space, the entire table is fitted to the sheet. Saved manual widths remain in effect until Auto width is selected.
+- Fix MCS and Workpiece selection for mirrored operations. NX may return the source operation's parent from `GetParent(Geometry)`; the sheet now traverses `GetRoot(Geometry)` / `GetMembers()` and resolves actual membership by tag.
+- The same verified branch supplies setup names, operation-table MCS, blank geometry, view axes and IPW operation lists. Multiple-MCS mode isolates each coordinate system's selected operations while preserving Program Order.
+- Support nested geometry groups and identically named MCS objects. Missing operations, ambiguous membership and tree cycles produce an explicit error instead of substituting the source operation's parent.
+
+Validation: 166 automated setup-sheet checks and a PRT with source/mirrored operations read in a background NX 2606 session. Distinct MCS, origins/axes, Workpiece, blank dimensions and view operation lists were confirmed. The original PRT was unchanged. Final IPW generation and screenshots were unavailable in the background session and still require interactive NX verification. The Zmin calculation algorithm was not updated.
 
 Regenerate the HTML after updating.
 
@@ -20,6 +22,7 @@ Regenerate the HTML after updating.
 
 - Select one or more setups in the script's Program Order tree. A selected folder includes all its operations and nested folders. A parent and its descendant cannot both be selected. Preselection in the NX navigator does not select setups; only the Zmin naming option uses it.
 - The setup name comes from the first operation's MCS in the selected folder. Views and IPW use that MCS by default; the multiple-MCS mode lets you select further coordinate systems independently for each setup.
+- Operation membership in MCS and Workpiece comes from the Geometry tree, including mirrored operations. The tree is read again for each export.
 - Choose visible part and fixture components separately for each setup. NX immediately previews the selection. Original visibility is restored after selection and capture.
 - Top, side and isometric views are created relative to the MCS, each with matching-camera IPW and NO IPW variants.
 - X/Y/Z arrows are anchored at the MCS origin. Geometry is fitted with margins.

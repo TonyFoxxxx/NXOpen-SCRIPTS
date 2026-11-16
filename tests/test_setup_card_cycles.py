@@ -63,6 +63,7 @@ class SetupCardCycleTests(unittest.TestCase):
 
     def frame(self, stack, case):
         mcs = NS(Tag=77, Name='MCS')
+        stack.enter_context(patch.object(CARD, 'geometry_ownership', return_value={}))
         stack.enter_context(patch.object(CARD, 'nearest_mcs', return_value=mcs))
         stack.enter_context(patch.object(CARD, 'read_mcs', return_value=(IDENTITY, case.origin)))
 
@@ -91,7 +92,7 @@ class SetupCardCycleTests(unittest.TestCase):
         part.CAMSetup.CreateFeedsBuilder = lambda ops: NS(FeedsBuilder=feeds, Destroy=lambda: None)
         report = CARD.new_report()
         report['collect_project_tools'] = False
-        context = dict(operations=[case.op], tree=dict(object=case.op, children=None))
+        context = dict(operations=[case.op], tree=dict(object=case.op, children=None), geometry_index={})
         if prepared is not None:
             context['prepared_zmin'] = prepared
         with ExitStack() as stack:

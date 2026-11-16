@@ -180,7 +180,7 @@ class SetupCardCutcomTests(unittest.TestCase):
         tool = Tool(100, 5, 5)
         op, outside = Operation(1, tool), Operation(2, tool, 12)
         nx, part, context, report, uf = fixture([tool], [op, outside], [op])
-        context.update(tree=dict(object=op, children=None), prepared_zmin={'1': -3.0})
+        context.update(tree=dict(object=op, children=None), prepared_zmin={'1': -3.0}, geometry_index={})
         report['collect_project_tools'] = False
         feeds = NS(FeedCutBuilder=NS(Value=100, Unit='PerMinute'), SpindleRpmBuilder=NS(Value=1200))
         builder = NS(FeedsBuilder=feeds, Destroy=Mock())

@@ -69,7 +69,7 @@ class McsDatumTests(unittest.TestCase):
         groups, _, jobs = fixture()
         context = jobs[0]['context']
         context['capture_mcs'] = list(groups[:2])
-        with patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op: op.mcs):
+        with patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op, index: op.mcs):
             before = CARD.setup_view_contexts(None, context)
             groups[0].Tag, groups[1].Tag = 301, 302
             context.update(mcs=groups[1], mcs_groups=list(reversed(groups[:2])),

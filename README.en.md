@@ -14,7 +14,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 | File | Version | Purpose | Guide |
 | --- | --- | --- | --- |
-| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.68 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
+| [NX_Setup_Prototype.py](scripts/NX_Setup_Prototype.py) | V2.69 | Editable setup sheets with views, tools and operations. | [All features](docs/en/setup-card.md) |
 | [NX_Postprocess_To_Machine.cs](scripts/NX_Postprocess_To_Machine.cs) | V1.50 | NC programs and FANUC BIN output to machine folders or removable media. | [All features](docs/en/postprocess.md) |
 | [NX_Operation_Zmin.py](scripts/NX_Operation_Zmin.py) | V1.09 | Add minimum Z to operation names, including supported spot-drilling and through-hole drilling cycles. | [All features](docs/en/zmin.md) |
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
@@ -37,7 +37,13 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Mirrored CAM project trial V1.30.01 · 2026-11-16
+### Latest update — Setup sheets V2.69 · 2026-11-16
+
+Mirrored operations use their own MCS and Workpiece from actual Geometry tree membership. The fix covers setup names, operation-table MCS, blank geometry and operation selection for each set of views. [Details and validation](docs/en/setup-card.md#latest-release).
+
+Update **«Карта наладки»** to **V2.69** in the updater and regenerate the HTML. Ownership was verified on a PRT in a background NX 2606 session; final IPW screenshots still require an interactive NX check.
+
+### Also released — Mirrored CAM project trial V1.30.01 · 2026-11-16
 
 In NX, V1.30 confirmed a separate reflected body and matching of 118 faces / 298 edges, then stopped at an EXTRACT_BODY ScCollector. Rollback was verified. V1.30.01 checks expansion of a BodyDumb collector into individual map parents, including completeness and unchanged original rules. Replacement remains without Commit; local and outer rollback are mandatory. [Result and next trial](docs/en/mirror-project.md#collector-map-v13001).
 

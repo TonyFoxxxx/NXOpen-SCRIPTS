@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.68
+# SCRIPT_VERSION: V2.69
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -17,6 +17,7 @@ Zmin использует выделение до открытия меню
 Каждый ракурс вписывается по геометрии IPW и видимой оснастки и сразу снимается.
 Одна выбранная папка — один установ со всеми её операциями и вложенными папками.
 Имя установа и заготовка — от MCS первой операции внутри выбранной папки.
+MCS и Workpiece определяются по членству в дереве Geometry, включая зеркальные операции.
 Кнопка «Выводить несколько MCS» открывает выбор привязок всех выбранных установов.
 Каждая отмеченная MCS даёт три пары IPW / NO IPW со своими осями и полным названием.
 Первый набор видов — на основном листе, остальные — на отдельных листах того же установа.
@@ -116,7 +117,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.68"
+SCRIPT_VERSION = "V2.69"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -1568,22 +1569,51 @@ def orient_and_verify(nx, view, expected):
                        "Изображение не сохранено. Проверьте ориентацию MCS в NX.")
 
 
-def nearest_mcs(nx, obj):
-    seen = set()
-    while obj is not None:
-        key = str(obj.Tag)
-        if key in seen:
-            raise RuntimeError("Обнаружен цикл в дереве геометрии CAM.")
-        seen.add(key)
+def geometry_ownership(nx, part):
+    """Snapshot actual Geometry membership once per export, keyed by NX tag.
+
+    A mirror operation's GetParent(Geometry) can return the source operation's
+    MCS. GetRoot(Geometry) / GetMembers instead follows the navigator's actual
+    branches. Use that same ancestry for MCS, Workpiece and capture sources.
+    Never infer ownership from names or from a mirror transformation matrix.
+    """
+    index, active = {}, set()
+
+    def visit(obj, parent, mcs):
+        key = object_key(obj)
+        if key in active:
+            raise RuntimeError('Обнаружен цикл в дереве Geometry: «%s».' % obj.Name)
+        if key in index:
+            raise RuntimeError('Узел «%s» встречается в нескольких ветках Geometry. '
+                               'Невозможно однозначно определить его привязку.' % obj.Name)
+        if not isinstance(obj, (nx.CAM.Operation, nx.CAM.NCGroup)):
+            raise RuntimeError('Неизвестный узел в дереве Geometry: «%s».' % obj.Name)
         if isinstance(obj, nx.CAM.OrientGeometry):
-            return obj
-        if isinstance(obj, nx.CAM.Operation):
-            obj = obj.GetParent(nx.CAM.CAMSetup.View.Geometry)
-        elif isinstance(obj, nx.CAM.NCGroup):
-            obj = obj.GetParent()
-        else:
-            return None
-    return None
+            mcs = obj
+        index[key] = {'object': obj, 'parent': parent, 'mcs': mcs}
+        if isinstance(obj, nx.CAM.NCGroup):
+            active.add(key)
+            try:
+                for member in obj.GetMembers():
+                    visit(member, obj, mcs)
+            finally:
+                active.remove(key)
+
+    root = part.CAMSetup.GetRoot(nx.CAM.CAMSetup.View.Geometry)
+    if root is None:
+        raise RuntimeError('Не найден корень дерева Geometry текущего CAM-проекта.')
+    visit(root, None, None)
+    return index
+
+
+def nearest_mcs(nx, obj, geometry_index):
+    if obj is None:
+        return None
+    entry = geometry_index.get(object_key(obj))
+    if entry is None and isinstance(obj, (nx.CAM.Operation, nx.CAM.OrientGeometry,
+                                          nx.CAM.FeatureGeometry)):
+        raise RuntimeError('Узел «%s» не найден в дереве Geometry текущего CAM-проекта.' % obj.Name)
+    return entry['mcs'] if entry is not None else None
 
 
 def cam_selection(nx, ui, part, report):
@@ -1611,9 +1641,10 @@ def cam_selection(nx, ui, part, report):
 
 def resolve_mcs(nx, ui, part, report):
     selected = cam_selection(nx, ui, part, report)
+    geometry_index = geometry_ownership(nx, part)
     matches = {}
     for obj in selected:
-        group = nearest_mcs(nx, obj)
+        group = nearest_mcs(nx, obj, geometry_index)
         if group is not None:
             matches[str(group.Tag)] = group
     if len(matches) == 1:
@@ -1671,7 +1702,7 @@ def activate_first_mcs(nx, part, context, report):
         'status': 'pending', 'mcs_name': str(group.Name), 'mcs_tag': object_key(group),
         'operation_name': str(operation.Name), 'operation_tag': object_key(operation),
         'api': 'Selection.RequestSelections; CAMSession.SetMcsDisplay',
-        'axes_source': 'first_operation_geometry_parent.OrientGeomBuilder.Mcs',
+        'axes_source': 'geometry_tree_membership.OrientGeomBuilder.Mcs',
         'wcs_repositioned': False}
     changed = []
     view = part.ModelingViews.WorkView
@@ -1863,9 +1894,11 @@ def confirm_mixed_mcs(nx, groups, reference, report):
         raise ExportCancelled('Создание карты наладки отменено пользователем.')
 
 
-def resolve_context(nx, ui, part, report, selected=None, confirm=True):
+def resolve_context(nx, ui, part, report, selected=None, confirm=True, geometry_index=None):
     """Члены папки берутся рекурсивно, порядок — из ветки ProgramOrder."""
     selected = cam_selection(nx, ui, part, report) if selected is None else list(selected)
+    if geometry_index is None:
+        geometry_index = geometry_ownership(nx, part)
     source = "selected"
     if not selected:
         groups = [g for g in part.CAMSetup.CAMGroupCollection
@@ -1905,26 +1938,27 @@ def resolve_context(nx, ui, part, report, selected=None, confirm=True):
         raise RuntimeError("Не все выделенные операции найдены в ветке Program Order. Проверь текущий CAM-проект.")
     if not operations:
         if len(selected) == 1 and len(selected_mcs) == 1:
-            group = selected_mcs[0]
+            group = nearest_mcs(nx, selected_mcs[0], geometry_index)
             groups = {object_key(group): group}
         else:
             raise RuntimeError("В выбранной папке нет операций.")
     else:
         groups = {}
         for operation in operations:
-            group = nearest_mcs(nx, operation)
+            group = nearest_mcs(nx, operation, geometry_index)
             if group is None:
                 raise RuntimeError("У операции «%s» не найдена СКС." % operation.Name)
             groups[object_key(group)] = group
-        group = nearest_mcs(nx, operations[0])
+        group = nearest_mcs(nx, operations[0], geometry_index)
     report["selected_nodes"] = [obj.Name for obj in selected]
     report["mcs_names"] = [g.Name for g in groups.values()]
     report["operation_count"] = len(operations)
     first_project_op = next((n['object'] for n in tree_nodes(program) if n['children'] is None), None)
-    first_project_mcs = nearest_mcs(nx, first_project_op) if first_project_op is not None else None
+    first_project_mcs = nearest_mcs(nx, first_project_op, geometry_index)
     context = {"mcs": group, "mcs_groups": list(groups.values()), "source": source,
                "tree": tree, "operations": operations, "selected_objects": selected,
-               "project_first_mcs": first_project_mcs, "program_tree": program}
+               "project_first_mcs": first_project_mcs, "program_tree": program,
+               "geometry_index": geometry_index}
     if confirm:
         choose_setup_mcs(nx, [{'context': context, 'report': report}])
     return context
@@ -1956,16 +1990,17 @@ def resolve_ipw_source(nx, part, context, report):
         operations = context['operations']
         if not operations:
             raise RuntimeError('В выбранной папке нет операций для определения первой MCS.')
-        source_mcs = nearest_mcs(nx, operations[0])
+        source_mcs = nearest_mcs(nx, operations[0], context['geometry_index'])
         if source_mcs is None or object_key(source_mcs) != object_key(context['mcs']):
             raise RuntimeError('Первая MCS выбранной папки не совпала с MCS первой операции.')
         source_operations = []
         for operation in operations:
-            owner = nearest_mcs(nx, operation)
+            owner = nearest_mcs(nx, operation, context['geometry_index'])
             if owner is not None and object_key(owner) == object_key(source_mcs):
                 source_operations.append(operation)
         source = {'mcs': source_mcs,
                   'operations': source_operations,
+                  'geometry_index': context['geometry_index'],
                   'operation_scope': 'selected_first_mcs_operations'}
         context['ipw_source'] = source
     report['ipw_source'] = {
@@ -2393,7 +2428,7 @@ def setup_view_contexts(nx, context):
     """Keep operation tables intact; isolate capture/IPW sources by actual MCS."""
     groups = context.get('mcs_groups', [context['mcs']])
     selected = context.get('capture_mcs', [context['mcs']])
-    owners = [(op, nearest_mcs(nx, op)) for op in context['operations']]
+    owners = [(op, nearest_mcs(nx, op, context['geometry_index'])) for op in context['operations']]
     result = []
     for group in selected:
         operations = [op for op, owner in owners
@@ -2404,7 +2439,8 @@ def setup_view_contexts(nx, context):
         duplicate = [object_key(g) for g in groups if str(g.Name) == str(group.Name)].index(object_key(group))
         token = mcs_datum_key(group.Name, duplicate)
         prefix = '' if primary else 'mcs_' + token + '_'
-        source = dict(mcs=group, operations=operations, operation_scope='selected_mcs_operations')
+        source = dict(mcs=group, operations=operations, geometry_index=context['geometry_index'],
+                      operation_scope='selected_mcs_operations')
         item = dict(context, mcs=group, operations=operations, ipw_source=source,
                     capture_file_prefix=prefix, capture_mcs_key='primary' if primary else token,
                     capture_datum_key=token)
@@ -2856,12 +2892,14 @@ def resolve_setup_jobs(nx, ui, part, report, memory=None):
     report['_preparation_options'] = options
     selections = [[folder] for folder in folders]
     report['selection_source'] = 'startup_folder_tree'
+    geometry_index = geometry_ownership(nx, part)
     jobs = []
     for selection in selections:
         item = new_report()
         item['selection_source'] = report.get('selection_source')
         try:
-            context = resolve_context(nx, ui, part, item, selected=selection, confirm=False)
+            context = resolve_context(nx, ui, part, item, selected=selection, confirm=False,
+                                      geometry_index=geometry_index)
             name = record_setup_identity(context, item)
             resolve_ipw_source(nx, part, context, item)
         except ExportCancelled:
@@ -2997,6 +3035,7 @@ def preparation_progress(stage, detail=''):
 
 def zmin_rename_plan(nx, part, operations):
     planned, skipped, unchanged, values, frames, frame_errors = [], [], 0, {}, {}, {}
+    geometry_index = geometry_ownership(nx, part) if operations else {}
     status_type = getattr(getattr(nx.CAM, 'CAMObject', None), 'Status', None)
     for index, operation in enumerate(operations, 1):
         old = str(operation.Name)
@@ -3006,7 +3045,7 @@ def zmin_rename_plan(nx, part, operations):
                 raise ValueError('Нет рассчитанной траектории.')
             if enum_name(operation.GetStatus(), status_type, ('Complete', 'Approved', 'Regen', 'Repost')) == 'Regen':
                 raise ValueError('Траектория устарела: требуется пересчёт в NX.')
-            group = nearest_mcs(nx, operation)
+            group = nearest_mcs(nx, operation, geometry_index)
             if group is None:
                 raise ValueError('Не найдена СКС операции.')
             key = object_key(group)
@@ -4067,7 +4106,7 @@ def toolpath_zmin(nx, operation, basis, origin, progress=None):
     return finite_number(minimum) if minimum is not None else None
 
 
-def parent_workpiece(nx, part, obj, cache=None, trace=None):
+def parent_workpiece(nx, part, obj, geometry_index, cache=None, trace=None):
     """Find a volume geometry owner, continuing past boundary-only groups.
 
     FeatureGeometry is shared by WORKPIECE and boundary geometry. Inspect the
@@ -4078,6 +4117,8 @@ def parent_workpiece(nx, part, obj, cache=None, trace=None):
     seen = set()
     while obj is not None:
         key = object_key(obj)
+        if key not in geometry_index:
+            raise RuntimeError('Узел «%s» не найден в дереве Geometry текущего CAM-проекта.' % obj.Name)
         if key in seen:
             raise RuntimeError('Обнаружен цикл в дереве геометрии CAM.')
         seen.add(key)
@@ -4103,12 +4144,7 @@ def parent_workpiece(nx, part, obj, cache=None, trace=None):
                         builder.Destroy()
             if cache[key]:
                 return obj
-        if isinstance(obj, nx.CAM.Operation):
-            obj = obj.GetParent(nx.CAM.CAMSetup.View.Geometry)
-        elif isinstance(obj, nx.CAM.NCGroup):
-            obj = obj.GetParent()
-        else:
-            return None
+        obj = geometry_index[key]['parent']
     return None
 
 
@@ -4128,7 +4164,7 @@ def resolve_workpieces(nx, part, context, report):
     cache, groups, bindings, missing, fallback_cache = {}, {}, [], [], {}
 
     def parent(obj):
-        return parent_workpiece(nx, part, obj, cache, result['checked_groups'])
+        return parent_workpiece(nx, part, obj, context['geometry_index'], cache, result['checked_groups'])
 
     def bind(operation, mcs, group, source):
         groups[object_key(group)] = group
@@ -4140,7 +4176,7 @@ def resolve_workpieces(nx, part, context, report):
 
     try:
         for operation in context['operations']:
-            mcs, group = nearest_mcs(nx, operation), parent(operation)
+            mcs, group = nearest_mcs(nx, operation, context['geometry_index']), parent(operation)
             if group is None:
                 missing.append((operation, mcs))
             else:
@@ -4156,7 +4192,7 @@ def resolve_workpieces(nx, part, context, report):
                     if isinstance(node, nx.CAM.OrientGeometry):
                         matching = mcs_number_key(node.Name) == family
                     elif isinstance(node, nx.CAM.FeatureGeometry):
-                        owner = nearest_mcs(nx, node)
+                        owner = nearest_mcs(nx, node, context['geometry_index'])
                         matching = owner is not None and mcs_number_key(owner.Name) == family
                     else:
                         matching = False
@@ -4935,7 +4971,7 @@ def read_operation_data(nx, part, context, report):
     for operation_index, operation in enumerate(context["operations"]):
         if operation_index % 8 == 0:
             diagnostic_event('operations.progress', completed=operation_index, count=len(context['operations']))
-        group = nearest_mcs(nx, operation)
+        group = nearest_mcs(nx, operation, context['geometry_index'])
         record = {"kind": "operation", "tag": object_key(operation), "name": str(operation.Name),
                   "mcs": str(group.Name), "tool_name": None, "tool_number": None,
                   "feed": None, "feed_unit": None, "speed": None}

@@ -18,8 +18,8 @@ ROTATED = ((0., 1., 0.), (-1., 0., 0.), (0., 0., 1.))
 def fixture():
     a, b, d = [NS(Tag=i, Name=n) for i, n in ((1, '1'), (2, '1S'), (3, 'MCS_2'))]
     ops = [NS(Tag=10+i, Name='OP_%d' % i, mcs=g) for i, g in enumerate((a, b, a, d))]
-    contexts = [dict(mcs=a, mcs_groups=[a, b], operations=ops[:3], source='selected'),
-                dict(mcs=d, mcs_groups=[d], operations=ops[3:], source='selected')]
+    contexts = [dict(mcs=a, mcs_groups=[a, b], operations=ops[:3], source='selected', geometry_index={}),
+                dict(mcs=d, mcs_groups=[d], operations=ops[3:], source='selected', geometry_index={})]
     jobs = [dict(context=context, report=dict(CARD.new_report(), setup_name='SETUP_%d' % i,
                  selected_folder_path=['PROGRAM', 'SETUP_%d' % i]), output=None)
             for i, context in enumerate(contexts, 1)]
@@ -64,7 +64,7 @@ class MultiMcsTests(unittest.TestCase):
         groups, ops, jobs = fixture()
         with patch.object(CARD, 'ask_warning', return_value='multiple'), \
                 patch.object(CARD, 'ask_setup_mcs', return_value=[[groups[1]], [groups[2]]]) as choose, \
-                patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op: op.mcs):
+                patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op, index: op.mcs):
             CARD.choose_setup_mcs(None, jobs)
         self.assertIs(choose.call_args.args[1], jobs)
         self.assertEqual(jobs[0]['context']['capture_mcs'], [groups[1]])
@@ -76,7 +76,7 @@ class MultiMcsTests(unittest.TestCase):
         groups, ops, jobs = fixture()
         with patch.object(CARD, 'ask_warning', return_value=True), \
                 patch.object(CARD, 'ask_setup_mcs') as chooser, \
-                patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op: op.mcs):
+                patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op, index: op.mcs):
             CARD.choose_setup_mcs(None, jobs)
         chooser.assert_not_called()
         source = jobs[0]['context']['view_contexts'][0]['ipw_source']
@@ -101,7 +101,7 @@ class MultiMcsTests(unittest.TestCase):
         b.Name = a.Name
         context = jobs[0]['context']
         context['capture_mcs'] = [a, b]
-        with patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op: op.mcs):
+        with patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op, index: op.mcs):
             first = CARD.setup_view_contexts(None, context)
             a.Tag, b.Tag = 501, 502
             second = CARD.setup_view_contexts(None, context)
@@ -129,7 +129,7 @@ class MultiMcsTests(unittest.TestCase):
         display = NS(hide=Mock(), hide_after_camera_change=Mock(), check_cam_hidden=Mock(), restore=Mock(return_value=[]))
         with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
             output = Path(folder)
-            patches = dict(nearest_mcs=lambda nx, op: op.mcs,
+            patches = dict(nearest_mcs=lambda nx, op, index: op.mcs,
                 activate_first_mcs=Mock(),
                 read_mcs=lambda part, group: (IDENTITY if group is groups[0] else ROTATED, (group.Tag, 0., 0.)),
                 ScreenshotDisplay=Mock(return_value=display),
@@ -168,7 +168,7 @@ class MultiMcsTests(unittest.TestCase):
         context = jobs[0]['context']
         context['capture_mcs'] = groups[:2]
         report = CARD.new_report()
-        with patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op: op.mcs), \
+        with patch.object(CARD, 'nearest_mcs', side_effect=lambda nx, op, index: op.mcs), \
                 patch.object(CARD, 'activate_first_mcs'), \
                 patch.object(CARD, 'read_mcs', return_value=(IDENTITY, (0, 0, 0))), \
                 patch.object(CARD, 'capture_views', side_effect=RuntimeError('capture test')) as capture:
