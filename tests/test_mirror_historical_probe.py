@@ -28,6 +28,7 @@ class HistoryWorld:
         self.next_curve = 900000
         self.candidates, self.candidate_events = {}, []
         self.map_events = []
+        self.map_builders = []
         self.after_map = self.after_match = self.after_destroy_map = lambda:None
         self.after_create = lambda obj: None
         self.t.nx.Point3d = self.t.nx.Vector3d = lambda x,y,z:NS(X=x,Y=y,Z=z)
@@ -41,6 +42,9 @@ class HistoryWorld:
         self.t.part.Expressions = list({e.Tag:e for f in self.t.part.Features for e in f.expressions}.values())
         self.t.nx.Body = Body
         self.t.nx.ScCollector = type('ScCollector', (), {})
+        self.t.nx.Section = type('Section', (), {})
+        self.t.nx.SectionData = type('SectionData', (NS,), {})
+        self.t.nx.SectionElementData = type('SectionElementData', (NS,), {})
         self.t.nx.Session = NS(MarkVisibility=NS(Invisible=0,Visible=1))
         self.t.nx.Features.EditWithRollbackManager = HistoryManager
         self.t.nx.Features.MatchedReferenceBuilder = NS(Types=NS(Curve=71,Face=72,Object=73),
@@ -208,6 +212,7 @@ class HistoryWorld:
             UpdateMap=Mock(side_effect=update),SetMatchingForParent=Mock(side_effect=match),
             Validate=Mock(return_value=True),Commit=Mock(side_effect=AssertionError('Historical map must not Commit')),
             Destroy=Mock(side_effect=destroy))
+        self.map_builders.append(self.w.replace)
         return self.w.replace
 
     def assert_probe_candidates_only(self, test):

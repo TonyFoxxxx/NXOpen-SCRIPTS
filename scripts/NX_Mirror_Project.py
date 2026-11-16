@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Зеркальная копия CAM-проекта — тест без компонентов
-# SCRIPT_VERSION: V1.30.07
-SCRIPT_VERSION = "V1.30.07"
+# SCRIPT_VERSION: V1.30.08
+SCRIPT_VERSION = "V1.30.08"
 SCRIPT_NAME = "Зеркальная копия CAM-проекта — тест"
 
 # Experimental journal: single saved native PRT, no assembly components.
@@ -1763,6 +1763,7 @@ class ReplacementMapInputs:
         self.rule_reports = set()
         self.pending_collectors = None
         self.observed = {}
+        self.unmapped, self.initial_tags, self.missing_collectors = set(), set(), set()
 
     def rule_types(self, rules, tag):
         expected = self.t.nx.SelectionIntentRule.RuleType.BodyDumb
@@ -2092,6 +2093,7 @@ class ReplacementMapInputs:
 
     def describe_unmapped(self, tag, parent, checks):
         """Read provenance only; an owner is not a replacement mapping."""
+        self.unmapped.add(tag)
         kind = "Face" if isinstance(parent, self.t.nx.Face) else "Edge" if isinstance(parent, self.t.nx.Edge) else None
         consumers = [(feature, reference_name(name)) for feature, refs in self.p.initial_refs.items()
                      for entity, name in refs if entity == tag]
@@ -2112,6 +2114,7 @@ class ReplacementMapInputs:
         checks = ProbeChecks(self.t, guard, "Проверка всех исходных строк карты")
         def inspect(row):
             tag = probe_tag(row.ParentEntity.Tag, "ParentEntity")
+            self.initial_tags.add(tag)
             parent = self.p.object(tag)
             self.p.stage("Исходная строка карты / " + type(parent).__name__ + " " + str(tag))
             self.t.lines.append("Исходная строка карты: tag=" + str(tag) + "; класс=" + type(parent).__name__ +
@@ -2149,6 +2152,7 @@ class ReplacementMapInputs:
         for index, row in enumerate(rows, 1):
             checks.run("Строка " + str(index), lambda row=row:inspect(row))
         def completeness():
+            self.missing_collectors = set(self.states) - collectors
             if collectors != set(self.states):
                 raise RuntimeError("Редактор не включил исходные коллекции в карту: " + str(sorted(set(self.states) - collectors)) +
                                    "; лишние коллекции: " + str(sorted(collectors - set(self.states))))
@@ -2202,6 +2206,203 @@ class ReplacementMapInputs:
         self.t.lines.append("Карта по отдельным родителям: раскрыто коллекций " + str(len(collectors)) +
                             "; уникальных опор " + str(len(actual)) + "; пропущенных/лишних нет. Правила не заменялись.")
         return expanded
+
+
+class ReferenceProvenanceProbe:
+    """Read nested selection links; never turn them into replacement matches.
+
+    Section output curves are internal results, not their source curves.
+    Collected rule objects may be filtered. Neither establishes full intent.
+    Transient SectionData/SectionElementData are disposed; model objects,
+    sections, collectors, rules and their output curves are never edited.
+    """
+    def __init__(self, probe, guard, targets):
+        self.p, self.t, self.guard = probe, probe.t, guard
+        self.targets = set(targets)
+        self.container_classes = (self.t.nx.ScCollector,self.t.nx.Section)
+        self.checks = ProbeChecks(self.t, guard, "Поиск вложенных связей опор")
+        self.links, self.roots, self.pending, self.seen = {}, {}, [], set()
+        self.link_count = 0
+
+    def is_container(self, obj):
+        return isinstance(obj, self.container_classes)
+
+    def link(self, owner, role, obj, nullable=False):
+        if obj is None:
+            if not nullable:
+                raise RuntimeError(role + ": вместо объекта возвращён None")
+            self.t.lines.append("  " + str(owner) + " / " + role + ": None (нет соединителя)")
+            return
+        self.guard()
+        tag = probe_tag(obj.Tag, role)
+        obj = self.p.object(tag)
+        if self.link_count >= MAX_OBJECTS:
+            raise RuntimeError("Превышен предел чтения вложенных связей")
+        self.link_count += 1
+        self.links.setdefault(owner, []).append((role, tag))
+        self.t.lines.append("  Связь " + str(owner) + " / " + role + " → " + str(tag) + " [" + type(obj).__name__ + "]")
+        if self.is_container(obj) and tag not in self.seen:
+            self.pending.append(tag)
+
+    def objects(self, owner, role, read):
+        ok, values = self.checks.run(str(owner) + " / " + role, lambda:probe_array(read(), role))
+        if ok:
+            self.t.lines.append("  " + str(owner) + " / " + role + ": прочитано " + str(len(values)))
+            for i, obj in enumerate(values, 1):
+                self.checks.run(str(owner) + " / " + role + " " + str(i),
+                    lambda i=i,obj=obj:self.link(owner,role+"["+str(i)+"]",obj))
+
+    def rules(self, read):
+        rules = probe_array(read(), "правила выбора")
+        result = []
+        for rule in rules:
+            self.guard()
+            if not isinstance(rule, self.t.nx.SelectionIntentRule):
+                raise RuntimeError("Не подтверждён класс SelectionIntentRule")
+            result.append((type(rule).__name__, str(rule.Type)))
+        self.t.lines.append("  Правила (оболочка, Type): " + str(tuple(result)) + ". Полные определения не подтверждены.")
+        return tuple(result)
+
+    def collector(self, obj):
+        tag = int(obj.Tag)
+        reader = ReplacementMapInputs(self.p,self.guard)
+        self.checks.run(str(tag) + " / режимы", lambda:reader.mode_state(obj))
+        self.checks.run(str(tag) + " / фильтры", lambda:reader.filter_state(obj))
+        self.objects(tag,"GetObjects (вычисленный выбор)",lambda:obj.GetObjects())
+        self.checks.run(str(tag) + " / GetRules", lambda:self.rules(obj.GetRules))
+        def grouped():
+            result = probe_array(obj.AskRulesAndCollectedEntities(),"AskRulesAndCollectedEntities")
+            if len(result) != 3:
+                raise RuntimeError("AskRulesAndCollectedEntities: требуется (objects, rules, counts)")
+            objects = probe_array(result[0],"objects")
+            kinds = self.rules(lambda:result[1])
+            counts = probe_array(result[2],"counts")
+            if (len(counts) != len(kinds) or any(type(n) is not int or n < 0 for n in counts) or
+                    sum(counts) != len(objects)):
+                raise RuntimeError("Не прочитано полное разбиение объектов по правилам")
+            self.t.lines.append("  " + str(tag) + " / counts=" + str(counts) +
+                                ". Фильтры не снимаются; это диагностика вычисленных связей.")
+            return objects, counts
+        ok, grouped_data = self.checks.run(str(tag) + " / AskRulesAndCollectedEntities",grouped)
+        if ok:
+            objects, counts = grouped_data
+            start = 0
+            for number,count in enumerate(counts,1):
+                for i,obj in enumerate(objects[start:start+count],1):
+                    role = "Правило " + str(number) + " / объект " + str(i)
+                    self.checks.run(str(tag) + " / " + role, lambda role=role,obj=obj:self.link(tag,role,obj))
+                start += count
+
+    def section(self, obj):
+        tag = int(obj.Tag)
+        self.objects(tag,"GetOutputCurves (внутренний результат Section)",lambda:obj.GetOutputCurves())
+        ok, data = self.checks.run(str(tag) + " / GetSectionData",lambda:probe_array(obj.GetSectionData(),"GetSectionData"))
+        if not ok:
+            return
+        owned_data, owned_elements = [], []
+        def transient(value, expected):
+            if not isinstance(value,expected):
+                raise RuntimeError("Не подтверждён класс временных данных " + expected.__name__ +
+                                   "; объект " + type(value).__name__ + " не освобождается")
+        try:
+            for index,item in enumerate(data,1):
+                prefix = "Section " + str(tag) + " / группа " + str(index)
+                valid,_ = self.checks.run(prefix + " / класс SectionData",
+                    lambda item=item:transient(item,self.t.nx.SectionData))
+                if not valid:
+                    continue
+                owned_data.append(item)
+                self.checks.run(prefix + " / GetRules",lambda item=item:self.rules(item.GetRules))
+                for name in ("GetStartConnector","GetEndConnector"):
+                    self.checks.run(prefix + " / " + name,lambda item=item,name=name:
+                        self.link(tag,prefix+" / "+name,getattr(item,name)(),nullable=True))
+                ok,elements = self.checks.run(prefix + " / GetSectionElementsData",
+                    lambda item=item:probe_array(item.GetSectionElementsData(),"GetSectionElementsData"))
+                if not ok:
+                    continue
+                for number,element in enumerate(elements,1):
+                    role = prefix + " / элемент " + str(number)
+                    valid,_ = self.checks.run(role + " / класс SectionElementData",
+                        lambda element=element:transient(element,self.t.nx.SectionElementData))
+                    if not valid:
+                        continue
+                    owned_elements.append(element)
+                    def read(element=element,role=role):
+                        values = probe_array(element.GetSectionElementData1(),"GetSectionElementData1")
+                        if len(values) != 5:
+                            raise RuntimeError("GetSectionElementData1: ожидается пять значений")
+                        for i,label,nullable in ((0,"источник",False),(1,"начальный соединитель",True),(3,"конечный соединитель",True)):
+                            self.checks.run(role+" / "+label,lambda i=i,label=label,nullable=nullable:
+                                self.link(tag,role+" / "+label,values[i],nullable))
+                        points = tuple(tuple(xyz(values[i])) for i in (2,4))
+                        if not all(math.isfinite(v) for point in points for v in point):
+                            raise RuntimeError("Не прочитаны конечные точки элемента Section")
+                        self.t.lines.append("  " + role + " / точки=" + str(points))
+                    self.checks.run(role,read)
+        finally:
+            # Dispose after all groups were read: wrappers can be shared across
+            # returned lists. Never dispose a model object or the same wrapper twice.
+            released = set()
+            for kind,values in (("SectionElementData",owned_elements),("SectionData",owned_data)):
+                for item in values:
+                    if id(item) not in released:
+                        released.add(id(item))
+                        self.checks.run("Section " + str(tag) + " / Dispose " + kind,lambda item=item:item.Dispose())
+
+    def report_paths(self):
+        for target in sorted(self.targets):
+            found, traversed = 0, 0
+            for root,contexts in sorted(self.roots.items()):
+                pending = [(root,())]
+                visited = set()
+                while pending:
+                    tag,path = pending.pop(0)
+                    if tag in visited:
+                        continue
+                    visited.add(tag)
+                    traversed += 1
+                    if traversed > MAX_PART_OBJECTS:
+                        raise RuntimeError("Превышен предел поиска путей вложенных связей")
+                    if tag == target:
+                        for context in contexts:
+                            self.t.lines.append("Путь к опоре " + str(target) + ": " + context +
+                                                " → " + str(root) + "".join(" / "+role+" → "+str(child) for role,child in path))
+                            found += 1
+                    pending.extend((child,path+((role,child),)) for role,child in self.links.get(tag,()))
+            if not found:
+                self.t.lines.append("Для опоры " + str(target) + " путь по прочитанным вложенным связям не найден. " +
+                                    "Это не доказательство отсутствия потребителя или пригодности к замене.")
+
+    def run(self):
+        self.t.lines.append("ПОИСК ВЛОЖЕННЫХ СВЯЗЕЙ: только чтение; правила и внутренние кривые Section не изменяются.")
+        try:
+            for feature,refs in sorted(self.p.initial_refs.items()):
+                scope = "заменяемая история" if feature in self.p.old else "сохраняемый элемент"
+                for tag,name in refs:
+                    context = history_feature_label(feature,self.t.history_baseline[feature]) + " / " + scope + " / " + reference_name(name)
+                    self.roots.setdefault(tag,[]).append(context)
+                    def root(tag=tag,context=context):
+                        obj = self.p.object(tag)
+                        if self.is_container(obj):
+                            self.t.lines.append("Вложенная коллекция " + str(tag) + " [" + type(obj).__name__ + "]: " + context)
+                            self.pending.append(tag)
+                    self.checks.run(context,root)
+            while self.pending:
+                tag = self.pending.pop(0)
+                if tag in self.seen:
+                    continue
+                if len(self.seen) >= MAX_OBJECTS:
+                    raise RuntimeError("Превышен предел вложенных коллекций")
+                self.seen.add(tag)
+                def read(tag=tag):
+                    obj = self.p.object(tag)
+                    (self.collector if isinstance(obj,self.t.nx.ScCollector) else self.section)(obj)
+                self.checks.run("Вложенная коллекция " + str(tag),read)
+            self.checks.run("Пути к неподтверждённым опорам",self.report_paths)
+        finally:
+            self.checks.summary()
+            self.t.lines.append("Прочитанные вложенные связи не добавлены в карту замены. " +
+                                "Неизвестные правила, фильтры и внутренние результаты Section не объявляются поддержанными.")
 
 
 class BodyReplacementProbe:
@@ -3342,6 +3543,112 @@ class HistoricalReplacementMapProbe:
             checks.summary()
             self.t.lines.append("Диагностика не заменяет проверку карты или отката; " +
                                 "последующие сопоставления, перенос истории и расчёт CAM не выполнялись.")
+        return not checks.errors
+
+    def inspect_unique_view(self, closed_builder):
+        """An isolated map view, never a retry of failed assignment checks."""
+        self.h.require_copy()
+        self.t.stage = "Диагностический просмотр / новый ReplaceFeatureBuilder"
+        builder = self.t.part.Features.CreateReplaceFeatureBuilder()
+        if builder is None or builder is closed_builder:
+            raise RuntimeError("Не получен отдельный редактор для диагностического просмотра")
+        self.diagnostic_editor_open = True
+        checks = ProbeChecks(self.t,self.h.require_copy,"Диагностический просмотр уникальных объектов")
+        try:
+            method = self.t.nx.Features.ReplaceFeatureBuilder.MappingMethodType.MapOnlyObjectsWithModelingDependencies
+            settings = (("MappingMethod",method),("DoAutomaticGeomMatch",False),
+                        ("CopyReplacementFeature",True),("DeleteOriginalFeature",True),("DisplayUniqueInputsToMap",True))
+            for name,value in settings:
+                self.h.require_copy()
+                setattr(builder,name,value)
+            def configuration():
+                self.h.require_copy()
+                for name,value in settings:
+                    actual = getattr(builder,name)
+                    if (actual != value or isinstance(value,bool) and type(actual) is not bool):
+                        raise RuntimeError("Не подтверждён режим диагностического редактора: " + name)
+                original = probe_array(builder.SelectFeature.GetArray(),"Диагностика / SelectFeature")
+                replacement = probe_array(builder.ReplacementFeature.GetArray(),"Диагностика / ReplacementFeature")
+                if (Counter(probe_tag(f.Tag,"Исходный элемент") for f in original) != Counter(self.p.old) or
+                        tuple(probe_tag(f.Tag,"Кандидат") for f in replacement) != (int(self.p.copy_feature.Tag),)):
+                    raise RuntimeError("Изменился выбор элементов диагностического редактора")
+            self.h.require_copy()
+            builder.SelectFeature.Add([self.p.object(tag) for tag in self.p.features if tag in self.p.old])
+            self.h.require_copy()
+            builder.ReplacementFeature.Add([self.p.object(self.p.copy_feature.Tag)])
+            configuration()
+            self.t.lines.append("ОТДЕЛЬНЫЙ ПРОСМОТР КАРТЫ: те же элементы; DisplayUniqueInputsToMap=True; " +
+                                "автосопоставление выключено; SetMatching, Validate и Commit не вызываются.")
+            self.t.stage = "Диагностический просмотр / UpdateMap"
+            self.h.require_copy()
+            builder.UpdateMap()
+            configuration()
+            self.t.stage = "Диагностический просмотр / GetMatchedReferences"
+            rows = probe_array(builder.FeatureReferences.GetMatchedReferences(),"Диагностические строки карты")
+            actual = set()
+            enum = self.t.nx.Features.MatchedReferenceBuilder.Types
+            type_names = ("Curve","Face","CurveCollector","FaceCollector","Section","Point","Vector",
+                          "Object","BodyCollector","Csys","Plane","Axis","Undefined")
+            def row_data(row,index):
+                tag = probe_tag(row.ParentEntity.Tag,"Диагностический ParentEntity")
+                obj = self.p.object(tag)
+                kind,reverse,status = row.Type,row.ReverseDirection,row.MatchedStatus
+                if type(reverse) is not bool:
+                    raise RuntimeError("Не прочитан ReverseDirection диагностической строки " + str(tag))
+                names = [name for name in type_names if getattr(enum,name,None) is not None and getattr(enum,name)==kind]
+                actual.add(tag)
+                route = ("проверенная геометрия кандидата" if tag in self.p.map else
+                         "отдельная историческая кривая-кандидат" if tag in self.c.created else
+                         "элемент заменяемой истории" if tag in self.p.old else "соответствие не подтверждено")
+                self.t.lines.append("Уникальная строка " + str(index) + ": tag=" + str(tag) + "; класс=" + type(obj).__name__ +
+                    "; Type=" + str(kind) + " / " + ("|".join(names) or "имя enum не распознано") +
+                    "; ReverseDirection=" + str(reverse) + "; статус=" + str(status) + "; " + route)
+            for index,row in enumerate(rows,1):
+                checks.run("Строка " + str(index),lambda row=row,index=index:row_data(row,index))
+            configuration()
+            inputs = self.p.map_inputs
+            self.t.lines.append("Сравнение доступных tag двух представлений: только исходное=" +
+                str(sorted(inputs.initial_tags-actual)) + "; только уникальное=" + str(sorted(actual-inputs.initial_tags)))
+            self.t.lines.append("Исторические кривые-кандидаты, отсутствующие среди прочитанных уникальных строк: " +
+                                str(sorted(set(self.c.created)-actual)))
+            for tag in sorted(inputs.missing_collectors):
+                consumers = [(feature,reference_name(name)) for feature,refs in self.p.initial_refs.items() for parent,name in refs if parent==tag]
+                members = inputs.states[tag][0]
+                self.t.lines.append("Отсутствовавшая коллекция " + str(tag) + ": потребители=" + str(consumers) +
+                    "; сама коллекция в уникальных строках=" + str(tag in actual) +
+                    "; исходные BodyDumb-объекты=" + str(members) +
+                    "; объекты найдены=" + str(tuple(member for member in members if member in actual)) +
+                    ". Это не доказывает перенос конкретного потребителя; проверка полноты остаётся непройденной.")
+            checks.summary()
+            if checks.errors:
+                self.t.lines.append("Сравнение представлений частичное: часть строк не прочитана; отсутствие tag не доказано.")
+        except Exception as error:
+            self.h.record_error("Ошибка отдельного просмотра карты",self.t.stage,error)
+            raise
+        finally:
+            self.t.stage = "Диагностический просмотр / Destroy без Commit"
+            self.h.require_copy()
+            builder.Destroy()
+            self.diagnostic_editor_open = False
+
+    def diagnose_blockers(self, closed_builder):
+        inputs = self.p.map_inputs
+        if inputs is None or not (inputs.unmapped or inputs.missing_collectors):
+            return
+        ReferenceProvenanceProbe(self.p,self.h.require_copy,inputs.unmapped|inputs.missing_collectors).run()
+        if self.diagnose_after_failure() is not True:
+            self.t.lines.append("Отдельный просмотр карты заблокирован: после чтения вложенных связей сохранность не подтверждена.")
+            return
+        self.diagnostic_editor_open = False
+        try:
+            self.inspect_unique_view(closed_builder)
+        except Exception as error:
+            self.h.record_error("Диагностический просмотр остановлен; первичная ошибка карты сохранена",self.t.stage,error)
+        finally:
+            if not self.diagnostic_editor_open:
+                self.diagnose_after_failure()
+            else:
+                self.t.lines.append("Проверки после отдельного просмотра заблокированы: закрытие редактора не подтверждено; далее откат.")
 
     def run(self):
         if set(self.c.created) != set(self.h.shared_curves):
@@ -3379,7 +3686,10 @@ class HistoricalReplacementMapProbe:
         if primary is not None:
             if cleanup is None:
                 try:
-                    self.diagnose_after_failure()
+                    if self.diagnose_after_failure() is True:
+                        self.diagnose_blockers(builder)
+                    else:
+                        self.t.lines.append("Поиск вложенных связей и отдельный просмотр карты заблокированы: сохранность не подтверждена.")
                 except Exception as error:
                     self.h.record_error("Продолжение независимой диагностики остановлено",self.t.stage,error)
             else:

@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-16 — Mirrored CAM project trial V1.30.08
+
+The V1.30.07 report identified two map blockers: ownerless/unmatched Edge 757371 and missing Part Box collector 750348. Then 1367 independent checks passed and rollback was confirmed. Add accessible nested Section/ScCollector reference search with consumer context and a separate diagnostic ReplaceFeatureBuilder using DisplayUniqueInputsToMap=True. Sources, connectors and internal output curves remain distinct; rules/filters stay unchanged, and Dispose is restricted to confirmed transient objects. Audit integrity before/after the separate view and retain both primary failures. The additional editor cannot assign matches, Validate or Commit; rollback remains mandatory.
+
+Add 29 regressions: 815 focused checks outside NX, including the existing 147 using C fixtures. These do not establish new-reader compatibility with DC 2606 or CAM transfer. Both blockers still require resolution from actual dependencies. V1.30.08, SHA-256, README and RU/EN guides are aligned. [Result and next run](docs/en/mirror-project.md#reference-provenance-v13008).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.30.07
 
 After a map-row failure, read the remaining accessible rows and preserve every error's stage/object, full message, NX/API code and traceback. Unknown Face/Edge inputs receive direct-consumer, final-topology and UF-owner diagnostics without automatic mapping. Dependent assignments, expansion and further filter clones require successful prerequisite checks; the unfiltered proof remains mandatory. After an error and editor destruction, continue independent history, geometry, sketch, MCS/stock/CAM and candidate checks. Losing the active copy stops diagnostics immediately; rollback is verified separately. No Commit is added.

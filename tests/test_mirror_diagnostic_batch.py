@@ -74,8 +74,10 @@ class DiagnosticMapTests(unittest.TestCase):
             self.assertIn(text,report)
         self.assertGreaterEqual(len(error.errors),3)
         h.w.replace.SetMatchingForParent.assert_not_called()
-        self.assertEqual(h.w.replace.UpdateMap.call_count,1)
-        self.assertIs(h.w.replace.DisplayUniqueInputsToMap,False)
+        self.assertEqual(h.map_builders[0].UpdateMap.call_count,1)
+        self.assertIs(h.map_builders[0].DisplayUniqueInputsToMap,False)
+        for builder in h.map_builders:
+            builder.SetMatchingForParent.assert_not_called();builder.Commit.assert_not_called()
         self.assertIn('Независимая диагностика после ошибки карты: пройдено',report)
 
     def test_unknown_owner_read_success_is_diagnostic_and_never_a_self_mapping(self):
@@ -95,7 +97,7 @@ class DiagnosticMapTests(unittest.TestCase):
         h.before_inputs=prepend
         h.after_destroy_map=lambda:clones_after_destroy.append(len(h.clones))
         self.reject(h)
-        self.assertEqual(clones_at_map,clones_after_destroy)
+        self.assertEqual(clones_after_destroy,clones_at_map*len(clones_after_destroy))
         self.assertGreater(clones_at_map[0],0)
         self.assertIn('Коллекция в карте:','\n'.join(h.t.lines))
 
