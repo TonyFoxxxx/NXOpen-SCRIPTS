@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.70
+# SCRIPT_VERSION: V2.71
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -48,6 +48,7 @@ Zmin — минимум рассчитанной траектории по фа�
 HTML лежит в Карты Наладки / имя текущего .prt без расширения.
 Название установа — полное имя СКС первой операции. Все установы в одном HTML.
 Повторный экспорт заменяет только выбранные установы в сохранённом HTML.
+Удаление листа после подтверждения сохраняется в HTML и поддерживает общую отмену.
 При обновлении папки прежние отдельные записи её подпапок объединяются в неё.
 Остальные установы и сохранённые ручные правки переносятся без пересоздания.
 «Инструменты проекта» — всегда один первый лист, при необходимости в две колонки.
@@ -118,7 +119,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.70"
+SCRIPT_VERSION = "V2.71"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -2893,6 +2894,7 @@ def resolve_setup_jobs(nx, ui, part, report, memory=None):
     report['_preparation_options'] = options
     selections = [[folder] for folder in folders]
     report['selection_source'] = 'startup_folder_tree'
+    report['_program_folder_paths'] = [row['path'] for row in setup_folder_inventory(program)]
     geometry_index = geometry_ownership(nx, part)
     part_geometry_cache = {}
     jobs = []
@@ -6748,6 +6750,7 @@ CARD_TEMPLATE = r"""<!doctype html>
 <meta name="nx-card-revision" content="__CARD_REVISION__">
 <meta name="nx-card-format" content="setup-sections-v1">
 <meta name="nx-project-tools-position" content="__PROJECT_TOOLS_POSITION__">
+<meta name="nx-project-catalog-deleted" content="__CATALOG_DELETED__">
 <meta name="nx-project-image-scale" content="__PROJECT_IMAGE_SCALE__">
 <title>__DOCUMENT_TITLE__</title>
 <script id="nx-project-model" type="application/json">__PROJECT_MODEL__</script>
@@ -7104,10 +7107,23 @@ table[data-fit-family] tbody>tr.operation-selected>td{background:#dcf2ff}
 .note-height-grip:hover:after,.note-height-grip:focus-visible:after,.note-height-grip.dragging:after{background:#087d72;opacity:1}
 .setup-document.note-sizing,.setup-document.note-sizing *{cursor:row-resize!important;user-select:none!important}
 @media print{.note-height-grip{display:none!important}}
+.setup-pages>.page[data-page-deleted],.setup-document.no-visible-pages{display:none!important}
+.page-remove{position:absolute;right:2px;top:2px;z-index:15;width:28px;height:28px;padding:0;border:1px solid #a9c2c8;border-radius:4px;background:white;color:#34484c;font:22px/1 Arial;cursor:pointer}
+.page-remove:hover,.page-remove:focus-visible{color:#a12e23;border-color:currentColor}
+#remove-page-dialog{max-width:26em;padding:20px 24px;border:1px solid #a9c2c8;border-radius:6px;color:#223638;font:15px 'Segoe UI',Arial,sans-serif}
+#remove-page-dialog::backdrop{background:#17282b66}
+#remove-page-dialog p{margin:0 0 18px}
+#remove-page-dialog form{display:flex;justify-content:flex-end;gap:8px}
+#remove-page-dialog button{min-width:5em;padding:5px 12px;font:inherit;cursor:pointer}
+@media print{.page-remove,#remove-page-dialog,#empty-card{display:none!important}
+ .setup-document,.setup-document:last-child,.setup-pages>.page,.setup-pages>.page:last-child{break-after:auto;page-break-after:auto}
+ .setup-pages>.page[data-print-break]{break-before:page;page-break-before:always}}
 </style></head><body>
 
 <div class="project-toolbar"><span class="brand">Карта наладки</span><details id="operation-options"><summary>Столбцы</summary><div class="operation-options-panel"><strong id="operation-options-title"></strong><div id="operation-column-list"></div></div></details><label>Установ <select id="setup-jump" aria-label="Перейти к установу">__SETUP_OPTIONS__</select></label><div class="actions"><button id="undo" type="button" disabled title="Отменить последнее действие (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z">Отменить</button><button id="save" type="button">Сохранить карту</button><button id="save-copy" type="button" hidden>Скачать копию</button><button id="print" class="primary" type="button">Печать</button></div></div>
 <main id="setup-documents">__SETUPS__</main>
+<p id="empty-card" hidden>В карте нет листов.</p>
+<dialog id="remove-page-dialog" aria-labelledby="remove-page-question"><p id="remove-page-question">Вы уверены, что ходите удалить лист?</p><form method="dialog"><button value="yes">Да</button><button value="no" autofocus>Нет</button></form></dialog>
 <script>
 'use strict';
 const DOC = __DOCUMENT_CONTEXT__;
@@ -7777,6 +7793,14 @@ const ProjectImage=(()=>{
 ProjectModel.adoptScale();
 ProjectModel.captureInitial();
 let editors=[];
+const catalogDeletion=document.querySelector('meta[name="nx-project-catalog-deleted"]');
+function confirmPageRemoval(remove){
+ const dialog=document.getElementById('remove-page-dialog');
+ if(dialog.open)return;
+ dialog.returnValue='';
+ dialog.addEventListener('close',()=>{if(dialog.returnValue==='yes')remove();},{once:true});
+ dialog.showModal();
+}
 let paperScreenScale=1;
 document.documentElement.style.setProperty('--paper-screen-scale','1');
 function screenPaperScale(node){
@@ -7809,7 +7833,8 @@ function placeProjectTools(){
  if(owner!==target){target.flow.setCatalog(owner.flow.catalogContent());owner.flow.setCatalog();}
  document.querySelector('meta[name="nx-project-tools-position"]').content='first';
 }
-function saveDraft(){try{localStorage.setItem(draftKey,JSON.stringify({options:ColumnOptions.state(),projectImageScale:ProjectImage.value(),projectModel:ProjectModel.state(),setups:Object.fromEntries(editors.map(e=>[e.id,e.state()]))}));}catch(e){}}
+function documentState(){return {options:ColumnOptions.state(),projectImageScale:ProjectImage.value(),projectModel:ProjectModel.state(),catalogDeleted:catalogDeletion.content==='true',setups:Object.fromEntries(editors.map(e=>[e.id,e.state()]))};}
+function saveDraft(){try{localStorage.setItem(draftKey,JSON.stringify(documentState()));}catch(e){}}
 function markChanged(){if(CardHistory?.restoring())return;CardHistory?.record();changed=true;editRevision++;saveDraft();queueLocalSave();}
 
 // Session-only history stores editable state, not whole documents or mesh data.
@@ -7822,7 +7847,7 @@ function createCardHistory(){
   if(a===b)return true;if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
   const keys=Object.keys(a);return keys.length===Object.keys(b).length&&keys.every(k=>Object.prototype.hasOwnProperty.call(b,k)&&same(a[k],b[k]));
  }
- function capture(){return clone({options:ColumnOptions.state(),projectImageScale:ProjectImage.value(),projectModel:ProjectModel.state(),setups:Object.fromEntries(editors.map(e=>[e.id,e.state()]))});}
+ function capture(){return clone(documentState());}
  function sync(){document.querySelectorAll('#undo,[data-editor-id="cell-undo"]').forEach(button=>{button.disabled=busy||!steps.length;button.title='Отменить последнее действие (Ctrl+Z)';});}
  function endGroup(){group=pointer=key=typing=wheel=null;clearTimeout(wheelTimer);}
  function editable(target){return target instanceof Element&&(target.isContentEditable||!!target.closest('textarea,input:not([type]),input[type="text"],input[type="search"],input[type="number"]'));}
@@ -7843,6 +7868,7 @@ function createCardHistory(){
   const entry=steps.pop(),scroll=[window.scrollX,window.scrollY];busy=true;endGroup();
   try{
    PercentInput.cancel();ProjectModel.cancel();editors.forEach(e=>e.cancel());
+   catalogDeletion.content=String(entry.before.catalogDeleted);
    ColumnOptions.set(entry.before.options);ProjectImage.set(entry.before.projectImageScale);ProjectModel.restore(entry.before.projectModel);
    editors.forEach(e=>e.restore(clone(entry.before.setups[e.id]),true));paginate();ProjectModel.queue(true);
    current=capture();
@@ -7861,7 +7887,7 @@ function createCardHistory(){
  document.addEventListener('focusout',()=>{if(typing)endGroup();},true);
  document.addEventListener('keydown',event=>{
   if((event.ctrlKey||event.metaKey)&&!event.shiftKey&&!event.altKey&&(event.code==='KeyZ'||event.key.toLowerCase()==='z')){
-   if(editable(event.target)||event.isComposing)return;
+   if(editable(event.target)||event.isComposing||document.getElementById('remove-page-dialog').open)return;
    event.preventDefault();event.stopImmediatePropagation();undo();return;
   }
   if(editable(event.target))return;
@@ -7889,7 +7915,17 @@ document.addEventListener('compositionend',()=>{composing=false;queueLocalSave()
 window.addEventListener('blur',()=>{activePointers.clear();composing=false;queueLocalSave();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&LOCAL_SESSION&&changed&&!autosaveBlocked)saveLocalCard(true);});
 function renumber(){
- const pages=[...document.querySelectorAll('.setup-pages>.page')];pages.forEach((p,i)=>{p.querySelector('.page-number').textContent=i+1;p.querySelector('.page-count').textContent=pages.length;});
+ const pages=[...document.querySelectorAll('.setup-pages>.page:not([data-page-deleted],.operation-drop-page)')];
+ pages.forEach((p,i)=>{p.querySelector('.page-number').textContent=i+1;p.querySelector('.page-count').textContent=pages.length;p.toggleAttribute('data-print-break',i>0);});
+ const jump=document.getElementById('setup-jump');
+ for(const option of jump.options){
+  const section=document.querySelector('[data-setup-id="'+option.value+'"]');
+  const empty=!section.querySelector('.setup-pages>.page:not([data-page-deleted],.operation-drop-page)');
+  section.classList.toggle('no-visible-pages',empty);option.hidden=option.disabled=empty;
+ }
+ if(jump.selectedOptions[0]?.disabled)jump.selectedIndex=[...jump.options].findIndex(o=>!o.disabled);
+ document.getElementById('empty-card').hidden=!!pages.length;
+ jump.disabled=document.getElementById('print').disabled=!pages.length;
  // Controls travel with their own paper. Reserve enough shared space above
  // the strip so panels never overlap the project toolbar or stagger sheets.
  if(!window.matchMedia('print').matches){
@@ -7905,8 +7941,8 @@ function renumber(){
 }
 window.addEventListener('resize',renumber);
 function paginate(){editors.forEach(e=>e.paginate());renumber();}
-function validFields(){editors.forEach(e=>e.fitFields());const field=document.querySelector('.field.overflowing');if(field){field.focus();return false;}return true;}
-async function printCard(){if(!validFields())return;paginate();try{editors.forEach(e=>e.prepare());ProjectModel.prepare();await Promise.all(editors.map(e=>e.waitImages()));window.print();}catch(e){}}
+function validFields(){editors.forEach(e=>e.fitFields());const field=[...document.querySelectorAll('.field.overflowing')].find(el=>!el.closest('[data-page-deleted]'));if(field){field.focus();return false;}return true;}
+async function printCard(){if(document.getElementById('print').disabled||!validFields())return;paginate();try{editors.forEach(e=>e.prepare());ProjectModel.prepare();await Promise.all(editors.map(e=>e.waitImages()));window.print();}catch(e){}}
 function serializedCard(revision){
  editors.forEach(e=>e.prepare());ProjectModel.prepare();
  const copy=document.documentElement.cloneNode(true),sections=[...copy.querySelectorAll('.setup-document')];
@@ -7915,6 +7951,7 @@ function serializedCard(revision){
  copy.querySelectorAll('.project-model').forEach(n=>n.classList.remove('model-ready'));
  copy.querySelector('meta[name="nx-card-revision"]').content=revision;copy.querySelector('#nx-local-session')?.remove();
  copy.querySelector('#save-toast')?.remove();
+ copy.querySelector('#remove-page-dialog').removeAttribute('open');
  copy.querySelector('#save').disabled=false;copy.querySelector('#save').textContent='Сохранить карту';copy.querySelector('#save-copy').hidden=true;
  copy.querySelector('#undo').disabled=true;
  copy.querySelectorAll('#setup-jump option').forEach(o=>o.removeAttribute('selected'));
@@ -8430,7 +8467,7 @@ const PageScale=(()=>{
   if(!bar){bar=document.createElement('div');bar.className='page-controls';page.append(bar);}
   // Migrate the old model-only command to one reset button per physical sheet.
   bar.querySelectorAll('[data-project-model-action="reset"]').forEach(button=>button.remove());
-  if(key==='cover'){bar.classList.add('setup-panel');const toolbar=scope.querySelector('.toolbar');if(toolbar&&toolbar.parentElement!==bar)bar.prepend(toolbar);}
+  if(key==='cover'){bar.classList.add('setup-panel');const toolbar=scope.querySelector('.toolbar');if(toolbar&&!page.hasAttribute('data-page-deleted')&&toolbar.parentElement!==bar)bar.prepend(toolbar);}
   // Also remove table sliders retained by previously saved HTML.
   bar.querySelectorAll('input[data-scale-target="page"],input[data-scale-target="tools"]').forEach(input=>input.closest('label')?.remove());
   if(key==='catalog'){
@@ -8452,9 +8489,13 @@ const PageScale=(()=>{
   let reset=bar.querySelector('[data-page-reset]');
   if(!reset){reset=document.createElement('button');reset.type='button';reset.dataset.pageReset='true';reset.textContent='Исходный вид';bar.append(reset);}
   reset.title='Восстановить исходные элементы, компоновку и оформление этого листа';
+  if(!page.classList.contains('operation-drop-page')&&!page.querySelector(':scope>.page-remove')){
+   const button=document.createElement('button');button.type='button';button.className='page-remove';
+   button.textContent='×';button.title='Удалить лист';button.setAttribute('aria-label',button.title);page.append(button);
+  }
  }
  function refresh(){
-  let index=0;scope.querySelectorAll('.setup-pages>.page').forEach(page=>apply(page,page.classList.contains('project-tools-page')?'catalog':page.classList.contains('cover-page')?'cover':page.classList.contains('mcs-view-page')?'mcs-'+page.dataset.mcsKey:'operations-'+(++index),true));
+  scope.querySelectorAll('.setup-pages>.page:not(.operation-drop-page)').forEach(page=>apply(page,page.classList.contains('project-tools-page')?'catalog':page.classList.contains('cover-page')?'cover':page.classList.contains('mcs-view-page')?'mcs-'+page.dataset.mcsKey:page.dataset.pageKey,true));
   scope.dataset.pageScales=JSON.stringify({...scales});scope.dataset.coverToolScale=String(toolScale);scope.dataset.pageWraps=JSON.stringify(wrapState());
  }
  scope.addEventListener('input',event=>{
@@ -9441,7 +9482,8 @@ const CardFlow=(()=>{
  const pages=local('pages'),cover=pages.querySelector('.cover-page'),content=cover.querySelector('.page-content'),mm=96/25.4;
  const source=local('operation-source'),master=[...source.content.querySelectorAll('tbody>tr')];
  master.forEach((row,i)=>row.dataset.rowId=String(i));
- const opIds=master.filter(r=>r.dataset.kind==='operation').map(r=>r.dataset.rowId),opSet=new Set(opIds),children=new Map();
+ const allOpIds=master.filter(r=>r.dataset.kind==='operation').map(r=>r.dataset.rowId),children=new Map();
+ let opIds=allOpIds,opSet=new Set(opIds),deletedSheets=new Set(),deletedRows=new Set();
  master.forEach((r,i)=>{
   if(r.dataset.kind!=='group')return;const list=[];
   for(let j=i+1;j<master.length&&Number(master[j].dataset.depth)>Number(r.dataset.depth);j++)if(master[j].dataset.kind==='operation')list.push(master[j].dataset.rowId);
@@ -9468,13 +9510,50 @@ const CardFlow=(()=>{
   for(const property of ['position','left','top','transform','transform-origin','width'])table.style.removeProperty(property);
  });
  let committed=new Set(),selection=new Set(),anchor=null,drag=null,ghost=null,busy=false;
+ // Continuations are paginated again for screen and paper. Remove their actual
+ // operation IDs and reserve the old sheet's settings slot for Undo.
+ function deletionState(){return {sheets:[...deletedSheets],rows:[...deletedRows]};}
+ function restoreDeletions(data){
+  deletedSheets=new Set(Array.isArray(data?.sheets)?data.sheets:[]);
+  deletedRows=new Set(Array.isArray(data?.rows)?data.rows:[]);
+  opIds=allOpIds.filter(id=>!deletedRows.has(id));opSet=new Set(opIds);
+  selection=validIds([...selection]);committed=validIds([...committed]);
+ }
+ try{restoreDeletions(JSON.parse(scope.dataset.deletedPages||'null'));}catch(e){}
+ function applyDeletions(){
+  scope.classList.remove('no-visible-pages');
+  cover.toggleAttribute('data-page-deleted',deletedSheets.has('cover'));
+  if(deletedSheets.has('cover')&&cover.querySelector('.toolbar'))pages.before(cover.querySelector('.toolbar'));
+  for(const page of pages.querySelectorAll('.mcs-view-page')){
+   page.toggleAttribute('data-page-deleted',deletedSheets.has('mcs-'+page.dataset.mcsKey));
+  }
+ }
+ function deletePage(page){
+  const key=page.dataset.pageKey;
+  if(!key||page.hasAttribute('data-page-deleted')||page.classList.contains('operation-drop-page'))return;
+  const rows=[...page.querySelectorAll('.ops tbody tr[data-kind="operation"]')].map(r=>r.dataset.rowId);
+  confirmPageRemoval(()=>{
+   if(key==='catalog')catalogDeletion.content='true';
+   else{
+    deletedSheets.add(key);
+    rows.forEach(id=>deletedRows.add(id));restoreDeletions(deletionState());
+    if(key==='cover'||rows.length)placement='manual';
+   }
+   reflow();markChanged();
+   document.getElementById('undo').focus({preventScroll:true});
+  });
+ }
+ pages.addEventListener('click',event=>{
+  const button=event.target.closest('.page-remove');if(button)deletePage(button.closest('.page'));
+ });
+ function rowOperations(row){return (children.get(row.dataset.rowId)||[row.dataset.rowId]).filter(id=>opSet.has(id));}
  const status=local('operations-status');
  let placement=cover.dataset.coverPlacement||(cover.hasAttribute('data-cover-operations')?'manual':'auto');
  function validIds(values){return new Set(Array.isArray(values)?values.filter(id=>typeof id==='string'&&opSet.has(id)):[]);}
  try{committed=validIds(JSON.parse(cover.dataset.coverOperations||'[]'));}catch(e){}
  function markSelection(){
-  pages.querySelectorAll('.ops tbody tr').forEach(row=>{const ids=children.get(row.dataset.rowId)||[row.dataset.rowId];const on=ids.length>0&&ids.every(id=>selection.has(id));row.classList.toggle('operation-selected',on);row.setAttribute('aria-selected',String(on));});
-  local('operations-to-cover').disabled=!selection.size;local('operations-to-next').disabled=!selection.size;
+  pages.querySelectorAll('.ops tbody tr').forEach(row=>{const ids=rowOperations(row);const on=ids.length>0&&ids.every(id=>selection.has(id));row.classList.toggle('operation-selected',on);row.setAttribute('aria-selected',String(on));});
+  local('operations-to-cover').disabled=!selection.size||deletedSheets.has('cover');local('operations-to-next').disabled=!selection.size;
   status.textContent=selection.size?'Выбрано операций: '+selection.size:'';
  }
  function subset(selected){
@@ -9533,13 +9612,13 @@ const CardFlow=(()=>{
   const header=content.querySelector('.card-header'),footer=content.querySelector('.page-footer'),scale=screenPaperScale(cover);
   return Math.max(0,(footer.getBoundingClientRect().top-header.getBoundingClientRect().bottom)/scale/mm-(parseFloat(getComputedStyle(header).marginBottom)||0)/mm);
  }
- function fits(ids,m=metrics()){return !ids.size||ids.size<=operationLimit()&&coverHeight(ids,m)<=availableHeight()-GalleryLayout.minimumHeight()-2+.01;}
+ function fits(ids,m=metrics()){return !ids.size||!deletedSheets.has('cover')&&ids.size<=operationLimit()&&coverHeight(ids,m)<=availableHeight()-GalleryLayout.minimumHeight()-2+.01;}
  function fitted(ids,m=metrics()){
   const chosen=new Set(ids);
   for(const id of [...opIds].reverse()){if(fits(chosen,m))break;chosen.delete(id);}return chosen;
  }
  function autoCover(m){
-  if(!ColumnOptions.any())return new Set();
+  if(!ColumnOptions.any()||deletedSheets.has('cover'))return new Set();
   // Count operations, not folder headers; a folder may continue on the next sheet.
   return fitted(new Set(limitEnabled?opIds.slice(0,COVER_OPERATION_LIMIT):opIds),m);
  }
@@ -9560,7 +9639,8 @@ const CardFlow=(()=>{
     m.sums=[0];m.heights.forEach(h=>m.sums.push(m.sums.at(-1)+h));cache.set(scale,m);
    }return cache.get(scale);
   }
-  const result=[];let pageIndex=1,m=measure(pageIndex),current=[],used=0,i=0;
+  function nextSheet(index){do{index++;}while(deletedSheets.has('operations-'+index));return index;}
+  const result=[];let pageIndex=nextSheet(0),m=measure(pageIndex),current=[],used=0,i=0;
   while(i<count){
    const contextHeight=parents[i].reduce((n,j)=>n+m.repeatHeights[j],0);let end=i+1;
    if(rows[i].dataset.kind==='group'){
@@ -9571,7 +9651,7 @@ const CardFlow=(()=>{
    }
    const height=m.sums[end]-m.sums[i];
    if(used+height>m.budget&&current.some(([,repeat])=>!repeat)){
-    result.push({key:'operations-'+pageIndex,items:current});pageIndex++;m=measure(pageIndex);
+    result.push({key:'operations-'+pageIndex,items:current});pageIndex=nextSheet(pageIndex);m=measure(pageIndex);
     current=parents[i].map(j=>[j,true]);used=parents[i].reduce((n,j)=>n+m.repeatHeights[j],0);continue;
    }
    for(let j=i;j<end;j++)current.push([j,false]);used+=height;i=end;
@@ -9580,6 +9660,10 @@ const CardFlow=(()=>{
  }
  function catalogPages(data,toolsOnly=false){
   const saved=catalog.content.firstElementChild;if(!saved){pages.querySelectorAll('.project-tools-page').forEach(p=>p.remove());return;}
+  const deleted=catalogDeletion.content==='true';
+  const existing=pages.querySelector('.project-tools-page');
+  if(existing)existing.toggleAttribute('data-page-deleted',deleted);
+  if(deleted&&existing)return;
   ToolGroups.applyOwner('catalog');
   const rows=ToolGroups.visibleRows(saved.querySelector('.catalog-table')),live=pages.querySelector('.project-tools-page');
   let budget,row;
@@ -9620,7 +9704,7 @@ const CardFlow=(()=>{
    }else{
     page.querySelector('.page-footer').before(columns);page.querySelector('.catalog-title').textContent='Инструменты проекта';
     if(live){live.querySelector('.page-content').replaceWith(page.querySelector('.page-content'));PageScale.apply(live,'catalog');if(cover.previousElementSibling!==live)cover.before(live);}
-    else{PageScale.apply(page,'catalog');cover.before(page);}
+    else{PageScale.apply(page,'catalog');page.toggleAttribute('data-page-deleted',deleted);cover.before(page);}
     ProjectModel.queue();
    }
   }
@@ -9640,6 +9724,7 @@ const CardFlow=(()=>{
  function reflow(preview=null,measured=null){
   if(busy)return;busy=true;
   try{
+   applyDeletions();
    const data=values();PageScale.apply(cover,'cover');NoteLayout.apply(cover);
    // Scales belong to physical sheet positions, independently of total page count.
    let legacyIndex=0;pages.querySelectorAll('.operation-page').forEach(p=>{if(!p.dataset.pageKey)p.dataset.pageKey='operations-'+(++legacyIndex);});
@@ -9659,7 +9744,7 @@ const CardFlow=(()=>{
     if(previous.nextElementSibling!==page)previous.after(page);previous=page;
    }
    oldPages.forEach(page=>page.remove());if(preview===null)catalogPages(data);dropSheet();applyValues(data);
-   NoteLayout.refresh();GalleryLayout.setHeight(availableHeight()-(height?height+2:0),false);
+   NoteLayout.refresh();if(!deletedSheets.has('cover'))GalleryLayout.setHeight(availableHeight()-(height?height+2:0),false);
    PageScale.refresh();decorate(pages);fitDataTables();positionMcsAnchors();fitFields();renumber();markSelection();
    cover.dataset.coverOperations=JSON.stringify(opIds.filter(id=>committed.has(id)));cover.dataset.coverPlacement=placement;
    cover.classList.toggle('has-cover-operations',!!height);
@@ -9687,7 +9772,7 @@ const CardFlow=(()=>{
   reflow(cancel?new Set(committed):null,state.m);
  }
  function selectRow(row,event){
-  const keys=children.get(row.dataset.rowId)||[row.dataset.rowId];
+  const keys=rowOperations(row);
   if(event.shiftKey&&anchor&&opSet.has(row.dataset.rowId)){
    const a=opIds.indexOf(anchor),b=opIds.indexOf(row.dataset.rowId);if(!event.ctrlKey&&!event.metaKey)selection.clear();
    opIds.slice(Math.min(a,b),Math.max(a,b)+1).forEach(id=>selection.add(id));
@@ -9751,7 +9836,7 @@ const CardFlow=(()=>{
   if(!row||e.target.closest('.column-grip,input,textarea,[contenteditable="true"]')||e.button!==0||e.isPrimary===false)return;e.preventDefault();
   PhotoPan.finish();GalleryLayout.closePicker();GalleryLayout.finish(true);finishColumnDrag();
   // Resolve selection only when movement starts, so Ctrl-click still toggles once.
-  drag={id:e.pointerId,row,keys:children.get(row.dataset.rowId)||[row.dataset.rowId],modifiers:{ctrlKey:e.ctrlKey,metaKey:e.metaKey,shiftKey:e.shiftKey},ids:[],startX:e.clientX,startY:e.clientY,startScroll:window.scrollY,startScrollX:window.scrollX,x:e.clientX,y:e.clientY,moved:false,target:null,valid:false,preview:new Set(committed),gallery:GalleryLayout.values(),step:Math.max(12,row.getBoundingClientRect().height)};
+  drag={id:e.pointerId,row,keys:rowOperations(row),modifiers:{ctrlKey:e.ctrlKey,metaKey:e.metaKey,shiftKey:e.shiftKey},ids:[],startX:e.clientX,startY:e.clientY,startScroll:window.scrollY,startScrollX:window.scrollX,x:e.clientX,y:e.clientY,moved:false,target:null,valid:false,preview:new Set(committed),gallery:GalleryLayout.values(),step:Math.max(12,row.getBoundingClientRect().height)};
   try{scope.setPointerCapture(e.pointerId);}catch(error){}
  });
  scope.addEventListener('pointermove',e=>{
@@ -9800,7 +9885,7 @@ const CardFlow=(()=>{
   }finally{busy=false;}
  }
  function refreshCatalog(){if(busy||!catalog.content.firstElementChild)return;busy=true;try{const data=values();catalogPages(data);applyValues(data);PageScale.refresh();ProjectTools.fit();fitDataTables([...pages.querySelectorAll('.project-tools-page .catalog-table')]);fitFields();renumber();}finally{busy=false;}}
- return{reflow,refreshCatalog,refreshTools,previewCatalog,finish,move,availableHeight,layoutMetrics,heightState,previewHeight,finishHeight,previewLayout:m=>reflow(fitted(committed,m),m),galleryValues:()=>drag?.moved?drag.gallery:GalleryLayout.values(),hasCatalog:()=>!!catalog.content.firstElementChild,
+ return{reflow,refreshCatalog,refreshTools,previewCatalog,finish,move,availableHeight,layoutMetrics,heightState,previewHeight,finishHeight,deletionState,restoreDeletions,previewLayout:m=>reflow(fitted(committed,m),m),galleryValues:()=>drag?.moved?drag.gallery:GalleryLayout.values(),hasCatalog:()=>!!catalog.content.firstElementChild,
   catalogContent:()=>catalog.content.cloneNode(true),setCatalog:content=>{catalog.content.replaceChildren(...(content?[content]:[]));pages.querySelectorAll('.project-tools-page').forEach(page=>page.remove());ToolGroups.adoptCatalog(catalog.content);},
   values:()=>opIds.filter(id=>committed.has(id)),mode:()=>placement,limit:()=>limitEnabled,restore:(value,mode,limit)=>{committed=validIds(value);placement=mode==='auto'?'auto':'manual';if(typeof limit==='boolean')limitEnabled=limit;syncLimit();},
   cleanClone:clone=>{clone.querySelectorAll('.operation-selected').forEach(n=>{n.classList.remove('operation-selected');n.setAttribute('aria-selected','false');});clone.querySelectorAll('.drop-active,.operations-dragging,.operation-drop-active').forEach(n=>n.classList.remove('drop-active','operations-dragging','operation-drop-active'));clone.querySelectorAll('.operation-drop-page,.operation-drag-ghost').forEach(n=>n.remove());clone.querySelector('[data-editor-id="operations-status"]').textContent='';clone.querySelector('[data-editor-id="operations-to-cover"]').disabled=true;clone.querySelector('[data-editor-id="operations-to-next"]').disabled=true;},
@@ -9847,9 +9932,11 @@ scope.addEventListener('change',event=>{if(event.target.matches('input[data-fiel
 scope.addEventListener('paste',event=>{const field=event.target.closest('[data-field][contenteditable]');if(field){event.preventDefault();document.execCommand('insertText',false,event.clipboardData.getData('text/plain'));}});
 scope.addEventListener('click',event=>{if(event.target.closest('.photo-view-tools,.cell-remove,.cell-move,.gallery-grip,.gallery-height-grip'))return;const photo=event.target.closest('.photo[data-paired]');if(photo)togglePhoto(photo);});
 
-function state(){const variants={};scope.querySelectorAll('.photo[data-image]:not([data-cell-preview])').forEach(photo=>{variants[photo.dataset.image]=photo.dataset.variant;});return{fields:values(),variants,axesSize:Number(local('mcs-size').value),outlineColor:local('mcs-outline-color').value,outlineWidth:Number(local('mcs-outline-width').value),columnWidths,photoZooms:photoZoomValues(),photoPans:photoPanValues(),galleryLayout:CardFlow.galleryValues(),pageScales:PageScale.state(),pageWraps:PageScale.wrapState(),coverToolScale:PageScale.toolsValue(),coverOperations:CardFlow.values(),coverPlacement:CardFlow.mode(),operationLimit:CardFlow.limit(),noteHeights:NoteLayout.state(),toolGroups:ToolGroups.state()};}
+function state(){const variants={};scope.querySelectorAll('.photo[data-image]:not([data-cell-preview])').forEach(photo=>{variants[photo.dataset.image]=photo.dataset.variant;});return{fields:values(),variants,axesSize:Number(local('mcs-size').value),outlineColor:local('mcs-outline-color').value,outlineWidth:Number(local('mcs-outline-width').value),columnWidths,photoZooms:photoZoomValues(),photoPans:photoPanValues(),galleryLayout:CardFlow.galleryValues(),pageScales:PageScale.state(),pageWraps:PageScale.wrapState(),coverToolScale:PageScale.toolsValue(),coverOperations:CardFlow.values(),coverPlacement:CardFlow.mode(),operationLimit:CardFlow.limit(),noteHeights:NoteLayout.state(),toolGroups:ToolGroups.state(),deletedPages:CardFlow.deletionState()};}
 function restoreState(draft,deferred=false){
- if(!draft?.fields)return;applyValues(draft.fields);if(draft.noteHeights)NoteLayout.restore(draft.noteHeights);if(draft.toolGroups)ToolGroups.restore(draft.toolGroups);
+ if(!draft?.fields)return;
+ if(draft.deletedPages)CardFlow.restoreDeletions(draft.deletedPages);
+ applyValues(draft.fields);if(draft.noteHeights)NoteLayout.restore(draft.noteHeights);if(draft.toolGroups)ToolGroups.restore(draft.toolGroups);
  if(draft.galleryLayout)GalleryLayout.restore(draft.galleryLayout,deferred);PageScale.restore(draft.pageScales,draft.rowScale,draft.coverToolScale,draft.pageWraps);if(draft.coverOperations)CardFlow.restore(draft.coverOperations,draft.coverPlacement,draft.operationLimit);
  if(draft.photoZooms)applyPhotoZoomValues(draft.photoZooms);if(draft.photoPans)applyPhotoPanValues(draft.photoPans);if(draft.columnWidths)columnWidths=readColumnWidths(draft.columnWidths);
  if(draft.axesSize!=null)setMcsSize(draft.axesSize);if(draft.outlineColor!=null||draft.outlineWidth!=null)setMcsOutline(draft.outlineColor,draft.outlineWidth??100);
@@ -9859,6 +9946,7 @@ function prepare(){NoteLayout.finish(true);PhotoPan.finish();GalleryLayout.close
 function cancel(){NoteLayout.finish(true);PhotoPan.finish(true);GalleryLayout.closePicker();GalleryLayout.finish(true);finishColumnDrag(true);CardFlow.finish(true);DatumEditor.close();}
 function serialize(){
  const copy=scope.cloneNode(true),fields=values();
+ copy.dataset.deletedPages=JSON.stringify(CardFlow.deletionState());
  copy.querySelectorAll('input[data-field],select[data-field]').forEach(el=>setFieldValue(el,fields[el.dataset.field]));
  GalleryLayout.cleanClone(copy);PhotoPan.cleanClone(copy);CardFlow.cleanClone(copy);DatumEditor.cleanClone(copy);PercentInput.cleanClone(copy);
  if(initialView)writeInitial(copy.querySelector('[data-editor-id="initial-view"]'),GalleryLayout.deletedOriginalCells());
@@ -9872,13 +9960,13 @@ function serialize(){
 scope.querySelectorAll('.datum-input').forEach(field=>setFieldValue(field,field.value));
 scope.querySelectorAll('.photo[data-image]').forEach(photo=>{setPhotoZoom(photo,photo.dataset.zoom??100);setVariant(photo,photo.dataset.variant==='no-ipw');});
 window.addEventListener('scroll',event=>{if(!event.target.closest?.('.datum-suggestions'))DatumEditor.close();},true);
-return{id:scope.dataset.setupId,state,restore:restoreState,serialize,prepare,cancel,fitFields,paginate,captureInitial,waitImages:()=>Promise.all([...scope.querySelectorAll('.photo-stage img[src],.project-isometry img[src]')].map(img=>img.decode?img.decode():Promise.resolve())),beforePrint:()=>{paginate();fitFields();positionMcsAnchors();},flow:CardFlow,gallery:GalleryLayout};
+return{id:scope.dataset.setupId,state,restore:restoreState,serialize,prepare,cancel,fitFields,paginate,captureInitial,waitImages:()=>Promise.all([...scope.querySelectorAll('.photo-stage img[src],.project-isometry img[src]')].filter(img=>!img.closest('[data-page-deleted]')).map(img=>img.decode?img.decode():Promise.resolve())),beforePrint:()=>{paginate();fitFields();positionMcsAnchors();},flow:CardFlow,gallery:GalleryLayout};
 
 }
 
 document.querySelectorAll('.setup-document').forEach(scope=>editors.push(createSetupEditor(scope)));
 placeProjectTools();paginate();editors.forEach(e=>e.captureInitial());
-try{const draft=JSON.parse(localStorage.getItem(draftKey)||'null');if(draft?.setups){if(draft.options)ColumnOptions.set(draft.options);if(draft.projectImageScale!=null)ProjectImage.set(draft.projectImageScale);if(draft.projectModel)ProjectModel.restore(draft.projectModel);editors.forEach(e=>e.restore(draft.setups[e.id]));changed=true;editRevision++;}}catch(e){}
+try{const draft=JSON.parse(localStorage.getItem(draftKey)||'null');if(draft?.setups){if(typeof draft.catalogDeleted==='boolean')catalogDeletion.content=String(draft.catalogDeleted);if(draft.options)ColumnOptions.set(draft.options);if(draft.projectImageScale!=null)ProjectImage.set(draft.projectImageScale);if(draft.projectModel)ProjectModel.restore(draft.projectModel);editors.forEach(e=>e.restore(draft.setups[e.id]));changed=true;editRevision++;}}catch(e){}
 placeProjectTools();ProjectModel.queue();CardHistory=createCardHistory();
 document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&(event.key.toLowerCase()==='s'||event.code==='KeyS')){event.preventDefault();saveCard();}else if((event.ctrlKey||event.metaKey)&&(event.key.toLowerCase()==='p'||event.code==='KeyP')){event.preventDefault();printCard();}});
 document.getElementById('save').addEventListener('click',saveCard);document.getElementById('print').addEventListener('click',printCard);document.getElementById('save-copy').addEventListener('click',downloadCopy);
@@ -9896,7 +9984,7 @@ document.addEventListener('wheel',event=>{
 if(window.ResizeObserver)new ResizeObserver(barHeight).observe(projectBar);barHeight();
 document.getElementById('setup-jump').addEventListener('change',event=>{
  const scope=document.querySelector('[data-setup-id="'+event.target.value+'"]');if(!scope)return;
- const rect=scope.getBoundingClientRect(),cover=scope.querySelector('.setup-pages>.cover-page');
+ const rect=scope.getBoundingClientRect(),cover=scope.querySelector('.setup-pages>.cover-page:not([data-page-deleted])')||scope.querySelector('.setup-pages>.page:not([data-page-deleted])');
  window.scrollTo({left:window.scrollX+(cover||scope).getBoundingClientRect().left-18,top:window.scrollY+rect.top-projectBar.getBoundingClientRect().height,behavior:'smooth'});
 });
 (document.fonts?document.fonts.ready:Promise.resolve()).then(()=>{paginate();editors.forEach(e=>e.fitFields());CardHistory.refresh();queueLocalSave();});
@@ -10668,6 +10756,21 @@ def identity_key(identity):
     return identity['mcs'], tuple(identity['folder'])
 
 
+def legacy_source_folder(markup):
+    """Recover the selected group from the master table, before browser pagination."""
+    sources = [n for n in markup.nodes if n['tag'] == 'template'
+               and n['attrs'].get('data-editor-id') == 'operation-source']
+    if len(sources) != 1:
+        return None
+    source = sources[0]
+    roots = [n for n in markup.nodes if source['open_end'] <= n['start'] < source['content_end']
+             and n['tag'] == 'tr' and n['attrs'].get('data-depth') == '0']
+    if len(roots) != 1 or roots[0]['attrs'].get('data-kind') != 'group':
+        return None
+    cell = next((n for n in markup.nodes if n['parent'] is roots[0] and n['tag'] == 'td'), None)
+    return cell['attrs'].get('title') if cell else None
+
+
 def read_existing_card(path):
     """Read the saved HTML once. Invalid input must never become a fresh export."""
     try:
@@ -10694,7 +10797,7 @@ def read_existing_card(path):
         options = {n['attrs'].get('value'): markup.text(n) for n in markup.nodes
                    if n['tag'] == 'option' and n['parent'] is not None and
                    n['parent']['attrs'].get('id') == 'setup-jump'}
-        sections, keys, identities = [], set(), set()
+        sections, keys = [], set()
         for node in nodes:
             key = node['attrs'].get('data-setup-id', '')
             if not re.fullmatch('[A-Za-z][A-Za-z0-9_-]*', key) or key in keys:
@@ -10703,10 +10806,7 @@ def read_existing_card(path):
             value = node['attrs'].get('data-nx-setup-identity')
             identity = json.loads(value) if value else None
             if identity is not None:
-                token = identity_key(identity)
-                if token in identities:
-                    raise ValueError('В HTML повторяется установ «%s».' % identity['mcs'])
-                identities.add(token)
+                identity_key(identity)
             label = identity['mcs'] if identity else options.get(key, '')
             if not label:
                 raise ValueError('Не удалось определить исходное имя установа ' + key)
@@ -10721,9 +10821,12 @@ def read_existing_card(path):
             legacy_cells = any(parsed.has_class(n, 'photo') and not any(parsed.has_class(n, cls)
                 for cls in ('iso-photo', 'top-photo', 'side-photo', 'user-photo')) for n in parsed.nodes)
             sections.append({'key': key, 'label': label, 'identity': identity,
-                             'markup': section, 'catalog': has_catalog, 'legacy_cells': legacy_cells})
+                             'markup': section, 'catalog': has_catalog, 'legacy_cells': legacy_cells,
+                             'legacy_folder': legacy_source_folder(parsed)
+                             if not (identity and identity['folder']) else None})
         return {'sections': sections, 'card_id': card_id, 'digest': hashlib.sha256(raw).hexdigest(),
                 'project_tools_first': meta.get('nx-project-tools-position') == 'first',
+                'catalog_deleted': meta.get('nx-project-catalog-deleted') == 'true',
                 'project_image_scale': meta.get('nx-project-image-scale') or '100',
                 'project_model': next((json.loads(markup.source[n['open_end']:n['content_end']])
                     for n in markup.nodes if n['attrs'].get('id') == 'nx-project-model'), None),
@@ -10733,20 +10836,41 @@ def read_existing_card(path):
                            % (display_file_name(path), exc)) from exc
 
 
-def plan_setup_update(existing, reports):
+def plan_setup_update(existing, reports, program_folder_paths=()):
     """A folder path identifies a setup; MCS is its current display name.
 
     Updating a parent replaces its saved section and absorbs former sections
     of its descendants. Other folders remain independent even with equal MCS
-    names. Legacy sections without a folder can only match by a unique name.
+    names. Recover short legacy paths only when unique across the live tree.
     Resolve the complete batch before changing or publishing any section.
     """
     saved = existing['sections'] if existing else []
     old_count, incoming, consumed = len(saved), set(), set()
     resolved, paths = [], []
 
+    # A short legacy path is useful only if it identifies one folder in the
+    # entire Program Order, including unselected branches with the same name.
+    live_paths = [tuple(p) for p in program_folder_paths]
+    requested_paths = [identity_key(setup_identity(r))[1] for r in reports]
+    def overlaps(left, right):
+        return bool(left and right and (left[:len(right)] == right or right[:len(left)] == left))
+
+    saved_paths = {}
+    for entry in saved:
+        stored = tuple((entry.get('identity') or {}).get('folder', ()))
+        short = stored or ((entry['legacy_folder'],) if entry.get('legacy_folder') else ())
+        matches = []
+        if short and live_paths:
+            matches = [p for p in live_paths if p == short]
+            if not matches and short[0] != live_paths[0][0]:
+                matches = [p for p in live_paths if p[-len(short):] == short]
+        if len(matches) > 1 and any(overlaps(p, q) for p in matches for q in requested_paths):
+            raise RuntimeError('Путь «%s» из сохранённой карты подходит нескольким папкам Program Order. '
+                               'Уточните имена папок в NX. Прежняя карта сохранена.' % ' / '.join(short))
+        saved_paths[entry['key']] = matches[0] if len(matches) == 1 else stored
+
     def folder(entry):
-        return tuple(entry['identity']['folder']) if entry['identity'] is not None else ()
+        return saved_paths[entry['key']]
 
     for report in reports:
         identity = setup_identity(report)
@@ -10759,18 +10883,39 @@ def plan_setup_update(existing, reports):
             raise RuntimeError('Одновременно выбраны родительская папка и её подпапка. '
                                'Выберите родительскую папку один раз; она включает все вложенные операции.')
         if path:
+            if live_paths.count(path) > 1:
+                raise RuntimeError('Путь «%s» соответствует нескольким папкам Program Order. '
+                                   'Прежняя карта сохранена.' % ' / '.join(path))
             paths.append(path)
         incoming.add(token)
         exact = [i for i, entry in enumerate(saved) if path and folder(entry) == path]
+        if len(exact) > 1 and path not in live_paths:
+            raise RuntimeError('Несколько сохранённых установов соответствуют папке «%s». '
+                               'Невозможно выбрать листы для замены. Прежняя карта сохранена.' % ' / '.join(path))
+        ancestor = next((folder(entry) for entry in saved if folder(entry) and
+                         len(folder(entry)) < len(path) and path[:len(folder(entry))] == folder(entry)), None)
+        if ancestor:
+            raise RuntimeError('Папка «%s» входит в уже сохранённый установ «%s». '
+                               'Чтобы обновить его на прежнем месте, выберите в Program Order папку «%s». '
+                               'Прежняя карта сохранена.' % (' / '.join(path), ' / '.join(ancestor), ' / '.join(ancestor)))
         descendants = [i for i, entry in enumerate(saved) if path and
                        len(folder(entry)) > len(path) and folder(entry)[:len(path)] == path]
         candidates = exact + descendants
         if not candidates:
             candidates = [i for i, entry in enumerate(saved)
-                          if not folder(entry) and entry['label'] == label]
+                          if not folder(entry) and entry['label'] == label and
+                          (not entry.get('legacy_folder') or not path or entry['legacy_folder'] == path[-1])]
             if len(candidates) > 1:
                 raise RuntimeError('Нельзя однозначно сопоставить старые листы без пути папки для установа «%s». '
                                    'Существующая карта не изменена.' % label)
+        if not candidates and live_paths:
+            missing = next((folder(entry) for entry in saved if entry['label'] == label and
+                            folder(entry) and folder(entry) not in live_paths), None)
+            if missing:
+                raise RuntimeError('Для установа «%s» в HTML сохранён путь «%s», которого больше нет в '
+                                   'Program Order. Выбрана папка «%s». Проверьте, была ли переименована '
+                                   'или перемещена папка. Прежняя карта сохранена.'
+                                   % (label, ' / '.join(missing), ' / '.join(path)))
         if any(i in consumed for i in candidates):
             raise RuntimeError('Нельзя однозначно сопоставить установ «%s» с листами существующей карты. '
                                'Карта не изменена. Проверьте повторяющиеся имена СКС и выбор папок установов.'
@@ -10796,6 +10941,9 @@ def plan_setup_update(existing, reports):
             entry.update(label=identity['mcs'], identity=identity, report=report,
                          catalog=any(saved[i]['catalog'] for i in candidates),
                          annotations_markup=saved_entry['markup'] if same_setup else None)
+            if same_setup and folder(saved_entry):
+                entry['duplicate_annotations'] = [saved[i]['markup'] for i in candidates
+                    if i != index and folder(saved[i]) == folder(saved_entry)]
         entries.append(entry)
     for report, identity, index, candidates in resolved:
         if index is not None:
@@ -10819,13 +10967,20 @@ def plan_setup_update(existing, reports):
                      'consolidated': len(consumed) - len(replacements)}
 
 
-def renumber_saved_sections(sections, setup_count):
+def renumber_saved_sections(sections, setup_count, catalog_deleted=False):
     parsed = [CardMarkup(section) for section in sections]
-    total = sum(len(markup.pages()) for markup in parsed)
+    def deleted(markup, page):
+        return catalog_deleted if markup.has_class(page, 'project-tools-page') else 'data-page-deleted' in page['attrs']
+    total = sum(not deleted(markup, page) for markup in parsed for page in markup.pages())
     result, index = [], 0
     for markup in parsed:
         edits = []
         for page in markup.pages():
+            if deleted(markup, page):
+                if 'data-page-deleted' not in page['attrs']:
+                    pos = page['open_end'] - 1
+                    edits.append((pos, pos, ' data-page-deleted'))
+                continue
             index += 1
             for name, value in (('page-number', index), ('page-count', total)):
                 fields = [n for n in markup.nodes if page['open_end'] <= n['start'] < page['content_end']
@@ -11188,9 +11343,9 @@ def retain_setup_annotations(markup, saved_markup):
                   if re.fullmatch(r'datum_[XYZ]_[0-9a-f]{12}', key)}
         attrs = {}
         if heights:
-            attrs['data-note-heights'] = json.dumps(heights)
+            attrs['data-note-heights'] = json.dumps(heights, sort_keys=True)
         if datums:
-            attrs['data-mcs-datums'] = json.dumps(datums, ensure_ascii=False)
+            attrs['data-mcs-datums'] = json.dumps(datums, ensure_ascii=False, sort_keys=True)
         if attrs:
             opening = markup[current_scope['start']:current_scope['open_end']]
             for key, value in attrs.items():
@@ -11220,7 +11375,7 @@ def retain_setup_annotations(markup, saved_markup):
         if collapsed:
             for node in current_tools:
                 opening = markup[node['start']:node['open_end']]
-                opening = opening[:-1] + ' data-collapsed-carriers="%s">' % escaped(json.dumps(collapsed, ensure_ascii=False))
+                opening = opening[:-1] + ' data-collapsed-carriers="%s">' % escaped(json.dumps(sorted(set(collapsed)), ensure_ascii=False))
                 edits.append((node['start'], node['open_end'], opening))
     for node in current.nodes:
         name = field_name(current, node)
@@ -11248,7 +11403,7 @@ def write_preview(output, report):
     output = io_path(output)
     existing = report.get('_existing_card')
     setups = report.get('setups', [report])
-    entries, report['merge_result'] = plan_setup_update(existing, setups)
+    entries, report['merge_result'] = plan_setup_update(existing, setups, report.get('_program_folder_paths', ()))
     report['card_id'] = existing['card_id'] if existing else report.get('card_id', uuid.uuid4().hex)
     report['html_revision'] = uuid.uuid4().hex
     catalog = next((r for r in setups if 'project_tools' in r), None)
@@ -11271,7 +11426,13 @@ def write_preview(output, report):
                 item['project_tool_count'] = len(item['project_tools'])
             item['project_tools_available'] = catalog is not None
             markup = render_setup(output, item, key, counter)
-            sections.append(retain_setup_annotations(markup, entry.get('annotations_markup')))
+            annotated = retain_setup_annotations(markup, entry.get('annotations_markup'))
+            for duplicate in entry.get('duplicate_annotations', ()):
+                if retain_setup_annotations(markup, duplicate) != annotated:
+                    raise RuntimeError('У копий установа «%s» различаются сохранённые примечания, привязки '
+                                       'или настройки. Объединение остановлено. Прежняя карта сохранена.'
+                                       % ' / '.join(entry['identity']['folder']))
+            sections.append(annotated)
         options.append('<option value="%s">%s</option>' % (key, escaped(entry['label'])))
     sections = move_shared_catalog(sections, owner, first=True)
     # Explicit None removes a previous mesh; absent means a legacy caller that
@@ -11279,7 +11440,8 @@ def write_preview(output, report):
     project_model = report.get('project_model', existing.get('project_model') if existing else None)
     sections = normalize_project_catalog(sections, report.get('project_view_image'), project_model)
     sections = [normalize_manual_table_text(section) for section in sections]
-    body = ''.join(renumber_saved_sections(sections, len(entries)))
+    catalog_deleted = bool(existing and existing.get('catalog_deleted'))
+    body = ''.join(renumber_saved_sections(sections, len(entries), catalog_deleted))
     context = {'filename': report['document_stem'] + '.html', 'id': report['card_id'], 'key': report['card_id'],
                'title': TITLE}
     cutcom = next((item.get('cutcom_data') for item in setups if item.get('cutcom_data')), None)
@@ -11288,6 +11450,7 @@ def write_preview(output, report):
     page = CARD_TEMPLATE.replace('__DOCUMENT_TITLE__', escaped(TITLE + ' — ' + report['document_stem']))
     page = page.replace('__CARD_ID__', report['card_id']).replace('__CARD_REVISION__', report['html_revision'])
     page = page.replace('__PROJECT_TOOLS_POSITION__', 'first')
+    page = page.replace('__CATALOG_DELETED__', str(catalog_deleted).lower())
     page = page.replace('__PROJECT_MODEL__', json.dumps(project_model, ensure_ascii=False,
         separators=(',', ':'), allow_nan=False).replace('<', '\\u003c').replace('&', '\\u0026'))
     page = page.replace('__PROJECT_IMAGE_SCALE__', escaped(existing.get('project_image_scale', 100) if existing else 100))
@@ -11588,6 +11751,9 @@ def main():
                          document_stem=safe_file_component(project_name), format='nx-setup-document')
             memory = MenuMemory(project_file)
             jobs = resolve_setup_jobs(nx, ui, part, state, memory=memory)
+            destination = project_file.parent / 'Карты Наладки' / safe_file_component(project_name, True)
+            state['_existing_card'] = read_existing_card(destination / (state['document_stem'] + '.html'))
+            plan_setup_update(state['_existing_card'], [job['report'] for job in jobs], state.get('_program_folder_paths', ()))
             confirm_duplicate_tool_numbers(nx, part, state)
             components = AssemblyComponentDisplay(nx, part)
             for job in jobs:
@@ -11602,9 +11768,6 @@ def main():
             # Preview visibility is restored before meshing the startup view.
             # Card output starts after all confirmations; accepted menus already
             # saved their own settings independently of the export outcome.
-            destination = project_file.parent / 'Карты Наладки' / safe_file_component(project_name, True)
-            state['_existing_card'] = read_existing_card(destination / (state['document_stem'] + '.html'))
-            plan_setup_update(state['_existing_card'], [job['report'] for job in jobs])
             progress = ExportProgress(len(jobs))
             EXPORT_PROGRESS = progress
             preparation = SetupPreparation(nx, part, jobs, state['_preparation_options'], preparation_selection)

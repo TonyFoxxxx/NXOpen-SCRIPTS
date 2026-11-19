@@ -8,7 +8,15 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.70 · 2026-11-16**
+**V2.71 · 2026-11-19**
+
+- Each sheet has a **×** in its upper-right corner, including the project catalog, setup cover, additional MCS views and operation continuations. Choose **«Да» (Yes)** to delete the sheet or **«Нет» (No)** to dismiss the dialog. Use **Ctrl+Z** or **Undo** to restore it.
+- Rows from a deleted sheet are excluded from subsequent pagination and printing. The remaining sheets are renumbered. Saving the HTML retains the deletion.
+- Re-export replaces each selected Program Order folder at its saved position even if its first MCS has changed. A short path from an older card is matched when unique across the whole tree. If a selected subfolder belongs to an already saved setup, the script displays the parent folder to select for replacement.
+
+Update the script in the updater and regenerate the HTML to get the deletion controls in an existing card.
+
+### Previous release V2.70 · 2026-11-16
 
 - Fix part visibility when capturing a mirrored setup. Show existing bodies from the current Workpiece's Part Geometry, including initially hidden bodies, and temporarily hide part bodies belonging to other Workpieces.
 - Resolve this selection separately for each captured MCS and use it for both IPW and NO IPW images. Shared bodies remain visible when used by the current Workpiece; face/edge selections resolve to their containing bodies. An empty local Part Geometry selection can inherit from an enclosing Workpiece.
@@ -161,7 +169,9 @@ Before closing the tab/NX or exporting again, click Save sheet and wait for the 
 
 ## Regenerating
 
-Running the script again updates selected setups in the existing HTML. Unselected setups retain their saved formatting; only their D cells and those of the project catalog are refreshed from the whole current CAM project. Selecting a parent folder merges its previous separate subfolder entries into that parent.
+For a partial update, select the folders of the setups that changed. All sheets of each selected folder are regenerated at its saved position, including previously deleted sheets. Unselected setups retain their formatting and sheet deletions. Page numbers are recalculated and D cells are refreshed from the current CAM project. Deleting the shared catalog applies to the whole card and carries over to the next export.
+
+Selecting a parent folder merges previously saved subfolder entries into one setup. If the saved setup was the parent, select that parent again to update it. Different folders can share an MCS name. For an older card without a saved path, the script looks up the original group in the operation table. Duplicate entries for one confirmed folder are consolidated when their transferable settings agree. Conflicting notes or datums stop the export. If the setup name matches but its old path has disappeared from Program Order, the message identifies both the old and the selected path. Both cases preserve the previous HTML.
 
 To refresh D, a saved operation must match an NX operation by identifier, name and T, or by a unique name-and-T combination. Ambiguous matches or unreadable registers display `—` when D is required for that tool instead of guessing a value. Manually changed or outdated names can prevent matching; regenerate the relevant setup in that case.
 

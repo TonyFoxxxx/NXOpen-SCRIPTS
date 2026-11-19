@@ -2,6 +2,11 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-19 — Setup sheets V2.71
+
+- Added a × button to delete individual HTML sheets with Yes/No confirmation. Deletion supports undo, saving, renumbering and printing. Rows from a deleted operation sheet are excluded from subsequent pagination.
+- Re-export identifies setups by Program Order folder and resolves unique short paths from older cards. Matching copies of the selected folder are consolidated at their saved position. Selecting a subfolder of an existing setup displays the folder to use for the update. [Guide](docs/en/setup-card.md#regenerating).
+
 ## 2026-11-16 — Mirrored CAM project trial V1.30.10
 
 V1.30.09 passed three historical contexts without 821049, checked candidates and rolled back. After the primary failure, 4591 diagnostic checks passed (including repetitions), with 0 additional errors. Edge 461444 was traced to Blend 472016 selection; the unique map lacked Part Box 468565 and historical inputs 461533/461565. V1.30.10 derives a nonempty proper subset of original features from captured parent paths for a separate map view, after the full view/Destroy and successful audit. Incomplete paths, cycles, partial reads and integrity failures block the extra view. Retained features cannot be selected; the primary removal list/errors remain unchanged. Assignment, Validate, Commit and forced Type/status are forbidden; audit integrity and perform mandatory rollback afterwards.
