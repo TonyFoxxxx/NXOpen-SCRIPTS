@@ -8,7 +8,11 @@ Creates one standalone HTML document containing the selected setups, CAM tables 
 
 ## Latest release
 
-**V2.71 · 2026-11-19**
+**V2.72 · 2026-11-19**
+
+Partial updates on Windows now preserve the original line endings in the markup and multiline notes of unselected setups across repeated exports. Matching notes in two copies of a selected folder are recognized even when Windows and the browser used different line endings.
+
+**Sheet deletion and setup updates since V2.71**
 
 - Each sheet has a **×** in its upper-right corner, including the project catalog, setup cover, additional MCS views and operation continuations. Choose **«Да» (Yes)** to delete the sheet or **«Нет» (No)** to dismiss the dialog. Use **Ctrl+Z** or **Undo** to restore it.
 - Rows from a deleted sheet are excluded from subsequent pagination and printing. The remaining sheets are renumbered. Saving the HTML retains the deletion.

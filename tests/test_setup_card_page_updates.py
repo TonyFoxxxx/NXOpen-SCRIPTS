@@ -47,8 +47,8 @@ class SetupUpdateTests(unittest.TestCase):
 
     def test_missing_identity_recovered_from_original_group_after_mcs_change(self):
         old, = self.export(setup(self.second, 'G54'))
-        html = re.sub(r' data-nx-setup-identity="[^"]*"', '', self.file.read_text(encoding='utf8'), count=1)
-        self.file.write_text(html, encoding='utf8')
+        html = re.sub(r' data-nx-setup-identity="[^"]*"', '', self.file.read_bytes().decode('utf8'), count=1)
+        self.file.write_bytes(html.encode('utf8'))
         self.assertEqual(CARD.read_existing_card(self.file)['sections'][0]['legacy_folder'], 'FINISH')
         updated, = self.export(setup(self.second, 'G55'))
         self.assertEqual(updated['key'], old['key'])
@@ -91,25 +91,52 @@ class SetupUpdateTests(unittest.TestCase):
 
     def test_proven_duplicate_is_consolidated_unless_saved_annotations_conflict(self):
         old = self.export(setup(self.first, 'G54'), setup(self.other, 'G54'))
-        html = self.file.read_text(encoding='utf8')
+        html = self.file.read_bytes().decode('utf8')
         wrong = CARD.escaped(json.dumps(old[1]['identity'], ensure_ascii=False))
         right = CARD.escaped(json.dumps(old[0]['identity'], ensure_ascii=False))
         self.assertIn(wrong, html)
         duplicates = html.replace(wrong, right)
+        # HTML normalizes line endings when presenting the two saved notes.
+        parsed = CARD.CardMarkup(duplicates)
+        notes = []
+        for page in parsed.pages():
+            if parsed.has_class(page, 'cover-page'):
+                notes.append(next(n for n in parsed.nodes if page['open_end'] < n['start'] < page['content_end']
+                                  and n['attrs'].get('data-field') == 'note'))
+        self.assertEqual(len(notes), 2)
+        duplicates = CARD.edit_markup_spans(duplicates, [
+            (note['open_end'], note['content_end'], 'Line 1' + ending + 'Line 2')
+            for note, ending in zip(notes, ('\r\n', '\n'))])
         # Distinct HTML keys refer to exactly the same live Program Order path.
-        self.file.write_text(duplicates, encoding='utf8')
+        self.file.write_bytes(duplicates.encode('utf8'))
         updated, = self.export(setup(self.first, 'G55'))
         self.assertEqual(updated['key'], old[0]['key'])
-        self.file.write_text(duplicates, encoding='utf8')
+        self.file.write_bytes(duplicates.encode('utf8'))
         saved = CARD.read_existing_card(self.file)['sections'][1]['markup']
         parsed = CARD.CardMarkup(saved)
         note = next(n for n in parsed.nodes if n['attrs'].get('data-field') == 'note')
         conflicting = CARD.edit_markup_spans(saved, [(note['open_end'], note['content_end'], 'Second note')])
-        self.file.write_text(duplicates.replace(saved, conflicting, 1), encoding='utf8')
+        self.file.write_bytes(duplicates.replace(saved, conflicting, 1).encode('utf8'))
         before = self.file.read_bytes()
         with self.assertRaisesRegex(RuntimeError, 'различаются сохранённые'):
             self.export(setup(self.first))
         self.assertEqual(self.file.read_bytes(), before)
+
+    def test_crlf_note_and_unselected_setup_survive_two_partial_exports(self):
+        self.export(setup(self.first), setup(self.other))
+        # A Windows HTML file predating V2.72, with an edited multiline note.
+        source = self.file.read_text(encoding='utf8')
+        parsed = CARD.CardMarkup(source)
+        section = [n for n in parsed.nodes if parsed.has_class(n, 'setup-document')][1]
+        note = next(n for n in parsed.nodes if section['open_end'] < n['start'] < section['content_end']
+                    and n['attrs'].get('data-field') == 'note')
+        source = CARD.edit_markup_spans(source, [(note['open_end'], note['content_end'], 'First line\nSecond line')])
+        self.file.write_bytes(source.replace('\n', '\r\n').encode('utf8'))
+        expected = CARD.read_existing_card(self.file)['sections'][1]['markup']
+        self.assertIn('First line\r\nSecond line', expected)
+        for operation in ('EDIT_1', 'EDIT_2'):
+            updated = self.export(setup(self.first, operation=operation))
+            self.assertEqual(updated[1]['markup'], expected)
 
 
 try:

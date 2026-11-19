@@ -2,6 +2,10 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-19 — Setup sheets V2.72
+
+Partial updates on Windows preserve the original line endings in unselected setups, including multiline notes, across repeated exports. When consolidating confirmed copies of a folder, the script accepts matching annotations with CRLF or LF line endings. [Guide](docs/en/setup-card.md#latest-release).
+
 ## 2026-11-19 — Setup sheets V2.71
 
 - Added a × button to delete individual HTML sheets with Yes/No confirmation. Deletion supports undo, saving, renumbering and printing. Rows from a deleted operation sheet are excluded from subsequent pagination.

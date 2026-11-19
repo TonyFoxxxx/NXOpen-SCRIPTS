@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Карта наладки
-# SCRIPT_VERSION: V2.71
+# SCRIPT_VERSION: V2.72
 # Рабочее имя файла: NX_Setup_Prototype.py
 """Карта наладки — виды MCS и операции.
 
@@ -119,7 +119,7 @@ import uuid
 import zlib
 
 
-SCRIPT_VERSION = "V2.71"
+SCRIPT_VERSION = "V2.72"
 SCRIPT_NAME = "Карта наладки"
 SCRIPT_AUTHOR = bytes(value ^ ((0x5D + index * 11) & 0xFF)
                       for index, value in enumerate((63, 17, 83, 62, 221, 251, 241, 211, 234, 134, 164, 174, 153, 148, 215, 42, 89, 95, 10))).decode("utf-8")
@@ -11428,7 +11428,8 @@ def write_preview(output, report):
             markup = render_setup(output, item, key, counter)
             annotated = retain_setup_annotations(markup, entry.get('annotations_markup'))
             for duplicate in entry.get('duplicate_annotations', ()):
-                if retain_setup_annotations(markup, duplicate) != annotated:
+                other = retain_setup_annotations(markup, duplicate)
+                if other != annotated and re.sub(r'\r\n?', '\n', other) != re.sub(r'\r\n?', '\n', annotated):
                     raise RuntimeError('У копий установа «%s» различаются сохранённые примечания, привязки '
                                        'или настройки. Объединение остановлено. Прежняя карта сохранена.'
                                        % ' / '.join(entry['identity']['folder']))
@@ -11459,7 +11460,9 @@ def write_preview(output, report):
     page = page.replace('__SETUPS__', body).replace('__SETUP_OPTIONS__', ''.join(options))
     page = page.replace('__DOCUMENT_CONTEXT__', json.dumps(context, ensure_ascii=False).replace('<', '\\u003c').replace('&', '\\u0026'))
     path = output / (report['document_stem'] + '.html')
-    path.write_text(page, encoding='utf-8')
+    # Preserved HTML can already contain CRLF. Text-mode translation on
+    # Windows would insert another CR on every partial export.
+    path.write_bytes(page.encode('utf-8'))
     return path
 
 
