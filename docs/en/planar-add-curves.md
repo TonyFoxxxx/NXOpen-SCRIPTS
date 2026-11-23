@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1 · 2026-11-23** — A new script adds existing selected curves to Part Boundaries, with one separate boundary per curve. Choose ON or TANTO after launch; TANTO also offers Inside / Left and Outside / Right. Closed curves receive Closed boundaries, while open curves receive Open boundaries.
+**V1.01 · 2026-11-23** — Fixed the `Journal syntax error` involving `Font`, `FontStyle` and `ContentAlignment` in Designcenter 2606. The ON / TANTO selector and the copyable report use standard Windows controls. Updating the journal is sufficient.
 
 File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater name: **«Кривые в PLANAR_MILL / PROFILE»**. This is a separate script for existing curves; [engraving centerline construction](planar-mill-curves.md) remains a separate tool.
 
@@ -45,9 +45,9 @@ The result window is resizable. **«Копировать всё»** copies the e
 ## Limits and verification
 
 - Supports classic PLANAR_MILL and PLANAR_PROFILE operations represented by the NXOpen `PlanarMilling` class. Other operation classes are rejected.
-- The operation must belong to the CAM work part. Component curves, body edges, faces and bodies are not selected in V1.
+- The operation must belong to the CAM work part. Component curves, body edges, faces and bodies are not selected.
 - If the operation inherits nonempty Part Boundaries from parent geometry, first define local boundaries in NX. The script does not change the parent geometry.
 - No new curves, toolpath generation or automatic part saving. No files, folders, logs, temporary files or disk settings are created.
-- Checked compilation against installed Designcenter 2606 libraries, 106 adapter assertions using a fixture, and window selection/layout outside NX. The fixture verifies application logic, not the CAM kernel. A live NX run of V1 and toolpath generation have not yet been verified.
+- V1.01 compiled with the Designcenter 2606 C# compiler, NXOpen and .NET 10. The boundary fixture passed 106 assertions. Separate Windows dialog tests covered ON, both TANTO sides, cancellation and a 60,395-character report. A live CAM run and toolpath generation are still unverified.
 
 [Download script](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Planar_Add_Curves.cs) · [Catalog](../../README.en.md) · [Changelog](../../CHANGELOG.en.md)

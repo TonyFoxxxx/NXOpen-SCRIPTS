@@ -12,6 +12,20 @@ CSC = Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Microsoft.NET/Framework64/
 
 
 class SeparatePlanarBoundaries(unittest.TestCase):
+    @unittest.skipUnless(CSC.is_file(), 'Windows .NET Framework compiler unavailable')
+    def test_dialogs_compile_with_base_runtime_only(self):
+        source = SOURCE.read_text(encoding='utf-8')
+        imports = [line for line in source.splitlines() if line.startswith('using ') and 'NXOpen' not in line]
+        windows = source.split('// BEGIN PLANAR CURVE WINDOWS\n', 1)[1].split('// END PLANAR CURVE WINDOWS', 1)[0]
+        with tempfile.TemporaryDirectory(prefix='nx-planar-ui-') as folder:
+            unit = Path(folder) / 'Dialogs.cs'
+            unit.write_text('\n'.join(imports) + '\n' + windows, encoding='utf-8-sig')
+            command = [str(CSC), '/nologo', '/noconfig', '/nostdlib+', '/target:library',
+                       '/reference:' + str(CSC.parent / 'mscorlib.dll'), '/reference:' + str(CSC.parent / 'System.dll'),
+                       '/out:' + str(unit.with_suffix('.dll')), str(unit)]
+            result = subprocess.run(command, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     @unittest.skipUnless(CSC.is_file() or (shutil.which('mcs') and shutil.which('mono')), 'C# compiler unavailable')
     def test_individual_boundaries_and_rejected_nx_results(self):
         source = SOURCE.read_text(encoding='utf-8')

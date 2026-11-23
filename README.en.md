@@ -20,7 +20,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Clean copy/instance suffixes and counters in all operation names while preserving Z. | [All features](docs/en/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
-| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1 | Separate curve boundaries in PLANAR_MILL / PLANAR_PROFILE, with ON / TANTO selection. | [All features](docs/en/planar-add-curves.md) |
+| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.01 | Separate curve boundaries in PLANAR_MILL / PLANAR_PROFILE, with ON / TANTO selection. | [All features](docs/en/planar-add-curves.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.13 | Centerlines from engraving faces and D/2 circles for dots, assigned to PLANAR_MILL. | [Full guide](docs/en/planar-mill-curves.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Create single-stroke GOST A text from lines and smooth splines using an external FON. | [All features](docs/en/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
@@ -38,9 +38,9 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Curves for PLANAR V1 · 2026-11-23
+### Latest update — Curves for PLANAR V1.01 · 2026-11-23
 
-A new script adds existing curves to PLANAR_MILL and PLANAR_PROFILE: one curve per boundary. Choose ON or TANTO after launch; TANTO also offers side selection. Closed curves retain Closed boundaries. Install **«Кривые в PLANAR_MILL / PROFILE»** in the updater. [Workflow and limits](docs/en/planar-add-curves.md#latest-release).
+Designcenter 2606 could stop at journal compilation before displaying the ON / TANTO selector. The selector and report now use standard Windows controls. Update **«Кривые в PLANAR_MILL / PROFILE»** to **V1.01** in the updater. [Guide](docs/en/planar-add-curves.md#latest-release).
 
 ### Also released — Setup sheets V2.72 · 2026-11-19
 

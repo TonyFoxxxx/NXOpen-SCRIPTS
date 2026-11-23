@@ -2,6 +2,10 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-23 — Curves for PLANAR V1.01
+
+Fixed startup in Designcenter 2606 when its journal compiler cannot resolve `System.Drawing.Common`. The ON / TANTO selector and report now use standard Windows controls. The complete V1.01 journal compiles against .NET 10 and the installed NXOpen libraries. [Guide](docs/en/planar-add-curves.md#latest-release).
+
 ## 2026-11-23 — Curves for PLANAR V1
 
 - Added standalone `NX_Planar_Add_Curves.cs` for existing curves in PLANAR_MILL and PLANAR_PROFILE. Each curve receives its own Part Boundary; adjacent curves are not chained.
