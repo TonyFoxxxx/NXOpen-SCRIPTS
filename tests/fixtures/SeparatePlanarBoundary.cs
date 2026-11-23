@@ -10,10 +10,46 @@ namespace NXOpen
     public enum Tag { Null = 0 }
     public class TaggedObject { public Tag Tag; }
     public class NXObject : TaggedObject { public string Name; public Part OwningPart; public bool IsOccurrence; }
+    public struct Point3d
+    {
+        public double X,Y,Z;
+        public Point3d(double x,double y,double z) { X=x; Y=y; Z=z; }
+    }
+    public struct Vector3d
+    {
+        public double X,Y,Z;
+        public Vector3d(double x,double y,double z) { X=x; Y=y; Z=z; }
+    }
+    public class Face : NXObject { public enum FaceType { Planar, Cylindrical } public FaceType SolidFaceType; }
+    public class DatumPlane : NXObject {}
+    public class PlaneTypes { public enum MethodType { Distance } public enum AlternateType { One } }
+    public class SmartObject { public enum UpdateOption { AfterModeling } }
+    public class Plane
+    {
+        public Point3d Origin; public Vector3d Normal; public bool Temporary;
+        public void Evaluate() { if(Temporary) Model.PlaneEvaluations++; }
+        public void DestroyPlane() { if(Temporary) Model.PlaneDisposals++; }
+    }
+    public class PlaneCollection
+    {
+        public Plane CreatePlane(PlaneTypes.MethodType method, PlaneTypes.AlternateType alternate, Point3d origin,
+            Vector3d normal, string offset, bool flip, bool reverse, NXObject[] references)
+        {
+            if(references.Length!=1 || references[0]!=Model.Reference || offset!="0" || flip || reverse || Model.Marks==0)
+                throw new Exception("Incorrect reference plane construction");
+            Model.PlaneBuilds++;
+            return new Plane { Origin=Model.ReferencePoint, Normal=Model.ReferenceNormal, Temporary=true };
+        }
+        public Plane CreatePlane(Point3d origin,Vector3d normal,SmartObject.UpdateOption update)
+        {
+            Model.Replacements++;
+            return new Plane {Origin=origin,Normal=normal};
+        }
+    }
     public class Curve : NXObject { public bool Closed; public double GetLength() { return 10.0; } }
     public class Line : Curve {} public class Arc : Curve {} public class Spline : Curve {} public class Ellipse : Curve {}
     public class NXException : Exception { public int ErrorCode; }
-    public class Part : NXObject { public CAMSetup CAMSetup = new CAMSetup(); }
+    public class Part : NXObject { public CAMSetup CAMSetup = new CAMSetup(); public PlaneCollection Planes=new PlaneCollection(); }
     public class PartList { public Part Work; }
     public class ListingWindow { public void Open() {} public void WriteLine(string line) { throw new Exception(line); } }
     public class Session
@@ -28,12 +64,24 @@ namespace NXOpen
     }
     public class Selection
     {
-        public struct MaskTriple { public MaskTriple(int a,int b,int c) {} }
-        public enum Response { OK, Cancel, Back } public enum SelectionScope { WorkPart }
+        public struct MaskTriple
+        {
+            public int Type, Subtype, SolidBodySubtype;
+            public MaskTriple(int a,int b,int c) { Type=a; Subtype=b; SolidBodySubtype=c; }
+        }
+        public enum Response { OK, ObjectSelected, Cancel, Back } public enum SelectionScope { WorkPart, AnyInAssembly }
         public enum SelectionAction { ClearAndEnableSpecific }
+        public Response SelectTaggedObject(string prompt,string title,SelectionScope scope,SelectionAction action,
+            bool features,bool highlight,MaskTriple[] mask,out TaggedObject picked,out Point3d cursor)
+        {
+            if(scope!=SelectionScope.AnyInAssembly || features || highlight || mask.Length!=2 ||
+               mask[0].Type!=UFConstants.UF_solid_type || mask[0].SolidBodySubtype!=UFConstants.UF_UI_SEL_FEATURE_PLANAR_FACE ||
+               mask[1].Type!=UFConstants.UF_datum_plane_type) throw new Exception("Invalid plane selection filter");
+            Model.Picks+="P"; picked=Model.Reference; cursor=new Point3d(); return Model.PlaneResponse;
+        }
         public Response SelectTaggedObjects(string prompt,string title,SelectionScope scope,SelectionAction action,
             bool features,bool highlight,MaskTriple[] mask,out TaggedObject[] objects)
-        { objects=Model.Selection.ToArray(); return Response.OK; }
+        { Model.Picks+="C"; objects=Model.Selection.ToArray(); return Model.CurveResponse; }
     }
     public class UI { public Selection SelectionManager=new Selection(); public static UI GetUI() { return new UI(); } }
 }
@@ -60,6 +108,8 @@ namespace NXOpen.CAM
         public enum ToolSideTypes { InsideOrLeft, OutsideOrRight } public enum PlaneTypes { Automatic, UserDefined }
         public BoundaryTypes BoundaryType; public ToolPositionTypes ToolPosition; public ToolSideTypes ToolSide;
         public PlaneTypes PlaneType; public bool CustomOffset; public double Offset; public MemberList BoundaryMemberList=new MemberList();
+        internal Plane StoredPlane; internal bool PlaneAssigned;
+        public Plane Plane { get { return StoredPlane; } set { StoredPlane=value; PlaneAssigned=true; } }
     }
     public class BoundarySetPlanarMill : BoundarySet { public bool CustomStock, CustomTolerance; internal Record Saved; }
     public class RowList : List<BoundarySet> { public BoundarySet[] GetContents() { return ToArray(); } }
@@ -95,7 +145,25 @@ namespace NXOpen.UF
     public enum CamBoundaryType { CamBoundaryTypeClosed, CamBoundaryTypeOpen }
     public enum CamMaterialSide { CamMaterialSideUndefined, CamMaterialSideInLeft, CamMaterialSideOutRight }
     public enum CamToolPosition { CamToolPositionUndefined, CamToolPositionOn, CamToolPositionTanto }
-    public class UFConstants { public const int UF_line_type=3, UF_circle_type=5, UF_conic_type=6, UF_spline_type=9; }
+    public class UFConstants
+    {
+        public const int UF_line_type=3, UF_circle_type=5, UF_conic_type=6, UF_spline_type=9;
+        public const int UF_solid_type=70, UF_datum_plane_type=197, UF_UI_SEL_FEATURE_PLANAR_FACE=19;
+    }
+    public class UFMtx3
+    {
+        public void InitializeZ(double[] z,double[] matrix)
+        {
+            double x0=0, x1=z[2], x2=-z[1];
+            if(Math.Abs(z[0])>0.9) { x0=-z[2]; x1=0; x2=z[0]; }
+            double length=Math.Sqrt(x0*x0+x1*x1+x2*x2);
+            matrix[0]=x0/length; matrix[1]=x1/length; matrix[2]=x2/length;
+            matrix[3]=z[1]*matrix[2]-z[2]*matrix[1];
+            matrix[4]=z[2]*matrix[0]-z[0]*matrix[2];
+            matrix[5]=z[0]*matrix[1]-z[1]*matrix[0];
+            Array.Copy(z,0,matrix,6,3);
+        }
+    }
     public class UFUi { public IntPtr GetDefaultParent(){ return IntPtr.Zero; } public void SetStatus(string s){} }
     public class UFUiOnt
     {
@@ -106,6 +174,7 @@ namespace NXOpen.UF
     public class UFSession
     {
         public UFUi Ui=new UFUi(); public UFUiOnt UiOnt=new UFUiOnt(); public UFModl Modl=new UFModl(); public UFCambnd Cambnd=new UFCambnd();
+        public UFMtx3 Mtx3=new UFMtx3();
         public static UFSession GetUFSession(){return Model.Uf;}
     }
     public class UFCambnd
@@ -139,7 +208,7 @@ namespace NXOpen.UF
         public void AppendBndFromCurve(Tag operation,CamGeomType type,int count,Tag[] curves,ref BoundaryData definition,AppData[] members)
         {
             if(operation!=Model.Op.Tag || type!=CamGeomType.CamPart || count!=1 || curves.Length!=1 || members.Length!=1 ||
-               definition.app_data!=null || definition.plane_type!=1 || definition.origin.Length!=3 || definition.matrix.Length!=9 ||
+               definition.app_data!=null || definition.plane_type!=(Model.Options.SelectPlane?0:1) || definition.origin.Length!=3 || definition.matrix.Length!=9 ||
                members[0].tolerances.Length!=2 || members[0].has_tool_position!=1) throw new Exception("Invalid UF append contract");
             Model.Calls++; Model.Inherited=false;
             if(Model.FailAt==Model.Calls) throw new InvalidOperationException("Injected append failure");
@@ -158,6 +227,7 @@ namespace NXOpen.UF
             }
             if(Model.DuplicateTag==curves[0]) Model.Records.Add(r.Copy());
             if(Model.WrongClosure) r.Definition.boundary_type=CamBoundaryType.CamBoundaryTypeClosed;
+            if(definition.plane_type==0 && Model.AdjustInitialPlane!=null) Model.AdjustInitialPlane(r);
         }
     }
 }
@@ -174,12 +244,25 @@ public class Record
     public Tag[] Tags; public UFCambnd.BoundaryData Definition; public UFCambnd.AppData Settings;
     public UFCambnd.AppData[] Members; public BoundarySet.ToolPositionTypes Position; public BoundarySet.ToolSideTypes Side;
     public bool CustomOffset; public double Offset;
-    public Record Copy() {var copy=(Record)MemberwiseClone(); copy.Tags=(Tag[])Tags.Clone(); copy.Members=(UFCambnd.AppData[])Members.Clone(); return copy;}
+    public Record Copy()
+    {
+        var copy=(Record)MemberwiseClone();
+        copy.Tags=(Tag[])Tags.Clone(); copy.Members=(UFCambnd.AppData[])Members.Clone();
+        if(Definition.origin!=null) copy.Definition.origin=(double[])Definition.origin.Clone();
+        if(Definition.matrix!=null) copy.Definition.matrix=(double[])Definition.matrix.Clone();
+        return copy;
+    }
     public BoundarySetPlanarMill Editor()
     {
         var r=new BoundarySetPlanarMill {Saved=this, ToolPosition=Position, ToolSide=Side, CustomOffset=CustomOffset, Offset=Offset,
             BoundaryType=Definition.boundary_type==CamBoundaryType.CamBoundaryTypeClosed ? BoundarySet.BoundaryTypes.Closed : BoundarySet.BoundaryTypes.Open,
             CustomStock=Settings.has_stock!=0,CustomTolerance=Settings.has_tolerances!=0};
+        if(Definition.plane_type==0)
+        {
+            r.PlaneType=BoundarySet.PlaneTypes.UserDefined;
+            var o=Definition.origin; var m=Definition.matrix;
+            r.StoredPlane=new Plane {Origin=new Point3d(o[0],o[1],o[2]),Normal=new Vector3d(m[6],m[7],m[8])};
+        }
         if(Model.EditorReadType.HasValue) r.BoundaryType=(BoundarySet.BoundaryTypes)Model.EditorReadType.Value;
         for(int i=0;i<Tags.Length;i++) r.BoundaryMemberList.Add(new BoundaryMemberSetPlanarMill {
             Geometry=Tags[i]==Tag.Null ? null : Model.Curves[Tags[i]],
@@ -189,6 +272,13 @@ public class Record
     }
     public void Apply(BoundarySetPlanarMill row)
     {
+        if(row.PlaneAssigned && !Model.IgnorePlaneEdits)
+        {
+            var o=row.Plane.Origin; var n=row.Plane.Normal;
+            Definition.plane_type=row.PlaneType==BoundarySet.PlaneTypes.UserDefined?0:1;
+            Definition.origin=new[]{o.X,o.Y,o.Z}; Definition.matrix=new double[9];
+            Model.Uf.Mtx3.InitializeZ(new[]{n.X,n.Y,n.Z}, Definition.matrix);
+        }
         Position=row.ToolPosition; CustomOffset=row.CustomOffset; Offset=row.Offset;
         if(!Model.IgnoreShapeEdits)
             Definition.boundary_type=row.BoundaryType==BoundarySet.BoundaryTypes.Closed ? CamBoundaryType.CamBoundaryTypeClosed : CamBoundaryType.CamBoundaryTypeOpen;
@@ -209,6 +299,10 @@ public static class Model
     public static string Report; public static int Severity,Marks,Undos,Commits,Calls,FailAt,MergeAt;
     public static bool Inherited,KeepPlaceholder,NullPlaceholderMember,WrongEditorDefaults,DropOnCommit,CorruptOld,WrongClosure,IgnoreOpenSide;
     public static bool IgnoreShapeEdits;
+    public static NXObject Reference; public static Point3d ReferencePoint; public static Vector3d ReferenceNormal;
+    public static Selection.Response PlaneResponse,CurveResponse;
+    public static string Picks; public static int PlaneBuilds,PlaneEvaluations,PlaneDisposals,Replacements;
+    public static Action<Record> AdjustInitialPlane; public static bool IgnorePlaneEdits;
     public static int? UfReadType, EditorReadType;
     public static Tag OmitEditorTag;
     public static Tag DropTag,DuplicateTag,SubstituteTag; static List<Record> undo; static bool undoInherited;
@@ -219,7 +313,12 @@ public static class Model
         Session=new Session(); Uf=new UFSession(); Session.Parts.Work=new Part {Tag=(Tag)10};
         Op=new PlanarMilling {Tag=(Tag)9000, OwningPart=Session.Parts.Work, Name="PLANAR_TEST"};
         Curves=new Dictionary<Tag,Curve>(); Selection=new List<TaggedObject>(); Records=new List<Record>();
-        Options=new PlanarCurveOptions(); Report=""; Severity=-1; Marks=Undos=Commits=Calls=FailAt=MergeAt=0;
+        Options=new PlanarCurveOptions { SelectPlane=false }; Report=""; Severity=-1; Marks=Undos=Commits=Calls=FailAt=MergeAt=0;
+        Reference=new DatumPlane {Tag=(Tag)10000,OwningPart=Session.Parts.Work};
+        ReferencePoint=new Point3d(11,-4,29); ReferenceNormal=new Vector3d(0,3,4);
+        Picks=""; PlaneBuilds=PlaneEvaluations=PlaneDisposals=Replacements=0;
+        PlaneResponse=NXOpen.Selection.Response.ObjectSelected; CurveResponse=NXOpen.Selection.Response.OK;
+        AdjustInitialPlane=null; IgnorePlaneEdits=false;
         Inherited=KeepPlaceholder=NullPlaceholderMember=WrongEditorDefaults=DropOnCommit=CorruptOld=WrongClosure=IgnoreOpenSide=false;
         IgnoreShapeEdits=false; UfReadType=EditorReadType=null; OmitEditorTag=Tag.Null;
         DuplicateTag=DropTag=SubstituteTag=Tag.Null;
@@ -294,9 +393,73 @@ public static class PlanarChecks
         Check(Model.Report.Contains("Замкнутых границ со стороной "+(outside?"Outside — снаружи":"Inside — внутри")+": 9"),"closed report");
         Check(Model.Report.Contains("Открытых границ со стороной "+(right?"Right — справа":"Left — слева")+": 27"),"open report");
     }
+    static void PlaneSelection()
+    {
+        Model.Reset(); Select36(); Model.Options.SelectPlane=true;
+        Model.Reference=new Face {Tag=(Tag)20000, IsOccurrence=true, SolidFaceType=Face.FaceType.Planar};
+        Model.UfReadType=2; Model.Options.Tanto=true; Model.Options.ClosedOutside=true;
+        Model.Run(); Success();
+        Check(Model.Picks=="PC" && Model.PlaneBuilds==1 && Model.PlaneEvaluations==1 && Model.PlaneDisposals==1,
+            "select a plane before curves and evaluate its placement once");
+        Check(Model.Commits==0 && Model.Replacements==0 && Model.Records.Count==36,"keep correctly saved native planes");
+        Check(Model.Report.Contains("плоская грань [20000]") && Model.Report.Contains("плоскость подтверждена для всех новых границ: 36"),"selected plane in result");
+        foreach(Record rec in Model.Records)
+        {
+            var o=rec.Definition.origin; var m=rec.Definition.matrix;
+            Check(rec.Definition.plane_type==0 && o[0]==11 && o[1]==-4 && o[2]==29 && m[6]==0 && m[7]==0.6 && m[8]==0.8,
+                "correct translated and inclined plane for each source");
+            Check(rec.Tags.Length==1 && rec.Members[0].tool_position==CamToolPosition.CamToolPositionTanto &&
+                rec.Side==(Model.Curves[rec.Tags[0]].Closed?BoundarySet.ToolSideTypes.OutsideOrRight:BoundarySet.ToolSideTypes.InsideOrLeft),
+                "mixed closed/outside and open/left on one common plane");
+        }
+        Model.Reference=new DatumPlane {Tag=(Tag)20001}; Model.Options.Tanto=false;
+        Model.ReferencePoint=new Point3d(-13,0,0); Model.ReferenceNormal=new Vector3d(-4,0,0);
+        Model.Run();
+        Check(Model.Severity==1 && Model.Marks==1 && Model.PlaneBuilds==1 && Model.Calls==36,"duplicate-only selection creates no plane or undo step");
+        Model.AddCurve(999,false);
+        Model.AdjustInitialPlane=delegate(Record r) { r.Definition.plane_type=1; };
+        Model.Run(); Success();
+        var added=Model.Records[36];
+        Check(added.Position==BoundarySet.ToolPositionTypes.On && added.Definition.plane_type==0 &&
+            added.Definition.origin[0]==-13 && added.Definition.matrix[6]==-1,"datum plane with negative normal in ON");
+        Check(Model.Replacements==1 && Model.Commits==1 && Model.Records[0].Definition.origin[2]==29 &&
+            Model.Report.Contains("базовая плоскость [20001]"),"correct a new automatic row without changing existing planes");
+
+        Model.Reset(); Model.Options.SelectPlane=true; Model.AddCurve(333,false);
+        Model.AdjustInitialPlane=delegate(Record r) { r.Definition.origin[0]+=100; };
+        Model.Run(); Success(); Check(Model.Replacements==0 && Model.Commits==0,"equivalent in-plane origin");
+        foreach(bool flip in new[]{false,true})
+        {
+            Model.Reset(); Model.AddCurve(334,true); Model.Run(); Success();
+            Model.AddCurve(333,false); Model.Options.SelectPlane=true; Model.IgnorePlaneEdits=true;
+            Model.AdjustInitialPlane=delegate(Record r) {
+                if(flip) { r.Definition.matrix[7]*=-1; r.Definition.matrix[8]*=-1; }
+                else r.Definition.origin[2]+=10;
+            };
+            Model.Run(); RolledBack();
+            Check(Model.Replacements==1 && Model.Commits==1 && Model.Records.Count==1 &&
+                Model.Records[0].Definition.plane_type==1 && Model.Report.Contains("[333]"),"unpersisted plane offset or flipped normal rolls back");
+        }
+        foreach(Selection.Response cancel in new[]{Selection.Response.Cancel,Selection.Response.Back})
+        {
+            Model.Reset(); Model.AddCurve(101,false); Model.Options.SelectPlane=true; Model.PlaneResponse=cancel; Model.Run();
+            Check(Model.Picks=="P" && Model.Marks==0 && Model.PlaneBuilds==0 && Model.Severity==-1,"cancel plane selection");
+            Model.Reset(); Model.AddCurve(101,false); Model.Options.SelectPlane=true; Model.CurveResponse=cancel; Model.Run();
+            Check(Model.Picks=="PC" && Model.Marks==0 && Model.PlaneBuilds==0 && Model.Severity==-1,"cancel subsequent curve selection");
+        }
+        Model.Reset(); Model.AddCurve(101,false); Model.Options.SelectPlane=true;
+        Model.Reference=new Face {SolidFaceType=Face.FaceType.Cylindrical}; Model.Run();
+        Check(Model.Severity==2 && Model.Picks=="P" && Model.Marks==0 && Model.Calls==0,"non-planar selection rejected before changes");
+        Model.Reset(); Model.AddCurve(101,false); Model.Options.SelectPlane=true; Model.ReferenceNormal=new Vector3d(); Model.Run(); RolledBack();
+        Check(Model.PlaneDisposals==1 && Model.Calls==0,"invalid reference geometry releases the temporary plane");
+        Model.Reset(); Model.AddCurve(101,false); Model.Run(); Success();
+        Check(Model.Picks=="C" && Model.PlaneBuilds==0 && Model.Replacements==0 && Model.Records[0].Definition.plane_type==1,
+            "automatic path stays independent of reference geometry");
+    }
     public static int Main() { return ManagedTestHost.Run(RunChecks); }
     private static int RunChecks()
     {
+        PlaneSelection();
         Model.Reset(); Model.UfReadType=2; Model.Options.Tanto=true; Model.Options.ClosedOutside=true;
         for(int i=0;i<36;i++) Model.AddCurve(1000+i,true);
         Model.Run(); Success();

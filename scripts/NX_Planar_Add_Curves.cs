@@ -1,6 +1,6 @@
 // NX_Planar_Add_Curves.cs - separate curve boundaries for PLANAR_MILL / PLANAR_PROFILE.
-// SCRIPT_VERSION: V1.05
-// Select one planar operation, choose ON / TANTO, then select existing work-part curves.
+// SCRIPT_VERSION: V1.06
+// Select one planar operation, choose ON / TANTO and a boundary plane, then pick existing curves.
 // Each new curve becomes one Part Boundary; geometrically closed curves remain Closed.
 // Existing assignments are skipped. No chaining, new curves, files or automatic toolpath generation.
 
@@ -18,7 +18,7 @@ using CamOperation = NXOpen.CAM.Operation;
 
 public class NXPlanarAddCurves
 {
-    private const string SCRIPT_VERSION = "V1.05";
+    private const string SCRIPT_VERSION = "V1.06";
     private static readonly string Title = "Кривые в PLANAR — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
 
@@ -51,6 +51,17 @@ public class NXPlanarAddCurves
                 report.AppendLine("Замкнутые кривые: " + options.ClosedSideLabel);
                 report.AppendLine("Открытые кривые: " + options.OpenSideLabel);
             }
+
+            NXObject planeReference = null;
+            if (options.SelectPlane)
+            {
+                stage = "Выбор плоскости границ";
+                planeReference = SelectPlaneReference();
+                if (planeReference == null) return;
+                report.AppendLine("Плоскость границ: " + (planeReference is Face ? "плоская грань" : "базовая плоскость")
+                    + " [" + planeReference.Tag + "].");
+            }
+            else report.AppendLine("Плоскость границ: автоматически для каждой кривой.");
 
             stage = "Выбор кривых";
             List<Curve> selected = SelectCurves();
@@ -99,25 +110,32 @@ public class NXPlanarAddCurves
                 throw new InvalidOperationException("Границы операции изменились во время выбора. Повторите запуск.");
             mark = session.SetUndoMark(Session.MarkVisibility.Visible, "Кривые в PLANAR: " + options.ModeLabel);
             pendingUndo = true;
+            PlanarBoundaryPlane plane = null;
+            if (planeReference != null)
+            {
+                stage = "Чтение выбранной плоскости в координатах CAM-детали";
+                plane = PlanarBoundaryPlane.FromReference(part, uf, planeReference);
+                report.AppendLine("Плоскость в ABS рабочей детали: " + plane.Description + ".");
+            }
             for (int i = 0; i < pending.Count; i++)
             {
                 Curve curve = pending[i];
                 stage = "Добавление кривой " + (i + 1) + "/" + pending.Count + ": " + CurveLabel(curve);
                 uf.Ui.SetStatus(stage);
-                SeparatePlanarBoundary.Append(uf.Cambnd, operation.Tag, curve.Tag, requested[curve.Tag], options);
+                SeparatePlanarBoundary.Append(uf.Cambnd, operation.Tag, curve.Tag, requested[curve.Tag], options, plane);
             }
             stage = "Чтение сохранённых Part Boundaries после добавления";
             SeparatePlanarBoundary.Saved added = SeparatePlanarBoundary.Read(uf.Cambnd, operation.Tag);
             report.AppendLine("Сохранённых границ после добавления: " + added.Boundaries.Count + " (ожидалось " + expectedCount + ").");
             SeparatePlanarBoundary.VerifySaved(original, added, requested, options.Tanto, null, report);
             stage = "Настройка новых границ в редакторе NX";
-            InspectEditor(part, operation, original.Sources, requested, options, true, oldEditorRows, report);
+            InspectEditor(part, operation, original.Sources, requested, options, true, oldEditorRows, report, plane);
             stage = "Итоговая проверка геометрии операции";
             SeparatePlanarBoundary.Saved final = SeparatePlanarBoundary.Read(uf.Cambnd, operation.Tag);
             report.AppendLine("Итоговое число сохранённых границ: " + final.Boundaries.Count + " (ожидалось " + expectedCount + ").");
             stage = "Подтверждение сохранённых границ в повторно открытом редакторе NX";
             Dictionary<Tag, BoundarySet.BoundaryTypes> confirmedTypes = new Dictionary<Tag, BoundarySet.BoundaryTypes>();
-            InspectEditor(part, operation, original.Sources, requested, options, false, oldEditorRows, null, confirmedTypes);
+            InspectEditor(part, operation, original.Sources, requested, options, false, oldEditorRows, null, plane, confirmedTypes);
             stage = "Сверка сохранённых границ CAM с редактором NX";
             SeparatePlanarBoundary.VerifySaved(original, final, requested, options.Tanto, confirmedTypes, null);
             pendingUndo = false;
@@ -129,6 +147,7 @@ public class NXPlanarAddCurves
             report.AppendLine();
             report.AppendLine("Результат: успешно.");
             report.AppendLine("Добавлено отдельных границ: " + pending.Count);
+            if (plane != null) report.AppendLine("Выбранная плоскость подтверждена для всех новых границ: " + confirmedTypes.Count + ".");
             report.AppendLine("Подтверждено в повторно открытом редакторе NX: Open: " + (confirmedTypes.Count - closed) + "; Closed: " + closed + ".");
             report.AppendLine("Проверено в сохранённой геометрии: одна кривая в каждой новой границе, тип Open/Closed и положение " + options.ModeLabel + ".");
             if (options.Tanto && closed > 0) report.AppendLine("Замкнутых границ со стороной " + options.ClosedSideLabel + ": " + closed + ".");
@@ -203,6 +222,24 @@ public class NXPlanarAddCurves
         return (PlanarMilling)operations[0];
     }
 
+    private static NXObject SelectPlaneReference()
+    {
+        Selection.MaskTriple[] mask = {
+            new Selection.MaskTriple(UFConstants.UF_solid_type, 0, UFConstants.UF_UI_SEL_FEATURE_PLANAR_FACE),
+            new Selection.MaskTriple(UFConstants.UF_datum_plane_type, 0, 0)
+        };
+        TaggedObject picked;
+        Point3d cursor;
+        Selection.Response answer = UI.GetUI().SelectionManager.SelectTaggedObject(
+            "Укажите плоскую грань или базовую плоскость для новых границ", Title + " — Плоскость границ",
+            Selection.SelectionScope.AnyInAssembly, Selection.SelectionAction.ClearAndEnableSpecific,
+            false, false, mask, out picked, out cursor);
+        if (answer == Selection.Response.Cancel || answer == Selection.Response.Back) return null;
+        Face face = picked as Face;
+        if (picked is DatumPlane || (face != null && face.SolidFaceType == Face.FaceType.Planar)) return (NXObject)picked;
+        throw new InvalidOperationException("Для границ нужна плоская грань или базовая плоскость.");
+    }
+
     private static List<Curve> SelectCurves()
     {
         TaggedObject[] objects;
@@ -269,7 +306,7 @@ public class NXPlanarAddCurves
 
     private static List<string> InspectEditor(Part part, PlanarMilling operation, HashSet<Tag> oldSources, Dictionary<Tag, bool> requested,
         PlanarCurveOptions options, bool configure, List<string> previous, StringBuilder report,
-        Dictionary<Tag, BoundarySet.BoundaryTypes> confirmedTypes = null)
+        PlanarBoundaryPlane plane = null, Dictionary<Tag, BoundarySet.BoundaryTypes> confirmedTypes = null)
     {
         PlanarMillingBuilder builder = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
         try
@@ -277,7 +314,7 @@ public class NXPlanarAddCurves
             bool changed;
             BoundarySet[] rows = builder.PartBoundary.BoundaryList.GetContents();
             if (report != null) report.AppendLine("Строк в редакторе NX " + (requested == null ? "до" : "после") + " добавления: " + rows.Length + ".");
-            List<string> originals = SeparatePlanarBoundary.CheckEditor(rows, oldSources, requested, options, configure, confirmedTypes, out changed);
+            List<string> originals = SeparatePlanarBoundary.CheckEditor(rows, oldSources, requested, options, configure, plane, confirmedTypes, out changed);
             if (previous != null && !SeparatePlanarBoundary.SameKeys(previous, originals))
                 throw new InvalidOperationException("Состав или настройки прежних заполненных границ редактора изменились.");
             if (changed)
@@ -294,6 +331,86 @@ public class NXPlanarAddCurves
 }
 
 // BEGIN SEPARATE PLANAR BOUNDARY ADAPTER
+public sealed class PlanarBoundaryPlane
+{
+    private readonly Part part;
+    private readonly Point3d origin;
+    private readonly Vector3d normal;
+    private readonly double[] rotation = new double[9];
+
+    private PlanarBoundaryPlane(Part part, UFSession uf, Point3d point, Vector3d direction)
+    {
+        this.part = part;
+        origin = point;
+        if (!Finite(point.X) || !Finite(point.Y) || !Finite(point.Z) || !TryUnit(direction, out normal))
+            throw new InvalidOperationException("NX не вернул корректную точку и нормаль выбранной плоскости.");
+        uf.Mtx3.InitializeZ(new double[] { normal.X, normal.Y, normal.Z }, rotation);
+    }
+
+    public static PlanarBoundaryPlane FromReference(Part part, UFSession uf, NXObject reference)
+    {
+        // NX resolves the selected face/datum in work-part ABS, including component placement.
+        Plane support = part.Planes.CreatePlane(PlaneTypes.MethodType.Distance, PlaneTypes.AlternateType.One,
+            new Point3d(0, 0, 0), new Vector3d(0, 0, 1), "0", false, false, new NXObject[] { reference });
+        try
+        {
+            support.Evaluate();
+            return new PlanarBoundaryPlane(part, uf, support.Origin, support.Normal);
+        }
+        finally { support.DestroyPlane(); }
+    }
+
+    public void SetDefinition(ref UFCambnd.BoundaryData data)
+    {
+        data.plane_type = 0; // UF_CAMBND user defined
+        data.origin = new double[] { origin.X, origin.Y, origin.Z };
+        data.matrix = (double[])rotation.Clone();
+    }
+
+    private static bool Finite(double value) { return !Double.IsNaN(value) && !Double.IsInfinity(value); }
+
+    private static bool TryUnit(Vector3d direction, out Vector3d unit)
+    {
+        double length = Math.Sqrt(direction.X * direction.X + direction.Y * direction.Y + direction.Z * direction.Z);
+        unit = new Vector3d();
+        if (!Finite(length) || length <= 0) return false;
+        unit = new Vector3d(direction.X / length, direction.Y / length, direction.Z / length);
+        return true;
+    }
+
+    private bool Matches(Point3d point, Vector3d direction)
+    {
+        Vector3d unit;
+        if (!TryUnit(direction, out unit)) return false;
+        // Multiple origins and in-plane X axes describe the same plane. Its normal sense matters for TANTO.
+        double distance = (point.X - origin.X) * normal.X + (point.Y - origin.Y) * normal.Y + (point.Z - origin.Z) * normal.Z;
+        double dx = unit.X - normal.X, dy = unit.Y - normal.Y, dz = unit.Z - normal.Z;
+        return Math.Abs(distance) <= 1e-6 && dx * dx + dy * dy + dz * dz <= 1e-12;
+    }
+
+    private static string Describe(Point3d point, Vector3d direction)
+    {
+        return String.Format(CultureInfo.InvariantCulture, "точка ({0:G12}, {1:G12}, {2:G12}), нормаль ({3:G12}, {4:G12}, {5:G12})",
+            new object[] { point.X, point.Y, point.Z, direction.X, direction.Y, direction.Z });
+    }
+    public string Description { get { return Describe(origin, normal); } }
+
+    public bool ApplyOrVerify(BoundarySet row, Tag source, bool configure)
+    {
+        BoundarySet.PlaneTypes mode = row.PlaneType;
+        Plane actual = mode == BoundarySet.PlaneTypes.UserDefined ? row.Plane : null;
+        if (actual != null && Matches(actual.Origin, actual.Normal)) return false;
+        if (!configure)
+            throw new InvalidOperationException("Кривая [" + source + "]: ожидалась плоскость " + Description
+                + ". Редактор NX вернул " + mode + (actual == null ? "" : ", " + Describe(actual.Origin, actual.Normal)) + ".");
+        row.PlaneType = BoundarySet.PlaneTypes.UserDefined;
+        Plane replacement = part.Planes.CreatePlane(origin, normal, SmartObject.UpdateOption.AfterModeling);
+        try { row.Plane = replacement; }
+        catch { replacement.DestroyPlane(); throw; }
+        return true;
+    }
+}
+
 public static class SeparatePlanarBoundary
 {
     public sealed class Entry
@@ -330,13 +447,14 @@ public static class SeparatePlanarBoundary
 
     // UF creates one permanent CAM boundary per call on the selected operation.
     // Boundary-level app_data is optional. Planar member tool position uses the UF enum.
-    public static void Append(UFCambnd api, Tag operation, Tag curve, bool closed, PlanarCurveOptions options)
+    public static void Append(UFCambnd api, Tag operation, Tag curve, bool closed, PlanarCurveOptions options, PlanarBoundaryPlane plane)
     {
         UFCambnd.BoundaryData definition = new UFCambnd.BoundaryData {
             boundary_type = closed ? CamBoundaryType.CamBoundaryTypeClosed : CamBoundaryType.CamBoundaryTypeOpen,
             plane_type = 1, origin = new double[3], matrix = new double[] {1,0,0, 0,1,0, 0,0,1},
             material_side = options.UsesOutsideOrRight(closed) ? CamMaterialSide.CamMaterialSideOutRight : CamMaterialSide.CamMaterialSideInLeft
         };
+        if (plane != null) plane.SetDefinition(ref definition);
         UFCambnd.AppData member = new UFCambnd.AppData {
             tolerances = new double[2], has_tool_position = 1,
             tool_position = options.Tanto ? CamToolPosition.CamToolPositionTanto : CamToolPosition.CamToolPositionOn
@@ -485,7 +603,7 @@ public static class SeparatePlanarBoundary
     // The editor may include an empty input row. All permanent entries, even genuine empty ones,
     // are protected separately by the UF snapshot. Here match the geometry-backed rows by source tag.
     public static List<string> CheckEditor(BoundarySet[] rows, HashSet<Tag> oldSources, Dictionary<Tag, bool> requested,
-        PlanarCurveOptions options, bool configure, Dictionary<Tag, BoundarySet.BoundaryTypes> confirmedTypes, out bool changed)
+        PlanarCurveOptions options, bool configure, PlanarBoundaryPlane plane, Dictionary<Tag, BoundarySet.BoundaryTypes> confirmedTypes, out bool changed)
     {
         changed = false;
         List<string> previous = new List<string>();
@@ -511,6 +629,14 @@ public static class SeparatePlanarBoundary
             BoundarySetPlanarMill set = row as BoundarySetPlanarMill;
             BoundaryMemberSetPlanarMill item = members[0] as BoundaryMemberSetPlanarMill;
             if (set == null || item == null) throw new InvalidOperationException("Неизвестный тип границы для кривой [" + selected + "].");
+            if (plane != null && plane.ApplyOrVerify(set, selected, configure))
+            {
+                changed = true;
+                members = set.BoundaryMemberList.GetContents();
+                item = members.Length == 1 ? members[0] as BoundaryMemberSetPlanarMill : null;
+                if (item == null || item.Geometry == null || item.Geometry.Tag != selected)
+                    throw new InvalidOperationException("Редактор NX изменил состав границы при выборе плоскости для кривой [" + selected + "].");
+            }
             bool closed = requested[selected], tanto = options.Tanto;
             BoundarySet.BoundaryTypes shape = closed ? BoundarySet.BoundaryTypes.Closed : BoundarySet.BoundaryTypes.Open;
             BoundarySet.ToolPositionTypes position = tanto ? BoundarySet.ToolPositionTypes.Contact : BoundarySet.ToolPositionTypes.On;
@@ -576,6 +702,7 @@ public static class SeparatePlanarBoundary
 // BEGIN PLANAR CURVE WINDOWS
 public sealed class PlanarCurveOptions
 {
+    public bool SelectPlane = true;
     public bool Tanto, ClosedOutside, OpenRight;
     public bool UsesOutsideOrRight(bool closed) { return Tanto && (closed ? ClosedOutside : OpenRight); }
     public string ModeLabel { get { return Tanto ? "TANTO" : "ON"; } }
@@ -608,7 +735,7 @@ public static class PlanarCurveWindows
     private const uint ButtonCheckBox = 2, ButtonAutoRadio = 9, ButtonPushLike = 0x1000;
     private const uint StaticNoPrefix = 0x80, StaticNotify = 0x100;
     private const uint WmSetFont = 0x30, BmSetCheck = 0xf1;
-    private const int OptionsHeight = 230;
+    private const int PlaneChoice = 128, OptionsHeight = 260;
 
     private static int Rgb(int r, int g, int b) { return r | (g << 8) | (b << 16); }
     private static readonly int Canvas = Rgb(245, 247, 248), Ink = Rgb(31, 43, 49);
@@ -669,7 +796,7 @@ public static class PlanarCurveWindows
                         Native.SendMessageW(hwnd, 0x401, new IntPtr(OK), IntPtr.Zero); // DM_SETDEFID
                         ready = true;
                         Layout();
-                        Native.SetFocus(Item(IsReport ? OK : On));
+                        Native.SetFocus(Item(IsReport ? OK : PlaneChoice));
                         return IntPtr.Zero; // Keep the explicitly assigned keyboard focus.
                     case 0x111: // WM_COMMAND
                         if (Command((int)(wParam.ToInt64() & 0xffff), (int)((wParam.ToInt64() >> 16) & 0xffff)))
@@ -719,6 +846,8 @@ public static class PlanarCurveWindows
                 return;
             }
             Add("STATIC", Summary, "PLANAR_MILL / PLANAR_PROFILE\r\nОперация: " + operation, StaticNoPrefix | 0x4000u, normal);
+            Add("BUTTON", PlaneChoice, "Выбрать плоскость границ", Group | TabStop | ButtonCheckBox, normal);
+            Add("STATIC", Note, "", StaticNoPrefix, normal);
             IntPtr modeFont = CreateFont(15, 700, "Segoe UI", normal);
             // The two real radio controls form one keyboard group. The next control starts a new group.
             Add("BUTTON", On, "ON", Group | TabStop | ButtonAutoRadio | ButtonPushLike, modeFont);
@@ -737,10 +866,10 @@ public static class PlanarCurveWindows
             SetCheckedPair(Inside, Outside, Options.ClosedOutside);
             SetCheckedPair(Left, Right, Options.OpenRight);
             Add("STATIC", SideHint, "Левая и правая стороны задаются по направлению открытой кривой.", Group | StaticNoPrefix, normal);
-            Add("STATIC", Note, "Одна выбранная кривая образует одну границу.", StaticNoPrefix, normal);
             Add("BUTTON", Cancel, "Отмена", TabStop, normal);
-            Add("BUTTON", OK, "Выбрать кривые  →", TabStop | 1u, normal);
+            Add("BUTTON", OK, "", TabStop | 1u, normal);
             SetMode(false);
+            SetPlaneChoice(Options.SelectPlane);
         }
 
         private void Add(string kind, int id, string text, uint style, IntPtr font)
@@ -777,11 +906,21 @@ public static class PlanarCurveWindows
             Native.InvalidateRect(Item(TantoRule), IntPtr.Zero, true);
         }
 
+        private void SetPlaneChoice(bool enabled)
+        {
+            Options.SelectPlane = enabled;
+            Native.SendMessageW(Item(PlaneChoice), BmSetCheck, new IntPtr(enabled ? 1 : 0), IntPtr.Zero);
+            Native.SetWindowTextW(Item(Note), enabled ? "Плоская грань или базовая плоскость для всех новых границ."
+                : "NX определит плоскость каждой новой границы автоматически.");
+            Native.SetWindowTextW(Item(OK), enabled ? "Выбрать плоскость  →" : "Выбрать кривые  →");
+        }
+
         private bool Command(int id, int notification)
         {
             if (notification != 0) return false; // BN_CLICKED / STN_CLICKED or a dialog key
             switch (id)
             {
+                case PlaneChoice: SetPlaneChoice(!Options.SelectPlane); return true;
                 case On: case OnRule: case OnHint: SetMode(false); return true;
                 case Tanto: case TantoRule: case TantoHint: SetMode(true); return true;
                 case Inside: case Outside:
@@ -858,16 +997,17 @@ public static class PlanarCurveWindows
                 int first = (usable - gap) / 2, second = usable - gap - first;
                 int right = pad + first + gap;
                 Place(Summary, pad, 32, usable, 22);
-                Place(On, pad, 60, first, 27); Place(Tanto, right, 60, second, 27);
-                Place(OnRule, pad, 87, first, 2); Place(TantoRule, right, 87, second, 2);
-                Place(OnHint, pad + 2, 94, first - 3, 22); Place(TantoHint, right + 2, 94, second - 3, 22);
-                Place(ClosedLabel, pad, 119, first, 14); Place(OpenLabel, right, 119, second, 14);
-                Place(Inside, pad, 135, first, 16); Place(Left, right, 135, second, 16);
-                Place(Outside, pad, 153, first, 16); Place(Right, right, 153, second, 16);
-                Place(SideHint, pad, 174, usable, 13);
-                Place(Note, pad, 190, usable, 13);
-                Place(Cancel, width - pad - 101 - gap - 61, buttonsY, 61, buttonHeight);
-                Place(OK, width - pad - 101, buttonsY, 101, buttonHeight);
+                Place(PlaneChoice, pad, 56, usable, 16);
+                Place(Note, pad, 75, usable, 13);
+                Place(On, pad, 94, first, 27); Place(Tanto, right, 94, second, 27);
+                Place(OnRule, pad, 121, first, 2); Place(TantoRule, right, 121, second, 2);
+                Place(OnHint, pad + 2, 128, first - 3, 22); Place(TantoHint, right + 2, 128, second - 3, 22);
+                Place(ClosedLabel, pad, 153, first, 14); Place(OpenLabel, right, 153, second, 14);
+                Place(Inside, pad, 169, first, 16); Place(Left, right, 169, second, 16);
+                Place(Outside, pad, 187, first, 16); Place(Right, right, 187, second, 16);
+                Place(SideHint, pad, 208, usable, 13);
+                Place(Cancel, width - pad - 114 - gap - 61, buttonsY, 61, buttonHeight);
+                Place(OK, width - pad - 114, buttonsY, 114, buttonHeight);
             }
         }
 

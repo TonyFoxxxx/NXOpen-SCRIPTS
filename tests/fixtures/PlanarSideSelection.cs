@@ -7,7 +7,7 @@ using System.Threading;
 internal static class PlanarSideSelection
 {
     private const int Continue = 1, Cancel = 2, On = 110, Tanto = 111;
-    private const int Inside = 121, Outside = 122, Left = 124, Right = 125;
+    private const int Inside = 121, Outside = 122, Left = 124, Right = 125, PlaneChoice = 128;
     private const uint BmGetCheck = 0xf0, BmClick = 0xf5;
     private static readonly IntPtr Zero = IntPtr.Zero;
     private static IntPtr desktop;
@@ -18,6 +18,7 @@ internal static class PlanarSideSelection
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern IntPtr FindWindow(string kind, string caption);
     [DllImport("user32.dll")] private static extern IntPtr GetDlgItem(IntPtr window, int id);
     [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr window);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetWindowText(IntPtr window, System.Text.StringBuilder text, int capacity);
     [DllImport("user32.dll", EntryPoint="SendMessageW")] private static extern IntPtr Send(IntPtr window, uint message, IntPtr w, IntPtr l);
     [DllImport("user32.dll", EntryPoint="PostMessageW")] private static extern bool Post(IntPtr window, uint message, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
@@ -25,6 +26,14 @@ internal static class PlanarSideSelection
 
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
     private static void Click(IntPtr w, int id) { Send(GetDlgItem(w, id), BmClick, Zero, Zero); }
+    private static void CheckPlane(IntPtr w, bool enabled)
+    {
+        Check(IsWindowEnabled(GetDlgItem(w,PlaneChoice)) && Send(GetDlgItem(w,PlaneChoice),BmGetCheck,Zero,Zero).ToInt32()==(enabled?1:0),
+            "independent plane checkbox");
+        var caption=new System.Text.StringBuilder(80);
+        GetWindowText(GetDlgItem(w,Continue),caption,caption.Capacity);
+        Check(caption.ToString().Contains(enabled?"плоскость":"кривые"),"continue indicates next selection");
+    }
     private static void CheckPair(IntPtr w, int first, int second, bool useSecond)
     {
         Check(Send(GetDlgItem(w, first), BmGetCheck, Zero, Zero).ToInt32() == (useSecond ? 0 : 1), "first checkbox " + first);
@@ -82,6 +91,9 @@ internal static class PlanarSideSelection
         {
             PlanarCurveOptions options = Open("TANTO "+outside+" "+right, delegate(IntPtr w) {
                 CheckEnabled(w,false);
+                CheckPlane(w,true);
+                Check(Bounds(w,PlaneChoice).Bottom<=Bounds(w,On).Y && Bounds(w,Outside).Bottom<=Bounds(w,Continue).Y,"options fit the dialog");
+                Click(w,PlaneChoice); CheckPlane(w,false);
                 CheckPair(w,Inside,Outside,false); CheckPair(w,Left,Right,false);
                 Check(Bounds(w,Inside).Right <= Bounds(w,Left).X && Bounds(w,Inside).Bottom <= Bounds(w,Outside).Y, "separate control columns and rows");
                 Click(w,Tanto); CheckEnabled(w,true);
@@ -91,16 +103,18 @@ internal static class PlanarSideSelection
                 int openId = right ? Right : Left;
                 Click(w,openId); Click(w,openId);
                 CheckPair(w,Inside,Outside,outside); CheckPair(w,Left,Right,right);
-                Click(w,On); CheckEnabled(w,false); Click(w,Tanto);
+                Click(w,On); CheckEnabled(w,false); CheckPlane(w,false); Click(w,Tanto);
+                if (outside) Click(w,PlaneChoice);
+                CheckPlane(w,outside);
                 CheckEnabled(w,true); CheckPair(w,Inside,Outside,outside); CheckPair(w,Left,Right,right);
                 Click(w,Continue);
             });
-            Check(options!=null && options.Tanto && options.ClosedOutside==outside && options.OpenRight==right, "returned combination");
+            Check(options!=null && options.Tanto && options.ClosedOutside==outside && options.OpenRight==right && options.SelectPlane==outside, "returned combination");
         }
         PlanarCurveOptions on = Open("ON ignores sides",delegate(IntPtr w) {
             Click(w,Tanto); Click(w,Outside); Click(w,Right); Click(w,On); Click(w,Continue);
         });
-        Check(on!=null && !on.Tanto && !on.UsesOutsideOrRight(false) && !on.UsesOutsideOrRight(true), "ON ignores side selections");
+        Check(on!=null && on.SelectPlane && !on.Tanto && !on.UsesOutsideOrRight(false) && !on.UsesOutsideOrRight(true), "ON ignores side selections");
         Check(Open("Cancel",delegate(IntPtr w){Click(w,Tanto); Click(w,Right); Click(w,Cancel);})==null, "cancel");
         return 0;
     }
