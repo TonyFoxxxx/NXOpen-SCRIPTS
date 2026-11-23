@@ -69,6 +69,15 @@
       "description": "Tool Position On для всех элементов границ выбранных PLANAR_MILL; включение Stock с единым припуском по запросу."
     },
     {
+      "id": "NX_Planar_Add_Curves",
+      "name": "Кривые в PLANAR_MILL / PROFILE",
+      "file": "NX_Planar_Add_Curves.cs",
+      "version": "V1",
+      "path": "scripts/NX_Planar_Add_Curves.cs",
+      "sha256": "0a8320f3e23bba7a33d88a6aba43928da9c01baf5408b0e9b6fe986de19c72cd",
+      "description": "Выбранные кривые отдельными границами в PLANAR_MILL и PLANAR_PROFILE; выбор ON / TANTO и стороны."
+    },
+    {
       "id": "NX_PlanarMill_Select_Curves",
       "name": "Оси гравировки для PLANAR_MILL",
       "file": "NX_PlanarMill_Select_Curves.cs",

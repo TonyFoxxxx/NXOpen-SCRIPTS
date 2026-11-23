@@ -20,6 +20,7 @@
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Очистка служебных хвостов и нумерации в именах всех операций с сохранением Z. | [Все функции](docs/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
+| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1 | Выбранные кривые отдельными границами в PLANAR_MILL / PLANAR_PROFILE; выбор ON / TANTO. | [Все функции](docs/planar-add-curves.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.13 | Средние линии по граням гравировки и окружности D/2 для точек; назначение в PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Создание однолинейного текста ГОСТ А из линий и гладких сплайнов по внешнему FON. | [Все функции](docs/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
@@ -37,7 +38,11 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Карта наладки V2.72 · 19.11.2026
+### Последнее обновление — Кривые в PLANAR V1 · 23.11.2026
+
+Новый скрипт добавляет готовые кривые в PLANAR_MILL и PLANAR_PROFILE: одна кривая — одна граница. После запуска выберите ON или TANTO; для TANTO доступен выбор стороны. Замкнутые кривые сохраняют тип Closed. В апдейтере установите **«Кривые в PLANAR_MILL / PROFILE»**. [Порядок работы и ограничения](docs/planar-add-curves.md#изменения-последней-версии).
+
+### Также опубликовано — Карта наладки V2.72 · 19.11.2026
 
 Крестик в правом верхнем углу удаляет отдельный лист после подтверждения. Удаление можно отменить через Ctrl+Z. При повторном экспорте выбранный установ занимает своё место в карте. Старые сокращённые пути сопоставляются с деревом Program Order, а выбор подпапки внутри сохранённого установа сопровождается подсказкой, какую папку выбрать для обновления.
 
@@ -123,3 +128,4 @@ V1.30.09 прошла исторические контексты без 821049 
 Порядок добавления скриптов, требования к версиям и проверки перед публикацией описаны в [docs/publishing.md](docs/publishing.md).
 
 [GitHub Actions](https://github.com/TonyFoxxxx/NXOpen-SCRIPTS/actions) проверяет каталог и логику апдейтера на Windows и Linux; на Windows также проверяется отрисовка дерева постпроцессора в настоящем TreeView. Эти проверки не запускают NXOpen; работу журналов в NX необходимо проверять отдельно.
+

@@ -2,6 +2,13 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-23 — Curves for PLANAR V1
+
+- Added standalone `NX_Planar_Add_Curves.cs` for existing curves in PLANAR_MILL and PLANAR_PROFILE. Each curve receives its own Part Boundary; adjacent curves are not chained.
+- Choose ON / TANTO after launch; TANTO includes Inside / Left and Outside / Right. Closed curves use Closed, while other curves use Open.
+- Existing assignments are skipped; new boundaries are verified after Commit. Includes one undo step, rollback on errors and a report window with Copy all.
+- Checked compilation, 106 fixture assertions and windows outside NX. A live NX run remains unverified. [Guide](docs/en/planar-add-curves.md).
+
 ## 2026-11-19 — Setup sheets V2.72
 
 Partial updates on Windows preserve the original line endings in unselected setups, including multiline notes, across repeated exports. When consolidating confirmed copies of a folder, the script accepts matching annotations with CRLF or LF line endings. [Guide](docs/en/setup-card.md#latest-release).
@@ -1012,3 +1019,4 @@ Published 13 journals for CAM, setup sheets, drawings, export and file managemen
 Included postprocessing V1.35, operation renaming V1.04, numbering V1.03, tool descriptions V1.06, PDF V1.11, DXF V1.08, assembly renaming V1.05, project folder V1.01 and setup-sheet folder V1.01. Filenames were normalized and text saved as UTF-8 with LF.
 
 Added schema-1 manifest, example INI files, an empty register, guides, third-party notices and publishing checks.
+
