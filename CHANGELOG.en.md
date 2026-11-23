@@ -2,6 +2,10 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-23 — Curves for PLANAR V1.02
+
+Each selected curve is appended to the operation as its own Part Boundary. The journal counts saved CAM boundaries. An empty entry row in the editor no longer adds one to the expected total. Selecting 36 curves in an empty operation gives an expected total of 36. [Guide](docs/en/planar-add-curves.md#latest-release).
+
 ## 2026-11-23 — Curves for PLANAR V1.01
 
 Fixed startup in Designcenter 2606 when its journal compiler cannot resolve `System.Drawing.Common`. The ON / TANTO selector and report now use standard Windows controls. The complete V1.01 journal compiles against .NET 10 and the installed NXOpen libraries. [Guide](docs/en/planar-add-curves.md#latest-release).

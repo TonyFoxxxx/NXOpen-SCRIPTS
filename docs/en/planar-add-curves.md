@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.01 · 2026-11-23** — Fixed the `Journal syntax error` involving `Font`, `FontStyle` and `ContentAlignment` in Designcenter 2606. The ON / TANTO selector and the copyable report use standard Windows controls. Updating the journal is sufficient.
+**V1.02 · 2026-11-23** — Each selected curve is appended to the operation as its own Part Boundary. The journal counts saved CAM boundaries. An empty entry row in the editor no longer adds one to the expected total. Selecting 36 curves in an empty operation gives an expected total of 36.
 
 File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater name: **«Кривые в PLANAR_MILL / PROFILE»**. This is a separate script for existing curves; [engraving centerline construction](planar-mill-curves.md) remains a separate tool.
 
@@ -36,9 +36,9 @@ The exact cutting geometry also depends on the tool and operation settings. The 
 
 ## Preservation and report
 
-Existing boundaries are retained. After Commit, the script reopens the builder for reading and checks the boundary count, curve identities, Open/Closed, ON/TANTO, TANTO side and disabled individual stock/tolerance overrides. Existing boundaries are compared using their members and the parameters read by the script.
+The journal appends one source curve at a time directly to the operation. It reads saved Part Boundaries before and after through the CAM API, checks every new curve tag, Open/Closed, ON/TANTO, the TANTO side and inherited stock and tolerance. The operation editor applies a settings change only when required. A final read checks the saved result. Existing geometry is compared by its members and settings, including actual saved boundaries without source tags.
 
-An error after mutation starts triggers rollback followed by a comparison of the original boundary members and recorded parameters. An unconfirmed rollback is explicitly reported. A successful run can be undone with one **Ctrl+Z**.
+The report lists editor rows and saved boundaries separately and shows expected and actual counts. A missing, duplicated or grouped curve is identified by tag. If a change fails, the journal rolls back the run and checks the original boundaries and inheritance. A successful run is one **Ctrl+Z** step.
 
 The result window is resizable. **«Копировать всё»** copies the entire report, including text outside the viewport. Error reports include the stage, exception type, NX error code when available and stack trace. Reports remain in memory and are never sent automatically.
 
@@ -48,6 +48,6 @@ The result window is resizable. **«Копировать всё»** copies the e
 - The operation must belong to the CAM work part. Component curves, body edges, faces and bodies are not selected.
 - If the operation inherits nonempty Part Boundaries from parent geometry, first define local boundaries in NX. The script does not change the parent geometry.
 - No new curves, toolpath generation or automatic part saving. No files, folders, logs, temporary files or disk settings are created.
-- V1.01 compiled with the Designcenter 2606 C# compiler, NXOpen and .NET 10. The boundary fixture passed 106 assertions. Separate Windows dialog tests covered ON, both TANTO sides, cancellation and a 60,395-character report. A live CAM run and toolpath generation are still unverified.
+- V1.02 compiled against the installed Designcenter 2606 NXOpen libraries on .NET 10. A fixture exercised the journal entry point with 36 curves, a placeholder row, existing boundaries, both TANTO sides, repeat selections and rollback on lost or merged curves. A live run on a CAM part is still unverified.
 
 [Download script](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Planar_Add_Curves.cs) · [Catalog](../../README.en.md) · [Changelog](../../CHANGELOG.en.md)

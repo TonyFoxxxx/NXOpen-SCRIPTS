@@ -72,9 +72,9 @@
       "id": "NX_Planar_Add_Curves",
       "name": "Кривые в PLANAR_MILL / PROFILE",
       "file": "NX_Planar_Add_Curves.cs",
-      "version": "V1.01",
+      "version": "V1.02",
       "path": "scripts/NX_Planar_Add_Curves.cs",
-      "sha256": "c283ce4f1b93eb21ffddfefbe497740b917eea49057b5368d2bc70b64018e2f8",
+      "sha256": "e6947a27f0e72f5814c238f7b23fd2b0e784e373548d752359039bff70a79d42",
       "description": "Выбранные кривые отдельными границами в PLANAR_MILL и PLANAR_PROFILE; выбор ON / TANTO и стороны."
     },
     {
