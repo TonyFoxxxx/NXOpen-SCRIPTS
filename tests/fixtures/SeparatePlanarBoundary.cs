@@ -69,7 +69,9 @@ namespace NXOpen.CAM
         public BoundaryPlanarMill PartBoundary=new BoundaryPlanarMill();
         public PlanarMillingBuilder()
         {
-            foreach(Record record in Model.Records) PartBoundary.BoundaryList.Add(record.Editor());
+            foreach(Record record in Model.Records)
+                if(Model.OmitEditorTag==Tag.Null || Array.IndexOf(record.Tags,Model.OmitEditorTag)<0)
+                    PartBoundary.BoundaryList.Add(record.Editor());
             if(Model.Records.Count==0 || Model.KeepPlaceholder)
             {
                 var blank=new BoundarySetPlanarMill();
@@ -118,7 +120,12 @@ namespace NXOpen.UF
             count=Model.Records.Count; boundaries=count==0 && !Model.KeepPlaceholder ? null : new IntPtr[Math.Max(count,1)];
             for(int i=0;i<count;i++) boundaries[i]=new IntPtr(i+1);
         }
-        public void AskBoundaryData(IntPtr b,out BoundaryData data) { data=Model.Records[b.ToInt32()-1].Definition; }
+        public void AskBoundaryData(IntPtr b,out BoundaryData data)
+        {
+            data=Model.Records[b.ToInt32()-1].Definition;
+            // An out-of-enum UF readback is independent of the persisted shape displayed by the editor.
+            if(Model.UfReadType.HasValue) data.boundary_type=(CamBoundaryType)Model.UfReadType.Value;
+        }
         public void AskBoundaryAppData(IntPtr b,out AppData data) { data=Model.Records[b.ToInt32()-1].Settings; }
         public void AskBoundaryItems(IntPtr b,out int count,out IntPtr[] items)
         {
@@ -171,6 +178,7 @@ public class Record
         var r=new BoundarySetPlanarMill {Saved=this, ToolPosition=Position, ToolSide=Side, CustomOffset=CustomOffset, Offset=Offset,
             BoundaryType=Definition.boundary_type==CamBoundaryType.CamBoundaryTypeClosed ? BoundarySet.BoundaryTypes.Closed : BoundarySet.BoundaryTypes.Open,
             CustomStock=Settings.has_stock!=0,CustomTolerance=Settings.has_tolerances!=0};
+        if(Model.EditorReadType.HasValue) r.BoundaryType=(BoundarySet.BoundaryTypes)Model.EditorReadType.Value;
         for(int i=0;i<Tags.Length;i++) r.BoundaryMemberList.Add(new BoundaryMemberSetPlanarMill {
             Geometry=Tags[i]==Tag.Null ? null : Model.Curves[Tags[i]],
             ToolPosition=Members[i].tool_position==CamToolPosition.CamToolPositionTanto ? 1 : 0,
@@ -180,6 +188,8 @@ public class Record
     public void Apply(BoundarySetPlanarMill row)
     {
         Position=row.ToolPosition; CustomOffset=row.CustomOffset; Offset=row.Offset;
+        if(!Model.IgnoreShapeEdits)
+            Definition.boundary_type=row.BoundaryType==BoundarySet.BoundaryTypes.Closed ? CamBoundaryType.CamBoundaryTypeClosed : CamBoundaryType.CamBoundaryTypeOpen;
         if (!Model.IgnoreOpenSide || row.BoundaryType!=BoundarySet.BoundaryTypes.Open) Side=row.ToolSide;
         Settings.has_stock=row.CustomStock?1:0; Settings.has_tolerances=row.CustomTolerance?1:0;
         for(int i=0;i<Members.Length;i++) {
@@ -196,6 +206,9 @@ public static class Model
     public static List<Record> Records; public static PlanarCurveOptions Options;
     public static string Report; public static int Severity,Marks,Undos,Commits,Calls,FailAt,MergeAt;
     public static bool Inherited,KeepPlaceholder,NullPlaceholderMember,WrongEditorDefaults,DropOnCommit,CorruptOld,WrongClosure,IgnoreOpenSide;
+    public static bool IgnoreShapeEdits;
+    public static int? UfReadType, EditorReadType;
+    public static Tag OmitEditorTag;
     public static Tag DropTag,DuplicateTag,SubstituteTag; static List<Record> undo; static bool undoInherited;
     public static void SaveUndo(){ undo=Records.ConvertAll(r=>r.Copy()); undoInherited=Inherited; }
     public static void RestoreUndo(){ Records=undo.ConvertAll(r=>r.Copy()); Inherited=undoInherited; }
@@ -206,6 +219,7 @@ public static class Model
         Curves=new Dictionary<Tag,Curve>(); Selection=new List<TaggedObject>(); Records=new List<Record>();
         Options=new PlanarCurveOptions(); Report=""; Severity=-1; Marks=Undos=Commits=Calls=FailAt=MergeAt=0;
         Inherited=KeepPlaceholder=NullPlaceholderMember=WrongEditorDefaults=DropOnCommit=CorruptOld=WrongClosure=IgnoreOpenSide=false;
+        IgnoreShapeEdits=false; UfReadType=EditorReadType=null; OmitEditorTag=Tag.Null;
         DuplicateTag=DropTag=SubstituteTag=Tag.Null;
     }
     public static Curve AddCurve(int n,bool closed)
@@ -277,8 +291,38 @@ public static class PlanarChecks
         Check(Model.Report.Contains("Замкнутых границ со стороной "+(outside?"Outside — снаружи":"Inside — внутри")+": 9"),"closed report");
         Check(Model.Report.Contains("Открытых границ со стороной "+(right?"Right — справа":"Left — слева")+": 27"),"open report");
     }
-    public static void Main()
+    public static int Main() { return ManagedTestHost.Run(RunChecks); }
+    private static int RunChecks()
     {
+        Model.Reset(); Model.UfReadType=2; Model.Options.Tanto=true; Model.Options.ClosedOutside=true;
+        for(int i=0;i<36;i++) Model.AddCurve(1000+i,true);
+        Model.Run(); Success();
+        Check(Model.Records.Count==36 && Model.Calls==36 && Model.Marks==1 && Model.Undos==0,"36 closed contours with raw UF code 2");
+        foreach(Record b in Model.Records) Check(b.Tags.Length==1 && b.Definition.boundary_type==CamBoundaryType.CamBoundaryTypeClosed
+            && b.Side==BoundarySet.ToolSideTypes.OutsideOrRight && b.Members[0].tool_position==CamToolPosition.CamToolPositionTanto,"each boundary is Closed/TANTO/Outside");
+        Check(Model.Report.Contains("Open: 0; Closed: 36"),"verified closed count");
+        Check(Model.Report.Contains("код типа 2 для границ: 36"),"grouped native code diagnostic");
+        Model.Reset(); Select36(); Model.UfReadType=2; Model.WrongClosure=true;
+        Model.Options.Tanto=true; Model.Options.ClosedOutside=true; Model.Run(); Success();
+        Check(Model.Commits==1 && Model.Report.Contains("Open: 27; Closed: 9"),"correct and reopen mixed boundaries with the same UF code");
+        foreach(Record b in Model.Records)
+        {
+            bool closed=Model.Curves[b.Tags[0]].Closed;
+            Check((b.Definition.boundary_type==CamBoundaryType.CamBoundaryTypeClosed)==closed,"persisted mixed shape");
+            Check(b.Side==(closed?BoundarySet.ToolSideTypes.OutsideOrRight:BoundarySet.ToolSideTypes.InsideOrLeft),"mixed Outside/Left");
+        }
+        Model.Reset(); Model.UfReadType=17; Model.AddCurve(401,false); Model.Run(); Success();
+        Check(Model.Report.Contains("Open: 1; Closed: 0"),"unmapped code with independently confirmed open geometry in ON");
+        foreach(int editorType in new[]{(int)BoundarySet.BoundaryTypes.Open,2})
+        {
+            Model.Reset(); Model.UfReadType=2; Model.EditorReadType=editorType;
+            Model.AddCurve(401,true); Model.Run(); RolledBack();
+            Check(Model.Records.Count==0 && Model.Report.Contains("[401]") && Model.Commits==1,"wrong or unknown editor shape must roll back");
+        }
+        Model.Reset(); Model.UfReadType=2; Select36(); Model.OmitEditorTag=(Tag)136; Model.Run(); RolledBack();
+        Check(Model.Records.Count==0 && Model.Report.Contains("Нет тегов [136]"),"missing editor evidence with equal UF count");
+        Model.Reset(); Model.UfReadType=(int)CamBoundaryType.CamBoundaryTypeOpen; Model.AddCurve(401,true); Model.Run(); RolledBack();
+        Check(Model.Report.Contains("редактор NX подтвердил Closed, CAM вернул CamBoundaryTypeOpen"),"named native/editor conflict");
         EmptyTo36(false,true); EmptyTo36(true,false);
         foreach(bool outside in new[]{false,true}) foreach(bool right in new[]{false,true})
         {
@@ -294,7 +338,8 @@ public static class PlanarChecks
         Model.Reset(); Select36(); Model.SubstituteTag=(Tag)136; Model.Run(); RolledBack();
         Check(Model.Report.Contains("ожидалось 36, фактически 36") && Model.Report.Contains("136"),"equal count with wrong source is rejected");
         Model.Reset(); Select36(); Model.FailAt=3; Model.Run(); RolledBack(); Check(Model.Calls==3 && Model.Records.Count==0 && Model.Report.Contains("3/36"),"partway failure");
-        Model.Reset(); Select36(); Model.WrongClosure=true; Model.Run(); RolledBack(); Check(Model.Report.Contains("ожидалось Open"),"wrong closure rejected");
+        Model.Reset(); Select36(); Model.WrongClosure=true; Model.IgnoreShapeEdits=true; Model.Run(); RolledBack();
+        Check(Model.Report.Contains("Open") && Model.Report.Contains("Closed"),"persistently wrong known closure rejected");
         Model.Reset(); Select36(); Model.WrongEditorDefaults=true; Model.DropOnCommit=true; Model.Run(); RolledBack();
         Check(Model.Commits==1 && Model.Report.Contains("Итоговое число сохранённых границ: 35"),"verify after optional edit commit");
         Model.Reset(); Model.AddCurve(501,true); Model.Run(); Success(); Model.Records[0].Settings.has_stock=1; Model.Records[0].Settings.stock=9;
@@ -303,5 +348,6 @@ public static class PlanarChecks
         Model.Reset(); Model.AddCurve(77,true); Model.Options=null; Model.Run();
         Check(Model.Marks==0 && Model.Calls==0 && Model.Severity==-1,"cancel before mutations");
         Console.WriteLine("Planar transaction checks passed: "+checks);
+        return 0;
     }
 }

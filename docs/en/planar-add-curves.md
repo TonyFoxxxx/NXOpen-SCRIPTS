@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.03 · 2026-11-23** — TANTO now has two independent pairs of checkboxes. Select Inside or Outside for closed curves and Left or Right for open curves. A mixed selection can use any of the four combinations in a single run. ON remains the default.
+**V1.04 · 2026-11-23** — Fixed a rollback after NX had saved all selected curves. When the CAM API returns boundary type code `2`, the journal now reopens the operation editor and verifies Open or Closed for each saved source curve.
 
 File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater name: **«Кривые в PLANAR_MILL / PROFILE»**. This is a separate script for existing curves; [engraving centerline construction](planar-mill-curves.md) remains a separate tool.
 
@@ -38,7 +38,7 @@ The exact cutting geometry also depends on the tool and operation settings. The 
 
 ## Preservation and report
 
-The journal appends one source curve at a time directly to the operation. It reads saved Part Boundaries before and after through the CAM API, checks every new curve tag, Open/Closed, ON/TANTO, the TANTO side and inherited stock and tolerance. The operation editor applies a settings change only when required. A final read checks the saved result. Existing geometry is compared by its members and settings, including actual saved boundaries without source tags.
+The journal appends one source curve at a time directly to the operation. It reads saved Part Boundaries before and after through the CAM API, checks every new curve tag, Open/Closed, ON/TANTO, the TANTO side and inherited stock and tolerance. The operation editor applies a settings change only when required. A final read checks the saved result. Existing geometry is compared by its members and settings, including actual saved boundaries without source tags. The Open/Closed totals use the values read back from the reopened editor. A missing curve, an unconfirmed shape or a conflict between named CAM and editor types triggers a verified rollback.
 
 The report lists editor rows and saved boundaries separately and shows expected and actual counts. A missing, duplicated or grouped curve is identified by tag. If a change fails, the journal rolls back the run and checks the original boundaries and inheritance. A successful run is one **Ctrl+Z** step.
 
@@ -50,6 +50,6 @@ The result window is resizable. **«Копировать всё»** copies the e
 - The operation must belong to the CAM work part. Component curves, body edges, faces and bodies are not selected.
 - If the operation inherits nonempty Part Boundaries from parent geometry, first define local boundaries in NX. The script does not change the parent geometry.
 - No new curves, toolpath generation or automatic part saving. No files, folders, logs, temporary files or disk settings are created.
-- The complete V1.03 journal compiled with the Designcenter 2606 C# compiler and NXOpen on .NET 10. Tests exercised the actual Windows checkboxes, all four TANTO combinations on a fixture with 36 mixed curves, ON, and rollback if NX returns a different tool side. A live CAM run is still unverified.
+- Compiled with the Designcenter 2606 C# compiler and NXOpen on .NET 10. Offline tests cover 36 closed curves with UF code 2 in TANTO/Outside, mixed open and closed curves with the same code, all four side combinations, ON, and rollback when the saved geometry cannot be confirmed. A live CAM part has yet to be tested.
 
 [Download script](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Planar_Add_Curves.cs) · [Catalog](../../README.en.md) · [Changelog](../../CHANGELOG.en.md)

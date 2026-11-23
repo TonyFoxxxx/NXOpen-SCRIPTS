@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-23 — Curves for PLANAR V1.04
+
+Fixed a rollback after NX had saved all selected curves. When the CAM API returns boundary type code `2`, the journal now reopens the operation editor and verifies Open or Closed for each saved source curve. [Guide](docs/en/planar-add-curves.md#latest-release).
+
+Project tests now run on a private Windows desktop with timeouts and diagnostic logs. Managed PLANAR tests record exceptions and exit after one attempt.
+
 ## 2026-11-23 — Engraving operation diagnostic V1
 
 A separate journal reads the selected PLANAR_MILL / PLANAR_PROFILE, inheritance, groups, tool, geometry and available editor properties. Save JSON writes to a chosen location; Copy all copies the complete report. The main engraving script does not yet create operations automatically.

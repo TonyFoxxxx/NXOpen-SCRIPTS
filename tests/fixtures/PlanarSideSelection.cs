@@ -106,13 +106,18 @@ internal static class PlanarSideSelection
     }
     public static int Main()
     {
+        return ManagedTestHost.Run(RunOnDesktop);
+    }
+    private static int RunOnDesktop()
+    {
         int status=1;
         Thread gui = new Thread((ThreadStart)delegate {
-            try { status=Run(); } catch(Exception ex) { Console.Error.WriteLine(ex); }
+            try { status=Run(); } catch(Exception ex) { status=ManagedTestHost.Record(ex); }
         });
         gui.SetApartmentState(ApartmentState.MTA);
         gui.IsBackground=true;
         gui.Start();
-        return gui.Join(20000) ? status : 1;
+        if (!gui.Join(20000)) throw new TimeoutException("Private desktop test exceeded 20 seconds");
+        return status;
     }
 }

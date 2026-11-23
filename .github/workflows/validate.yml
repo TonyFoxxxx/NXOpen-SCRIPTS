@@ -27,5 +27,5 @@ jobs:
           python-version: '3.11'
       - name: Validate manifest and public files
         run: python tools/manifest.py --check
-      - name: Exercise updater data-preservation scenarios
-        run: python -m unittest discover -s tests -v
+      - name: Run project tests in the background
+        run: python tools/run_tests.py

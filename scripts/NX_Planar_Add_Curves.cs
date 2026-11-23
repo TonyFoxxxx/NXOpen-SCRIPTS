@@ -1,5 +1,5 @@
 // NX_Planar_Add_Curves.cs - separate curve boundaries for PLANAR_MILL / PLANAR_PROFILE.
-// SCRIPT_VERSION: V1.03
+// SCRIPT_VERSION: V1.04
 // Select one planar operation, choose ON / TANTO, then select existing work-part curves.
 // Each new curve becomes one Part Boundary; geometrically closed curves remain Closed.
 // Existing assignments are skipped. No chaining, new curves, files or automatic toolpath generation.
@@ -18,7 +18,7 @@ using CamOperation = NXOpen.CAM.Operation;
 
 public class NXPlanarAddCurves
 {
-    private const string SCRIPT_VERSION = "V1.03";
+    private const string SCRIPT_VERSION = "V1.04";
     private static readonly string Title = "Кривые в PLANAR — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
 
@@ -109,23 +109,27 @@ public class NXPlanarAddCurves
             stage = "Чтение сохранённых Part Boundaries после добавления";
             SeparatePlanarBoundary.Saved added = SeparatePlanarBoundary.Read(uf.Cambnd, operation.Tag);
             report.AppendLine("Сохранённых границ после добавления: " + added.Boundaries.Count + " (ожидалось " + expectedCount + ").");
-            SeparatePlanarBoundary.VerifySaved(original, added, requested, options.Tanto, false);
-            stage = "Проверка положения инструмента в редакторе NX";
+            SeparatePlanarBoundary.VerifySaved(original, added, requested, options.Tanto, null, report);
+            stage = "Настройка новых границ в редакторе NX";
             InspectEditor(part, operation, original.Sources, requested, options, true, oldEditorRows, report);
             stage = "Итоговая проверка геометрии операции";
             SeparatePlanarBoundary.Saved final = SeparatePlanarBoundary.Read(uf.Cambnd, operation.Tag);
             report.AppendLine("Итоговое число сохранённых границ: " + final.Boundaries.Count + " (ожидалось " + expectedCount + ").");
-            SeparatePlanarBoundary.VerifySaved(original, final, requested, options.Tanto, true);
-            InspectEditor(part, operation, original.Sources, requested, options, false, oldEditorRows, null);
+            stage = "Подтверждение сохранённых границ в повторно открытом редакторе NX";
+            Dictionary<Tag, BoundarySet.BoundaryTypes> confirmedTypes = new Dictionary<Tag, BoundarySet.BoundaryTypes>();
+            InspectEditor(part, operation, original.Sources, requested, options, false, oldEditorRows, null, confirmedTypes);
+            stage = "Сверка сохранённых границ CAM с редактором NX";
+            SeparatePlanarBoundary.VerifySaved(original, final, requested, options.Tanto, confirmedTypes, null);
             pendingUndo = false;
             success = true;
             int closed = 0;
-            foreach (bool isClosed in requested.Values) if (isClosed) closed++;
+            foreach (BoundarySet.BoundaryTypes type in confirmedTypes.Values)
+                if (type == BoundarySet.BoundaryTypes.Closed) closed++;
             headline = "Добавлено границ: " + pending.Count;
             report.AppendLine();
             report.AppendLine("Результат: успешно.");
             report.AppendLine("Добавлено отдельных границ: " + pending.Count);
-            report.AppendLine("Open: " + (pending.Count - closed) + "; Closed: " + closed + ".");
+            report.AppendLine("Подтверждено в повторно открытом редакторе NX: Open: " + (confirmedTypes.Count - closed) + "; Closed: " + closed + ".");
             report.AppendLine("Проверено в сохранённой геометрии: одна кривая в каждой новой границе, тип Open/Closed и положение " + options.ModeLabel + ".");
             if (options.Tanto && closed > 0) report.AppendLine("Замкнутых границ со стороной " + options.ClosedSideLabel + ": " + closed + ".");
             if (options.Tanto && pending.Count > closed) report.AppendLine("Открытых границ со стороной " + options.OpenSideLabel + ": " + (pending.Count - closed) + ".");
@@ -264,7 +268,8 @@ public class NXPlanarAddCurves
     }
 
     private static List<string> InspectEditor(Part part, PlanarMilling operation, HashSet<Tag> oldSources, Dictionary<Tag, bool> requested,
-        PlanarCurveOptions options, bool configure, List<string> previous, StringBuilder report)
+        PlanarCurveOptions options, bool configure, List<string> previous, StringBuilder report,
+        Dictionary<Tag, BoundarySet.BoundaryTypes> confirmedTypes = null)
     {
         PlanarMillingBuilder builder = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
         try
@@ -272,7 +277,7 @@ public class NXPlanarAddCurves
             bool changed;
             BoundarySet[] rows = builder.PartBoundary.BoundaryList.GetContents();
             if (report != null) report.AppendLine("Строк в редакторе NX " + (requested == null ? "до" : "после") + " добавления: " + rows.Length + ".");
-            List<string> originals = SeparatePlanarBoundary.CheckEditor(rows, oldSources, requested, options, configure, out changed);
+            List<string> originals = SeparatePlanarBoundary.CheckEditor(rows, oldSources, requested, options, configure, confirmedTypes, out changed);
             if (previous != null && !SeparatePlanarBoundary.SameKeys(previous, originals))
                 throw new InvalidOperationException("Состав или настройки прежних заполненных границ редактора изменились.");
             if (changed)
@@ -407,7 +412,8 @@ public static class SeparatePlanarBoundary
         if (data.has_tool_position != 0) key.Append('|').Append(data.tool_position);
     }
 
-    public static void VerifySaved(Saved original, Saved actual, Dictionary<Tag, bool> requested, bool tanto, bool checkSettings)
+    public static void VerifySaved(Saved original, Saved actual, Dictionary<Tag, bool> requested, bool tanto,
+        Dictionary<Tag, BoundarySet.BoundaryTypes> confirmedTypes, StringBuilder report)
     {
         Dictionary<string, int> old = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (Entry entry in original.Boundaries)
@@ -416,6 +422,7 @@ public static class SeparatePlanarBoundary
         }
         HashSet<Tag> found = new HashSet<Tag>();
         List<string> problems = new List<string>();
+        SortedDictionary<int, int> unknownCodes = new SortedDictionary<int, int>();
         for (int i = 0; i < actual.Boundaries.Count; i++)
         {
             Entry b = actual.Boundaries[i];
@@ -433,10 +440,22 @@ public static class SeparatePlanarBoundary
             }
             Tag tag = b.Tags[0];
             if (!found.Add(tag)) problems.Add("Кривая [" + tag + "] назначена повторно.");
-            if (b.Definition.boundary_type != (closed ? CamBoundaryType.CamBoundaryTypeClosed : CamBoundaryType.CamBoundaryTypeOpen))
-                problems.Add("Кривая [" + tag + "]: ожидалось " + (closed ? "Closed" : "Open") + ", получено " + b.Definition.boundary_type + ".");
-            if (checkSettings)
+            CamBoundaryType raw = b.Definition.boundary_type;
+            bool named = raw == CamBoundaryType.CamBoundaryTypeClosed || raw == CamBoundaryType.CamBoundaryTypeOpen;
+            if (!named && report != null)
             {
+                int count;
+                unknownCodes.TryGetValue((int)raw, out count);
+                unknownCodes[(int)raw] = count + 1;
+            }
+            if (confirmedTypes != null)
+            {
+                BoundarySet.BoundaryTypes expectedType = closed ? BoundarySet.BoundaryTypes.Closed : BoundarySet.BoundaryTypes.Open;
+                BoundarySet.BoundaryTypes editorType;
+                if (!confirmedTypes.TryGetValue(tag, out editorType) || editorType != expectedType)
+                    problems.Add("Кривая [" + tag + "]: редактор NX не подтвердил " + expectedType + ".");
+                else if (named && (raw == CamBoundaryType.CamBoundaryTypeClosed) != closed)
+                    problems.Add("Кривая [" + tag + "]: редактор NX подтвердил " + editorType + ", CAM вернул " + raw + ".");
                 UFCambnd.AppData member = b.Members[0];
                 if (member.has_tool_position != 0 && member.tool_position != (tanto ? CamToolPosition.CamToolPositionTanto : CamToolPosition.CamToolPositionOn))
                     problems.Add("Кривая [" + tag + "]: в CAM сохранено положение " + member.tool_position + ".");
@@ -444,6 +463,8 @@ public static class SeparatePlanarBoundary
                     problems.Add("Кривая [" + tag + "]: в CAM есть индивидуальный припуск или допуск.");
             }
         }
+        foreach (KeyValuePair<int, int> item in unknownCodes)
+            report.AppendLine("CAM вернул код типа " + item.Key + " для границ: " + item.Value + ". Тип Open/Closed проверяется в редакторе NX.");
         int lost = 0; foreach (int count in old.Values) lost += count;
         if (lost > 0) problems.Add("Не найдены прежние границы с исходными параметрами: " + lost + ".");
         List<Tag> missing = new List<Tag>();
@@ -459,7 +480,7 @@ public static class SeparatePlanarBoundary
     // The editor may include an empty input row. All permanent entries, even genuine empty ones,
     // are protected separately by the UF snapshot. Here match the geometry-backed rows by source tag.
     public static List<string> CheckEditor(BoundarySet[] rows, HashSet<Tag> oldSources, Dictionary<Tag, bool> requested,
-        PlanarCurveOptions options, bool configure, out bool changed)
+        PlanarCurveOptions options, bool configure, Dictionary<Tag, BoundarySet.BoundaryTypes> confirmedTypes, out bool changed)
     {
         changed = false;
         List<string> previous = new List<string>();
@@ -490,14 +511,19 @@ public static class SeparatePlanarBoundary
             BoundarySet.ToolPositionTypes position = tanto ? BoundarySet.ToolPositionTypes.Contact : BoundarySet.ToolPositionTypes.On;
             BoundarySet.ToolSideTypes side = options.UsesOutsideOrRight(closed) ? BoundarySet.ToolSideTypes.OutsideOrRight : BoundarySet.ToolSideTypes.InsideOrLeft;
             int memberPosition = tanto ? 1 : 0; // NXOpen editor values differ from CamToolPosition in UF.
-            if (set.BoundaryType == shape && set.ToolPosition == position && (!tanto || set.ToolSide == side)
-                && item.ToolPosition == memberPosition && !set.CustomStock && !set.CustomTolerance && !item.CustomStock && !item.CustomTolerance) continue;
+            BoundarySet.BoundaryTypes actualType = set.BoundaryType;
+            if (actualType == shape && set.ToolPosition == position && (!tanto || set.ToolSide == side)
+                && item.ToolPosition == memberPosition && !set.CustomStock && !set.CustomTolerance && !item.CustomStock && !item.CustomTolerance)
+            {
+                if (!configure && confirmedTypes != null) confirmedTypes.Add(selected, actualType);
+                continue;
+            }
             if (!configure)
                 throw new InvalidOperationException("Кривая [" + selected + "]: ожидались " + shape + ", " + position
-                    + (tanto ? ", " + side : "") + ", припуск и допуск из операции. В NX: " + set.BoundaryType + ", " + set.ToolPosition
+                    + (tanto ? ", " + side : "") + ", припуск и допуск из операции. В NX: " + actualType + ", " + set.ToolPosition
                     + ", " + set.ToolSide + ", положение элемента " + item.ToolPosition + ", свой припуск " + set.CustomStock + "/" + item.CustomStock
                     + ", свой допуск " + set.CustomTolerance + "/" + item.CustomTolerance + ".");
-            if (set.BoundaryType != shape) set.BoundaryType = shape;
+            if (actualType != shape) set.BoundaryType = shape;
             if (set.ToolPosition != position) set.ToolPosition = position;
             if (tanto && set.ToolSide != side) set.ToolSide = side;
             if (set.CustomStock) set.CustomStock = false;

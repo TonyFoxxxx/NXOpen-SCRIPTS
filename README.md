@@ -20,7 +20,7 @@
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Очистка служебных хвостов и нумерации в именах всех операций с сохранением Z. | [Все функции](docs/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
-| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.03 | Отдельная граница для каждой кривой в PLANAR_MILL / PLANAR_PROFILE. ON либо TANTO с отдельным выбором сторон для замкнутых и открытых кривых. | [Все функции](docs/planar-add-curves.md) |
+| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.04 | Отдельная граница для каждой кривой в PLANAR_MILL / PLANAR_PROFILE. ON либо TANTO с отдельным выбором сторон для замкнутых и открытых кривых. | [Все функции](docs/planar-add-curves.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.13 | Средние линии по граням гравировки и окружности D/2 для точек; назначение в PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
 | [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1 | Снимок параметров операции гравировки, отчёт и JSON для диагностики. | [Все функции](docs/engraving-operation-diagnostic.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Создание однолинейного текста ГОСТ А из линий и гладких сплайнов по внешнему FON. | [Все функции](docs/gost-smooth-text.md) |
@@ -39,13 +39,13 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Диагностика операции гравировки V1 · 23.11.2026
+### Последнее обновление — Кривые в PLANAR V1.04 · 23.11.2026
+
+Исправлен откат после успешного добавления кривых. Когда CAM API возвращает код типа границы `2`, скрипт повторно открывает редактор операции и сверяет Open или Closed для каждой сохранённой кривой по её тегу. [Руководство](docs/planar-add-curves.md#изменения-последней-версии).
+
+### Также опубликовано — Диагностика операции гравировки V1 · 23.11.2026
 
 Отдельный журнал собирает параметры выбранной PLANAR_MILL / PLANAR_PROFILE, наследование, группы, инструмент, геометрию и доступные свойства редактора. Кнопка «Сохранить JSON» создаёт файл в выбранной папке; «Копировать всё» копирует полный отчёт. Основной скрипт гравировки пока не создаёт операции автоматически. [Руководство](docs/engraving-operation-diagnostic.md).
-
-### Также опубликовано — Кривые в PLANAR V1.03 · 23.11.2026
-
-В режиме TANTO появились две независимые пары галочек. Для замкнутых кривых выберите Inside или Outside, для открытых — Left или Right. Любое из четырёх сочетаний применяется за один запуск. По умолчанию выбран ON. [Руководство](docs/planar-add-curves.md#изменения-последней-версии).
 
 ### Также опубликовано — Карта наладки V2.72 · 19.11.2026
 
