@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-24 — Engraving centerlines for PLANAR_MILL V1.14
+
+The journal accepts one selected PLANAR_MILL or creates an operation from `mill_planar / PLANAR_MILL` after confirmation of its four CAM parents. The reference profile uses 350 mm/min, 7000 rpm and common MCS clearance. Select Floor inside the operation. If the named tool is unavailable, choose an existing tool. Mixed selections stop before editing. A failed edit rolls back the operation, curves and boundaries together. [Guide](docs/en/planar-mill-curves.md#latest-release).
+
+V1.14 source SHA-256 is `84296d240ae6beb2fea7fc50953ebc8cf614f17d1a18f645a6ada61f86711759`.
+
 ## 2026-11-24 — Curves for PLANAR V1.07
 
 The NX selection dialogs now start with “Выберите плоскость в модели” (Select a plane in the model) and “Выберите кривые в модели” (Select curves in the model). The action stays at the front of a narrow window. [Guide](docs/en/planar-add-curves.md#latest-release).

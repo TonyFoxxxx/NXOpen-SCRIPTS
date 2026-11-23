@@ -21,7 +21,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Clean copy/instance suffixes and counters in all operation names while preserving Z. | [All features](docs/en/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
 | [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.07 | One Part Boundary per curve on a selected or automatic plane. ON or TANTO with independent sides for closed and open curves. | [All features](docs/en/planar-add-curves.md) |
-| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.13 | Centerlines from engraving faces and D/2 circles for dots, assigned to PLANAR_MILL. | [Full guide](docs/en/planar-mill-curves.md) |
+| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.14 | Engraving centerlines and D/2 dots for an existing or new PLANAR_MILL. | [Full guide](docs/en/planar-mill-curves.md) |
 | [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1.01 | Engraving-operation settings snapshot with a text report and JSON export. | [All features](docs/en/engraving-operation-diagnostic.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Create single-stroke GOST A text from lines and smooth splines using an external FON. | [All features](docs/en/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
@@ -39,9 +39,19 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Curves for PLANAR V1.07 · 2026-11-24
+### Latest update — Engraving centerlines for PLANAR_MILL V1.14 · 2026-11-24
+
+With no operation selected, choose four CAM parents to create GRAVIROVKA. A selected PLANAR_MILL keeps its settings. Select Floor in the new operation. [Guide and validation](docs/en/planar-mill-curves.md#latest-release).
+
+V1.14 source SHA-256 is `84296d240ae6beb2fea7fc50953ebc8cf614f17d1a18f645a6ada61f86711759`.
+
+### Also released — Curves for PLANAR V1.07 · 2026-11-24
 
 The NX selection dialogs now start with “Выберите плоскость в модели” (Select a plane in the model) and “Выберите кривые в модели” (Select curves in the model). The action stays at the front of a narrow window. [Guide](docs/en/planar-add-curves.md#latest-release).
+
+### Also released — Engraving operation diagnostic V1.01 · 2026-11-23
+
+Select one operation and click **Save JSON** to capture the settings. [Guide](docs/en/engraving-operation-diagnostic.md).
 
 V1.01 source SHA-256 is `27edbd5b40c68ec73b3525f443966e2afa83bfc42ef5d0331cf6c51a031f03b8`.
 
@@ -60,12 +70,6 @@ V2.72 preserves the original line endings in the markup and notes of unselected 
 V1.30.09 passed historical contexts without 821049 and rolled back. The edge was traced to Blend selection; Part Box and two historical inputs were absent from the separate map. V1.30.10 tests a smaller original-history selection in an independent editor without assignment, Validate or Commit. Primary blockers remain. [Result and limits](docs/en/mirror-project.md#map-selection-v13010).
 
 All **855 focused checks outside NX** pass, including **147 using C fixtures**. Next run: **V1.30.10** from the saved source PRT with the same plane. Return parent-path, reduced-view and rollback results; do not save the experimental copy. Complete CAM transfer remains unconfirmed.
-
-### Also released — Engraving centerlines for PLANAR_MILL V1.13 · 2026-11-14
-
-Closed chains and dot circles now use Boundary Type = Closed in Part Boundaries; open strokes and chains with junction gaps use Open. Set the type before and after appending curves, then verify the exact type after committing the operation.
-
-Update **«Оси гравировки для PLANAR_MILL»** to **V1.13** in the updater. [Workflow, limits and validation](docs/en/planar-mill-curves.md).
 
 ## Installation
 

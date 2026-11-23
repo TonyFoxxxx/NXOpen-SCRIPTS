@@ -4,20 +4,39 @@
 
 ## Latest release
 
-**V1.13 · 2026-11-14** — Closed chains and dot circles now use Boundary Type = Closed in Part Boundaries; open strokes and chains with junction gaps use Open. Set the type before and after appending curves, then verify the exact type after committing the operation.
+**V1.14 · 2026-11-24** adds engraving operation creation. A selected PLANAR_MILL keeps its cutting settings. Starting with an empty selection opens a choice of program, method, existing tool and MCS for a new `GRAVIROVKA`. Canceling either selection leaves the part untouched. A failed edit rolls back the new operation with its curves and boundaries.
+
+V1.14 source SHA-256 is `84296d240ae6beb2fea7fc50953ebc8cf614f17d1a18f645a6ada61f86711759`.
 
 Source and working filename remain [NX_PlanarMill_Select_Curves.cs](../../scripts/NX_PlanarMill_Select_Curves.cs). Existing buttons need no change. The updater entry is now **«Оси гравировки для PLANAR_MILL»**. No Windows font or original text is required.
 
 ## Workflow
 
-1. Import the SolidWorks model, for example through STEP. Letters must have selectable planar groove-bottom faces.
-2. Configure **PLANAR_MILL** with the desired tool, profile machining, orientation, cut levels and non-cutting moves. An operation without previous boundaries is convenient for the first test. Close its editing dialog.
-3. Select **one PLANAR_MILL** in Operation Navigator and run the existing `NX_PlanarMill_Select_Curves.cs`.
-4. Select the planar **bottom faces of letters and round or square dots**. Do not select the overall front face of the part, the solid islands inside letters or groove side walls. All selected faces must lie in one plane.
-5. Accept the selection. The script creates standalone curves in the work CAM part and appends local **Part Boundary** geometry to the operation.
-6. Inspect the centerlines, boundaries, depth and tool orientation. Generate and verify the toolpath with NX. **Ctrl+Z** undoes the whole run.
+1. Open the CAM work part. The engraving must have selectable planar bottom faces.
+2. To append to an existing PLANAR_MILL, close its editor and select just that operation in Operation Navigator. To create an operation, clear the selection. A single selected program, method, tool or MCS can supply that group in the creation dialog. A mixed selection, multiple nodes or an incompatible operation stops the journal.
+3. Run `NX_PlanarMill_Select_Curves.cs`. For a new operation, confirm the four parents. The journal preselects a uniquely named `BALL_D1_HVOST_D2`. If it is missing or the name is ambiguous, choose an existing tool. Cancel or Escape closes the dialog.
+4. Select the coplanar bottom faces of the letters and dots. Leave out groove walls, solid islands and the front face of the part.
+5. Confirm the faces. The journal creates curves in the work part and adds a local Part Boundary for each chain. If the operation name is in use, NX receives the next available name, such as `GRAVIROVKA_1`.
+6. Open a newly created operation and **select Floor yourself**. Check the MCS clearance, tool and cut levels, then calculate and verify the toolpath in NX when ready. Ctrl+Z undoes the complete journal edit.
 
 For assembly components, the CAM part must be both the work part and the displayed part. Component and CAM-part length units must match. Component placement is applied when reading geometry.
+
+## Settings of a new operation
+
+| Setting | Value or source |
+| --- | --- |
+| Template and cutting | `mill_planar / PLANAR_MILL`, Profile, Climb, Constant levels, Top Off Critical Depths enabled, zero additional passes. The operation description, post-toolpath exit and both start/end UDE sets are empty. |
+| Feed and speed | 350 mm/min and 7000 rpm. With the reference tool name, 0.025 mm/tooth and 21.991148575128552 m/min. A replacement tool uses NX feed/speed recalculation from the cutting feed and rpm. |
+| Tolerances and stock | Local UF Boundary Tolerances of 0.03/0.03 mm. Cut tolerances, part and floor stock, common depth and offsets from floor/top inherit their values. Each new boundary and member has zero stock. |
+| Step and clearance | 40% of tool flat, with stored distance 15 mm and scallop 0.3 mm. Holder and shank clearance 3 mm, neck clearance 0. Tool-dependent percentages are preserved in inch parts. |
+| Non-cutting moves | Common clearance from the selected MCS at operation start and end. Transfers within levels and between regions use clearance, between levels use the previous plane. Safety distances are 3 mm. Closed engage uses Plunge/Lift from the previous level, open engage follows closed, retract follows engage. Collision Check is enabled. |
+
+**Settings that need attention in the target part**
+
+- Select Floor in the operation editor. The common clearance plane and workpiece geometry come from the chosen MCS and its parents. The plane constructed through the selected engraving faces belongs to the boundaries.
+- The reference tool's UF diameter was 0, while the operation's cached last diameter was 1 mm. The journal uses the tool already in the target part, including its actual diameter, flute count, registers and tool number. Confirm the feed per tooth and surface speed after a tool substitution.
+- The diagnostic could not read the custom start and predrill point lists or the composite list for variable stepover. Variable stepover is inactive in this profile. The orientation of an inactive zig pattern and NX's internal smart points, vectors, tilt/region objects, move identifiers and generated-path state are specific to the source. Review any custom motion references needed in the target.
+- Values marked inherited follow the selected parents and site defaults. To compare the result, close the operation editor, select the new operation and save a report with **Save JSON**. [Diagnostic guide](engraving-operation-diagnostic.md).
 
 ## Geometry
 
@@ -36,7 +55,7 @@ For assembly components, the CAM part must be both the work part and the display
 
 ## Boundaries and reruns
 
-Each chain is added as a separate **NXOpen BoundarySetPlanarMill**. Closed chains and dot circles explicitly use **Boundary Type = Closed**; open chains use **Open**. Set the type before and after appending curves. **Tool Position = On**, **Stock = 0**. New boundaries and members have **Custom Tolerance** disabled and inherit the operation tolerance. The script neither reads nor writes nor compares numeric Intol / Outtol values; the V1.04 tolerance rollback check has been removed. Member settings are read back through a fresh builder after Commit. After Commit the type must exactly match the geometry: Open for an open chain, Closed for a ring or D/2 circle. Either Closed-to-Open or Open-to-Closed mismatch triggers rollback. Source curve membership and tool position are also verified; reject added closing members. Existing local boundaries are retained and their count is reported. Cutter compensation, depths, feeds, tool and other operation parameters are not reset. Use **Cut Pattern = Profile**. Operation-level path smoothing and compensation remain active and require inspection; their values are not changed by the script. Different curve and cutting-level heights can also look offset in a perspective view.
+Each chain is added as a separate **NXOpen BoundarySetPlanarMill**. Closed chains and dot circles explicitly use **Boundary Type = Closed**; open chains use **Open**. Set the type before and after appending curves. **Tool Position = On**, **Stock = 0**. New boundaries and members have **Custom Tolerance** disabled and inherit the operation tolerance. Individual members retain the operation tolerance. The boundary tolerance pair for a newly created operation is set and checked separately. Member settings are read back through a fresh builder after Commit. After Commit the type must exactly match the geometry: Open for an open chain, Closed for a ring or D/2 circle. Either Closed-to-Open or Open-to-Closed mismatch triggers rollback. Source curve membership and tool position are also verified; reject added closing members. Existing local boundaries are retained and their count is reported. For a preselected operation the journal preserves cutter compensation, depths, feeds, tool and smoothing. Use **Cut Pattern = Profile**. Different curve and cutting-level heights can also look offset in a perspective view.
 
 **When upgrading from V1.01–V1.12, recreate any retained previous axes:** undo that run or remove its curves from the operation boundaries and model. Previous results are not automatically replaced; the journal reports that they use the earlier algorithm.
 
@@ -54,7 +73,7 @@ A construction error reports the failed selected face group. Highlight its sourc
 - Under-resolved, degenerate, excessively complex or disconnected results are rejected before editing. Maximum 10000 boundary samples per region; accuracy is never silently reduced.
 - If even the minimum 0.004 mm gap cannot fit inside a stroke, consumes a genuine short branch or leaves an intersection, reject the calculation without silently skipping that branch. This is geometric clearance: it does not account for cutter diameter or guarantee continuous engraved coverage.
 - The D/2 rule is not automatically applied to elongated marks or dots of other cross sections.
-- No automatic toolpath generation, PRT save, files, logs, INI files or new operations. Creates the model curves, one shared boundary plane and the operation boundaries.
+- The journal creates model curves, one shared boundary plane and the operation boundaries. The creation workflow adds one operation. Toolpath calculation and PRT saving are separate NX commands.
 
 ## Validation
 
@@ -74,4 +93,4 @@ For V1.12, all 1104 variants of 23 faces from the previously supplied STEP model
 
 An additional local sweep of 456 outlines from four fonts produced 387 results and 69 rejections by existing terminal-setback checks. All three previous routing failures in that set were resolved with no new rejections. This does not establish universal font support. Font files and their outlines are not distributed.
 
-The source compiles against Designcenter 2606 libraries for .NET Framework and .NET 10. **Interactive V1.13 execution and the resulting NX toolpath remain untested.** Geometry and contract tests do not validate native CAM behavior. Inspect the result and the normally generated NX toolpath before machining.
+The V1.14 source compiled against NXOpen 2412 API assemblies with .NET Framework 4.8 and restricted Windows .NET 10 references. Background tests exercise selection, tool substitution, metric/inch settings, saved-value checks and rollback after partial creation. The centerline algorithm and curve stamps match V1.13. Interactive Designcenter 2606 execution and native CAM results require verification in NX.

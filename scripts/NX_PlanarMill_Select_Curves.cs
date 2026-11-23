@@ -1,16 +1,18 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.13
-// Select an existing PLANAR_MILL, run, then select the flat bottoms of the letters.
+// SCRIPT_VERSION: V1.14
+// Select an existing PLANAR_MILL or choose the parents for a new engraving operation.
 // Reconstructs straight and curved centerlines; round/compact square dots use half-width circles.
 // Free physical ends stop half the local stroke width before the terminal boundary.
 // Rechecks corner spurs after merging nodes; preserves genuine short branches and islands.
 // Restores sharp line/curve joints from the walls, preserving tangential fillets.
 // Part Boundary type follows each chain: Closed for loops, Open for separated/open strokes.
-// Does not save files, generate a toolpath, or change the tool, depths, feeds or source body.
+// Existing operations keep their cutting settings. Floor for a new operation is selected in NX.
 
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using NXOpen;
 using NXOpen.CAM;
@@ -25,7 +27,7 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.13";
+    private const string SCRIPT_VERSION = "V1.14";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
     private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "13";
@@ -74,8 +76,20 @@ public class NXPlanarMillSelectCurves
         try
         {
             if (part == null || part.CAMSetup == null) throw new InvalidOperationException("Откройте CAM-проект в Manufacturing.");
-            PlanarMilling operation = SelectedOperation(uf, part); EnsureNoInheritedBoundaries(uf, operation);
-            HashSet<Tag> assigned = AssignedCurves(uf, operation);
+            NCGroup selectedGroup;
+            PlanarMilling operation = SelectedOperation(uf, part, out selectedGroup);
+            EngravingParents parents = null;
+            HashSet<Tag> assigned = new HashSet<Tag>();
+            if (operation == null)
+            {
+                parents = EngravingParents.Choose(uf, part, selectedGroup, Title);
+                if (parents == null) return;
+            }
+            else
+            {
+                EnsureNoInheritedBoundaries(uf, operation);
+                assigned = AssignedCurves(uf, operation);
+            }
             Face[] faces = SelectFaces(); if (faces == null) return;
             double unit = part.PartUnits == BasePart.Units.Inches ? 1 / 25.4 : 1;
             double tolerance = 0.002 * unit, joinTolerance = 0.000001 * unit;
@@ -84,78 +98,13 @@ public class NXPlanarMillSelectCurves
             if (groups.Count == 0) { Show(NXMessageBox.DialogType.Information, "Средние линии выбранных граней уже назначены этой операции."); return; }
             if (session.Parts.Work == null || session.Parts.Work.Tag != part.Tag)
                 throw new InvalidOperationException("Рабочая деталь изменилась. Запустите скрипт заново.");
-            EnsureNoInheritedBoundaries(uf, operation);
-            if (!assigned.SetEquals(AssignedCurves(uf, operation))) throw new InvalidOperationException("Границы операции изменились во время выбора. Повторите запуск.");
-            IntPtr[] oldBoundaries = Boundaries(uf, operation.Tag);
-            List<Tag[]> oldMembers = new List<Tag[]>();
-            foreach (IntPtr boundary in oldBoundaries) oldMembers.Add(MemberTags(uf, boundary));
-            mark = session.SetUndoMark(Session.MarkVisibility.Visible, "Оси гравировки: " + operation.Name); hasMark = true;
-            List<CurveInfo> curves = new List<CurveInfo>(); List<PlanarCurveChains.Chain> chains = new List<PlanarCurveChains.Chain>(); int dots = 0, junctions = 0;
-            double minimumGap = double.MaxValue, maximumGap = 0;
-            foreach (FaceGroup group in groups)
-            {
-                int expected = 0;
-                foreach (EngravingCenterlines.Result result in group.Results)
-                { expected += result.Circles.Count; foreach (List<EngravingCenterlines.Bezier> stroke in result.Curves) expected += stroke.Count; }
-                foreach (EngravingCenterlines.Result result in group.Results)
-                {
-                    junctions += result.SeparatedJunctions;
-                    if (result.SeparatedJunctions > 0) { minimumGap = Math.Min(minimumGap, result.JunctionGap / unit); maximumGap = Math.Max(maximumGap, result.JunctionGap / unit); }
-                    for (int j = 0; j < result.Curves.Count; j++)
-                    {
-                        PlanarCurveChains.Chain chain = new PlanarCurveChains.Chain { Closed = result.Strokes[j].Closed };
-                        foreach (EngravingCenterlines.Bezier data in result.Curves[j])
-                        {
-                            Curve curve = CreateCurve(uf, part, frame, data); Stamp(curve, group, expected);
-                            AddCurve(uf, curve, curves, chain, joinTolerance);
-                        }
-                        CheckChain(curves, chain, joinTolerance); chains.Add(chain);
-                    }
-                    foreach (EngravingCenterlines.Circle circle in result.Circles)
-                    {
-                        Arc arc = part.Curves.CreateArc(World(frame, circle.Center),
-                            new Vector3d(frame.X.X, frame.X.Y, frame.X.Z), new Vector3d(frame.Y.X, frame.Y.Y, frame.Y.Z), circle.Radius, 0, 2 * Math.PI);
-                        Stamp(arc, group, expected);
-                        PlanarCurveChains.Chain chain = new PlanarCurveChains.Chain { Closed = true };
-                        AddCurve(uf, arc, curves, chain, joinTolerance); CheckChain(curves, chain, joinTolerance); chains.Add(chain); dots++;
-                    }
-                }
-            }
-            Plane boundaryPlane = part.Planes.CreatePlane(new Point3d(frame.Origin.X, frame.Origin.Y, frame.Origin.Z),
-                new Vector3d(frame.Z.X, frame.Z.Y, frame.Z.Z), SmartObject.UpdateOption.WithinModeling);
-            Matrix3x3 matrix = new Matrix3x3 { Xx = frame.X.X, Xy = frame.X.Y, Xz = frame.X.Z,
-                Yx = frame.Y.X, Yy = frame.Y.Y, Yz = frame.Y.Z, Zx = frame.Z.X, Zy = frame.Z.Y, Zz = frame.Z.Z };
-            PlanarMillingBuilder builder = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
-            try
-            {
-                foreach (PlanarCurveChains.Chain chain in chains)
-                {
-                    NXObject[] objects = new NXObject[chain.Items.Count];
-                    for (int i = 0; i < objects.Length; i++) objects[i] = curves[chain.Items[i]].Curve;
-                    V startPoint = curves[chain.Items[0]].Start;
-                    BoundarySetPlanarMill set = EngravingCamBoundary.Append(builder.PartBoundary, objects,
-                        new Point3d(startPoint.X, startPoint.Y, startPoint.Z), matrix, boundaryPlane, chain.Closed);
-                    EngravingCamBoundary.Verify(set, chain.Closed);
-                }
-                builder.Commit();
-            }
-            finally { builder.Destroy(); }
-            // Read saved boundary sets through the same NXOpen API used to create them.
-            VerifyNewBoundaries(part, operation, oldMembers, curves, chains);
-            HashSet<Tag> expectedTags = new HashSet<Tag>(assigned); foreach (CurveInfo curve in curves) expectedTags.Add(curve.Curve.Tag);
-            if (!AssignedCurves(uf, operation).SetEquals(expectedTags) || Boundaries(uf, operation.Tag).Length != oldBoundaries.Length + chains.Count)
-                throw new InvalidOperationException("NX сохранил другой состав границ. Изменение отменяется.");
+            mark = session.SetUndoMark(Session.MarkVisibility.Visible, "Оси гравировки: " + (operation == null ? "GRAVIROVKA" : operation.Name));
+            hasMark = true;
+            if (parents != null) operation = parents.Create(part);
+            string report = AssignAxes(uf, part, operation, parents, groups, frame, assigned, skipped, unit, joinTolerance);
             committed = true; hasMark = false;
             try { uf.UiOnt.Refresh(); } catch { }
-            int closed = chains.FindAll(delegate(PlanarCurveChains.Chain c) { return c.Closed; }).Count;
-            Show(NXMessageBox.DialogType.Information, "Операция: " + operation.Name + "\nСоздано кривых: " + curves.Count
-                + "\nЦепочек кривых: " + chains.Count + " (разомкнутых: " + (chains.Count - closed) + ", замкнутых: " + closed + ")"
-                + "\nТочек (окружностей D/2): " + dots + (skipped > 0 ? "\nРанее обработанных граней пропущено: " + skipped : "")
-                + "\nСуществующих границ сохранено: " + oldBoundaries.Length
-                + "\nРазделено узлов: " + junctions + (junctions > 0 ? "; зазор: " + minimumGap.ToString("0.###")
-                    + (maximumGap > minimumGap * 1.001 ? "–" + maximumGap.ToString("0.###") : "") + " мм." : "")
-                + "\n\nНовые кривые созданы в плоскости выбранных граней. Tool Position: ON; Stock: 0. Допуск задаётся в операции."
-                + "\nПроверьте средние линии, уровни резания и рассчитайте траекторию штатной командой NX.\nОтмена: Ctrl+Z.");
+            Show(NXMessageBox.DialogType.Information, report);
         }
         catch (Exception ex)
         {
@@ -173,6 +122,101 @@ public class NXPlanarMillSelectCurves
         }
         finally { try { uf.Ui.SetStatus(""); } catch { } }
     }
+    private static string AssignAxes(UFSession uf, Part part, PlanarMilling operation, EngravingParents parents,
+        List<FaceGroup> groups, PlanarCurveChains.Frame frame, HashSet<Tag> assigned, int skipped, double unit, double joinTolerance)
+    {
+        EnsureNoInheritedBoundaries(uf, operation);
+        if (!assigned.SetEquals(AssignedCurves(uf, operation))) throw new InvalidOperationException("Границы операции изменились во время выбора. Повторите запуск.");
+        IntPtr[] oldBoundaries = Boundaries(uf, operation.Tag);
+        if (parents != null && oldBoundaries.Length != 0)
+            throw new InvalidOperationException("Шаблон уже содержит границы детали. Проверьте родительскую геометрию.");
+        List<Tag[]> oldMembers = new List<Tag[]>();
+        foreach (IntPtr boundary in oldBoundaries) oldMembers.Add(MemberTags(uf, boundary));
+        List<CurveInfo> curves = new List<CurveInfo>(); List<PlanarCurveChains.Chain> chains = new List<PlanarCurveChains.Chain>(); int dots = 0, junctions = 0;
+        double minimumGap = double.MaxValue, maximumGap = 0;
+        foreach (FaceGroup group in groups)
+        {
+            int expected = 0;
+            foreach (EngravingCenterlines.Result result in group.Results)
+            { expected += result.Circles.Count; foreach (List<EngravingCenterlines.Bezier> stroke in result.Curves) expected += stroke.Count; }
+            foreach (EngravingCenterlines.Result result in group.Results)
+            {
+                junctions += result.SeparatedJunctions;
+                if (result.SeparatedJunctions > 0) { minimumGap = Math.Min(minimumGap, result.JunctionGap / unit); maximumGap = Math.Max(maximumGap, result.JunctionGap / unit); }
+                for (int j = 0; j < result.Curves.Count; j++)
+                {
+                    PlanarCurveChains.Chain chain = new PlanarCurveChains.Chain { Closed = result.Strokes[j].Closed };
+                    foreach (EngravingCenterlines.Bezier data in result.Curves[j])
+                    {
+                        Curve curve = CreateCurve(uf, part, frame, data); Stamp(curve, group, expected);
+                        AddCurve(uf, curve, curves, chain, joinTolerance);
+                    }
+                    CheckChain(curves, chain, joinTolerance); chains.Add(chain);
+                }
+                foreach (EngravingCenterlines.Circle circle in result.Circles)
+                {
+                    Arc arc = part.Curves.CreateArc(World(frame, circle.Center),
+                        new Vector3d(frame.X.X, frame.X.Y, frame.X.Z), new Vector3d(frame.Y.X, frame.Y.Y, frame.Y.Z), circle.Radius, 0, 2 * Math.PI);
+                    Stamp(arc, group, expected);
+                    PlanarCurveChains.Chain chain = new PlanarCurveChains.Chain { Closed = true };
+                    AddCurve(uf, arc, curves, chain, joinTolerance); CheckChain(curves, chain, joinTolerance); chains.Add(chain); dots++;
+                }
+            }
+        }
+        if (chains.Count == 0) throw new InvalidOperationException("По выбранным граням не построено ни одной цепочки.");
+        if (parents != null) EngravingPreset.SetUfParameters(uf, operation, unit, false);
+        Plane boundaryPlane = part.Planes.CreatePlane(new Point3d(frame.Origin.X, frame.Origin.Y, frame.Origin.Z),
+            new Vector3d(frame.Z.X, frame.Z.Y, frame.Z.Z), SmartObject.UpdateOption.WithinModeling);
+        Matrix3x3 matrix = new Matrix3x3 { Xx = frame.X.X, Xy = frame.X.Y, Xz = frame.X.Z,
+            Yx = frame.Y.X, Yy = frame.Y.Y, Yz = frame.Y.Z, Zx = frame.Z.X, Zy = frame.Z.Y, Zz = frame.Z.Z };
+        PlanarMillingBuilder builder = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
+        try
+        {
+            if (parents != null)
+            {
+                EngravingPreset.Apply(builder, unit, parents.ReferenceTool, false);
+                foreach (BoundarySet item in builder.PartBoundary.BoundaryList.GetContents())
+                {
+                    BoundarySetPlanarMill placeholder = item as BoundarySetPlanarMill;
+                    if (placeholder == null || placeholder.BoundaryMemberList.GetContents().Length != 0)
+                        throw new InvalidOperationException("У новой операции уже есть непустая граница детали.");
+                    builder.PartBoundary.BoundaryList.Erase(item);
+                }
+            }
+            foreach (PlanarCurveChains.Chain chain in chains)
+            {
+                NXObject[] objects = new NXObject[chain.Items.Count];
+                for (int i = 0; i < objects.Length; i++) objects[i] = curves[chain.Items[i]].Curve;
+                V startPoint = curves[chain.Items[0]].Start;
+                BoundarySetPlanarMill set = EngravingCamBoundary.Append(builder.PartBoundary, objects,
+                    new Point3d(startPoint.X, startPoint.Y, startPoint.Z), matrix, boundaryPlane, chain.Closed);
+                EngravingCamBoundary.Verify(set, chain.Closed);
+            }
+            builder.Commit();
+        }
+        finally { builder.Destroy(); }
+        // Read saved boundary sets through the same NXOpen API used to create them.
+        VerifyNewBoundaries(part, operation, oldMembers, curves, chains, parents, unit);
+        if (parents != null)
+        {
+            parents.Verify(operation);
+            EngravingPreset.SetUfParameters(uf, operation, unit, true);
+        }
+        HashSet<Tag> expectedTags = new HashSet<Tag>(assigned); foreach (CurveInfo curve in curves) expectedTags.Add(curve.Curve.Tag);
+        if (!AssignedCurves(uf, operation).SetEquals(expectedTags) || Boundaries(uf, operation.Tag).Length != oldBoundaries.Length + chains.Count)
+            throw new InvalidOperationException("NX сохранил другой состав границ. Изменение отменяется.");
+        int closed = chains.FindAll(delegate(PlanarCurveChains.Chain c) { return c.Closed; }).Count;
+        return (parents == null ? "Операция: " : "Создана операция: ") + operation.Name
+            + (parents == null ? "" : parents.Report()) + "\nСоздано кривых: " + curves.Count
+            + "\nЦепочек кривых: " + chains.Count + " (разомкнутых: " + (chains.Count - closed) + ", замкнутых: " + closed + ")"
+            + "\nТочек (окружностей D/2): " + dots + (skipped > 0 ? "\nРанее обработанных граней пропущено: " + skipped : "")
+            + "\nСуществующих границ сохранено: " + oldBoundaries.Length
+            + "\nРазделено узлов: " + junctions + (junctions > 0 ? "; зазор: " + minimumGap.ToString("0.###")
+                + (maximumGap > minimumGap * 1.001 ? "–" + maximumGap.ToString("0.###") : "") + " мм." : "")
+            + "\n\nНовые кривые созданы в плоскости выбранных граней. Tool Position: ON; Stock: 0. Допуск задаётся в операции."
+            + "\nПроверьте средние линии, уровни резания и рассчитайте траекторию штатной командой NX.\nОтмена: Ctrl+Z.";
+    }
+
     private static Face[] SelectFaces()
     {
         TaggedObject[] objects;
@@ -415,25 +459,22 @@ public class NXPlanarMillSelectCurves
         if (chain.Closed && (curves[chain.Items[0]].Start - curves[chain.Items[chain.Items.Count - 1]].End).Length > tolerance)
             throw new InvalidOperationException("NX не замкнул среднюю линию.");
     }
-    // Existing operation selection, boundary validation and curve-inspection methods follow.
-
-    private static PlanarMilling SelectedOperation(UFSession uf, Part part)
+    private static PlanarMilling SelectedOperation(UFSession uf, Part part, out NCGroup group)
     {
+        group = null;
         int count; Tag[] tags;
         uf.UiOnt.AskSelectedNodes(out count, out tags);
-        HashSet<Tag> seen = new HashSet<Tag>();
-        List<CamOperation> operations = new List<CamOperation>();
-        if (tags != null) foreach (Tag tag in tags)
-        {
-            TaggedObject item = NXObjectManager.Get(tag);
-            CamOperation operation = item as CamOperation;
-            if (operation != null && seen.Add(operation.Tag)) operations.Add(operation);
-        }
-        if (operations.Count != 1 || !(operations[0] is PlanarMilling))
-            throw new InvalidOperationException("Закройте окно редактирования операции.\nВыделите одну существующую PLANAR_MILL в навигаторе операций и запустите скрипт.");
-        if (operations[0].OwningPart == null || operations[0].OwningPart.Tag != part.Tag)
-            throw new InvalidOperationException("Операция должна находиться в рабочей детали.");
-        return (PlanarMilling)operations[0];
+        if (count == 0 && (tags == null || tags.Length == 0)) return null;
+        if (count != 1 || tags == null || tags.Length != 1 || tags[0] == Tag.Null)
+            throw new InvalidOperationException("Неоднозначное выделение. Выделите одну PLANAR_MILL или снимите выделение для создания операции.");
+        NXObject item = NXObjectManager.Get(tags[0]) as NXObject;
+        if (item == null || item.IsOccurrence || item.OwningPart == null || item.OwningPart.Tag != part.Tag)
+            throw new InvalidOperationException("Выберите объект навигатора из рабочей CAM-детали.");
+        PlanarMilling operation = item as PlanarMilling;
+        if (operation != null) return operation;
+        group = item as NCGroup;
+        if (group == null) throw new InvalidOperationException("Выбранный объект не подходит. Выделите одну PLANAR_MILL или снимите выделение.");
+        return null;
     }
 
     private static CurveInfo InspectCurve(UFSession uf, Curve curve, double tolerance)
@@ -484,10 +525,13 @@ public class NXPlanarMillSelectCurves
             throw new InvalidOperationException("Операция наследует границы детали. Сначала задайте для неё локальные границы в окне PLANAR_MILL.");
         NCGroup parent = operation.GetParent(CAMSetup.View.Geometry);
         HashSet<Tag> seen = new HashSet<Tag>();
-        while (parent != null && seen.Add(parent.Tag))
+        Tag root = ((Part)operation.OwningPart).CAMSetup.GetRoot(CAMSetup.View.Geometry).Tag;
+        while (parent != null)
         {
+            if (!seen.Add(parent.Tag)) throw new InvalidOperationException("Цикл в дереве родительской геометрии.");
             if (Boundaries(uf, parent.Tag).Length > 0)
                 throw new InvalidOperationException("У родительской геометрии есть наследуемые границы. Сначала задайте для этой операции локальные границы.");
+            if (parent.Tag == root) break;
             parent = parent.GetParent();
         }
     }
@@ -512,13 +556,14 @@ public class NXPlanarMillSelectCurves
     }
 
     private static void VerifyNewBoundaries(Part part, PlanarMilling operation, List<Tag[]> old,
-        List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains)
+        List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains, EngravingParents parents, double unit)
     {
         PlanarMillingBuilder reader = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
         try
         {
             BoundarySet[] sets = reader.PartBoundary.BoundaryList.GetContents();
-            if (sets.Length != old.Count + chains.Count) throw new InvalidOperationException("NX изменил количество границ операции.");
+            if (parents != null) EngravingPreset.Apply(reader, unit, parents.ReferenceTool, true);
+            if (parents == null && sets.Length != old.Count + chains.Count) throw new InvalidOperationException("NX изменил количество границ операции.");
             Dictionary<Tag, int> chainByTag = new Dictionary<Tag, int>();
             for (int i = 0; i < chains.Count; i++) foreach (int index in chains[i].Items) chainByTag.Add(curves[index].Curve.Tag, i);
             HashSet<int> verifiedChains = new HashSet<int>(), verifiedOld = new HashSet<int>();
@@ -526,7 +571,9 @@ public class NXPlanarMillSelectCurves
             {
                 BoundarySetPlanarMill set = item as BoundarySetPlanarMill;
                 if (set == null) throw new InvalidOperationException("NX вернул неподдерживаемый набор границ.");
-                Tag[] tags = EngravingCamBoundary.Tags(set, true); bool previous = false;
+                Tag[] tags = EngravingCamBoundary.Tags(set, true);
+                if (parents != null && tags.Length == 0) continue; // NX may expose an empty editor row.
+                bool previous = false;
                 for (int i = 0; i < old.Count; i++) if (!verifiedOld.Contains(i) && SameMembers(tags, old[i]))
                 { verifiedOld.Add(i); previous = true; break; }
                 if (previous) continue;
@@ -556,6 +603,565 @@ public class NXPlanarMillSelectCurves
 
     private static void Show(NXMessageBox.DialogType type, string message) { UI.GetUI().NXMessageBox.Show(Title, type, message); }
     public static int GetUnloadOption(string unused) { return (int)Session.LibraryUnloadOption.Immediately; }
+}
+
+// CAM parents belong to the target setup. A tag never leaves the current NX session.
+internal sealed class EngravingParents
+{
+    internal const string ToolName = "BALL_D1_HVOST_D2";
+    private static readonly CAMSetup.View[] Views = { CAMSetup.View.ProgramOrder, CAMSetup.View.MachineMethod,
+        CAMSetup.View.MachineTool, CAMSetup.View.Geometry };
+    private static readonly string[] Labels = { "Программа", "Метод", "Инструмент", "Геометрия (MCS)" };
+    private sealed class Choice { internal NCGroup Group; internal string Path; }
+    private readonly NCGroup[] groups = new NCGroup[4];
+    internal bool ReferenceTool { get { return string.Equals(groups[2].Name, ToolName, StringComparison.OrdinalIgnoreCase); } }
+
+    internal static EngravingParents Choose(UFSession uf, Part part, NCGroup hint, string title)
+    {
+        List<Choice>[] lists = new List<Choice>[Views.Length];
+        string[][] names = new string[Views.Length][];
+        int[] selected = new int[Views.Length];
+        bool usedHint = false;
+        for (int i = 0; i < Views.Length; i++)
+        {
+            NCGroup root = part.CAMSetup.GetRoot(Views[i]);
+            lists[i] = new List<Choice>();
+            Collect(root, "", Views[i], new HashSet<Tag>(), lists[i]);
+            if (lists[i].Count == 0) throw new InvalidOperationException("В рабочей детали нет доступной группы: " + Labels[i] + ".");
+            List<string> captions = new List<string>();
+            List<string> shortNames = new List<string>();
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var repeated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Choice entry in lists[i])
+            {
+                captions.Add(entry.Path);
+                shortNames.Add(entry.Group.Name);
+                if (!paths.Add(entry.Path)) repeated.Add(entry.Path);
+            }
+            for (int j = 0; j < captions.Count; j++) if (repeated.Contains(captions[j]))
+                captions[j] += " [Tag " + ((uint)lists[i][j].Group.Tag).ToString(CultureInfo.InvariantCulture) + "]";
+            names[i] = captions.ToArray();
+            selected[i] = i == 2 ? UniqueTool(shortNames) : lists[i].Count == 1 ? 0 : -1;
+            if (i == 1 && root is Method) selected[i] = lists[i].FindIndex(delegate(Choice c) { return c.Group.Tag == root.Tag; });
+            if (hint != null)
+            {
+                int match = lists[i].FindIndex(delegate(Choice c) { return c.Group.Tag == hint.Tag; });
+                if (match >= 0) { selected[i] = match; usedHint = true; }
+            }
+        }
+        if (hint != null && !usedHint)
+            throw new InvalidOperationException("Для новой операции выделите программу, метод, инструмент или MCS либо снимите выделение.");
+        if (!EngravingParentDialog.Choose(uf.Ui.GetDefaultParent(), title, Labels, names, selected)) return null;
+        EngravingParents result = new EngravingParents();
+        for (int i = 0; i < lists.Length; i++) result.groups[i] = lists[i][selected[i]].Group;
+        return result;
+    }
+
+    private static void Collect(NCGroup group, string parent, CAMSetup.View view, HashSet<Tag> visited, List<Choice> choices)
+    {
+        if (group == null || !visited.Add(group.Tag)) return;
+        string path = parent.Length == 0 ? group.Name : parent + " / " + group.Name;
+        if (view == CAMSetup.View.ProgramOrder || view == CAMSetup.View.MachineMethod ||
+            (view == CAMSetup.View.MachineTool && group is Tool) || (view == CAMSetup.View.Geometry && group is OrientGeometry))
+            choices.Add(new Choice { Group = group, Path = path });
+        foreach (CAMObject item in group.GetMembers())
+        {
+            NCGroup child = item as NCGroup;
+            if (child != null) Collect(child, path, view, visited, choices);
+        }
+    }
+
+    internal static int UniqueTool(List<string> names)
+    {
+        int match = -1;
+        for (int i = 0; i < names.Count; i++) if (string.Equals(names[i], ToolName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (match >= 0) return -1;
+            match = i;
+        }
+        return match;
+    }
+
+    internal static string FreeName(HashSet<string> used)
+    {
+        string name = "GRAVIROVKA";
+        for (int i = 1; used.Contains(name); i++) name = "GRAVIROVKA_" + i.ToString(CultureInfo.InvariantCulture);
+        return name;
+    }
+
+    internal PlanarMilling Create(Part part)
+    {
+        OperationCollection operations = part.CAMSetup.CAMOperationCollection;
+        HashSet<string> used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (CamOperation op in operations.ToArray()) used.Add(op.Name);
+        foreach (NCGroup group in part.CAMSetup.CAMGroupCollection.ToArray()) used.Add(group.Name);
+        PlanarMilling operation = operations.Create(groups[0], groups[1], groups[2], groups[3],
+            "mill_planar", "PLANAR_MILL", OperationCollection.UseDefaultName.False, FreeName(used)) as PlanarMilling;
+        if (operation == null) throw new InvalidOperationException("NX не создал PLANAR_MILL из шаблона mill_planar.");
+        Verify(operation);
+        return operation;
+    }
+
+    internal void Verify(PlanarMilling operation)
+    {
+        for (int i = 0; i < Views.Length; i++)
+        {
+            NCGroup actual = operation.GetParent(Views[i]);
+            if (actual == null || actual.Tag != groups[i].Tag)
+                throw new InvalidOperationException("NX назначил другую родительскую группу: " + Labels[i] + ".");
+        }
+    }
+
+    internal string Report()
+    {
+        return "\nПрограмма: " + groups[0].Name + " · Метод: " + groups[1].Name
+            + "\nИнструмент: " + groups[2].Name + " · MCS: " + groups[3].Name
+            + "\nРезание: 350 мм/мин, 7000 об/мин."
+            + (ReferenceTool ? "" : " Для выбранного инструмента проверьте подачу на зуб и скорость резания.")
+            + "\nОткройте операцию и задайте Floor. Проверьте плоскость безопасности выбранной MCS.";
+    }
+}
+
+// A standard modal Win32 dialog uses the NX owner and the journal compiler's default references.
+internal static class EngravingParentDialog
+{
+    private delegate IntPtr DialogProc(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", ExactSpelling = true, SetLastError = true)]
+    private static extern IntPtr DialogBoxIndirectParamW(IntPtr instance, IntPtr template, IntPtr owner, DialogProc proc, IntPtr param);
+    [DllImport("user32.dll")] private static extern bool EndDialog(IntPtr window, IntPtr result);
+    [DllImport("user32.dll")] private static extern IntPtr GetDlgItem(IntPtr window, int id);
+    [DllImport("user32.dll")] private static extern bool EnableWindow(IntPtr window, bool enable);
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern IntPtr SendMessageW(IntPtr window, uint message, IntPtr param, IntPtr data);
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern IntPtr SendText(IntPtr window, uint message, IntPtr param, string data);
+
+    internal static bool Choose(IntPtr owner, string title, string[] labels, string[][] names, int[] selected)
+    {
+        if (owner == IntPtr.Zero) throw new InvalidOperationException("Не найдено главное окно NX.");
+        Exception error = null;
+        DialogProc callback = delegate(IntPtr window, uint message, IntPtr wp, IntPtr lp)
+        {
+            try
+            {
+                int id = (int)(wp.ToInt64() & 0xffff);
+                if (message == 0x0010 || (message == 0x0111 && id == 2))
+                { EndDialog(window, new IntPtr(2)); return new IntPtr(1); }
+                bool initialize = message == 0x0110;
+                if (initialize || (message == 0x0111 && (id == 1 || ((wp.ToInt64() >> 16) & 0xffff) == 1)))
+                {
+                    bool complete = true;
+                    for (int i = 0; i < names.Length; i++)
+                    {
+                        IntPtr combo = GetDlgItem(window, 100 + i);
+                        if (combo == IntPtr.Zero) throw new InvalidOperationException("Недоступен список: " + labels[i]);
+                        if (initialize)
+                        {
+                            for (int j = 0; j < names[i].Length; j++)
+                                if (SendText(combo, 0x0143, IntPtr.Zero, names[i][j]).ToInt64() != j)
+                                    throw new InvalidOperationException("Не удалось заполнить список: " + labels[i]);
+                            if (selected[i] >= 0) SendMessageW(combo, 0x014e, new IntPtr(selected[i]), IntPtr.Zero);
+                        }
+                        selected[i] = (int)SendMessageW(combo, 0x0147, IntPtr.Zero, IntPtr.Zero).ToInt64();
+                        if (selected[i] < 0 || selected[i] >= names[i].Length) complete = false;
+                    }
+                    EnableWindow(GetDlgItem(window, 1), complete);
+                    if (!initialize && id == 1 && complete) EndDialog(window, new IntPtr(1));
+                    return new IntPtr(1);
+                }
+            }
+            catch (Exception ex) { error = ex; EndDialog(window, new IntPtr(2)); return new IntPtr(1); }
+            return IntPtr.Zero;
+        };
+        byte[] template = Template(title, labels, selected[2] < 0);
+        IntPtr memory = Marshal.AllocHGlobal(template.Length);
+        try
+        {
+            Marshal.Copy(template, 0, memory, template.Length);
+            long result = DialogBoxIndirectParamW(IntPtr.Zero, memory, owner, callback, IntPtr.Zero).ToInt64();
+            int nativeError = Marshal.GetLastWin32Error();
+            if (error != null) throw new InvalidOperationException("Ошибка выбора групп: " + error.Message, error);
+            if (result != 1 && result != 2) throw new InvalidOperationException("Не удалось открыть выбор групп. Код Windows: " + nativeError);
+            return result == 1;
+        }
+        finally { GC.KeepAlive(callback); Marshal.FreeHGlobal(memory); }
+    }
+
+    private static byte[] Template(string title, string[] labels, bool chooseTool)
+    {
+        using (MemoryStream stream = new MemoryStream())
+        using (BinaryWriter writer = new BinaryWriter(stream, Encoding.Unicode))
+        {
+            writer.Write(0x80c808c0u); writer.Write(0u); writer.Write((ushort)(2 * labels.Length + 3));
+            writer.Write((short)0); writer.Write((short)0); writer.Write((short)380); writer.Write((short)139);
+            writer.Write((ushort)0); writer.Write((ushort)0); Text(writer, title);
+            writer.Write((ushort)9); Text(writer, "Segoe UI");
+            Control(writer, 0x50000000u, 8, 6, 364, 21, 10, 0x82, chooseTool
+                ? "Выберите существующий инструмент и родительские группы новой PLANAR_MILL."
+                : "Подтвердите родительские группы новой PLANAR_MILL.");
+            for (int i = 0; i < labels.Length; i++)
+            {
+                short y = (short)(29 + i * 20);
+                Control(writer, 0x50000000u, 8, (short)(y + 2), 75, 12, (ushort)(20 + i), 0x82, labels[i]);
+                Control(writer, 0x50210003u, 87, y, 285, 114, (ushort)(100 + i), 0x85, "");
+            }
+            Control(writer, 0x50010001u, 211, 115, 78, 16, 1, 0x80, "Далее");
+            Control(writer, 0x50010000u, 294, 115, 78, 16, 2, 0x80, "Отмена");
+            return stream.ToArray();
+        }
+    }
+
+    private static void Control(BinaryWriter writer, uint style, short x, short y, short width, short height,
+        ushort id, ushort classId, string text)
+    {
+        while ((writer.BaseStream.Position & 3) != 0) writer.Write((byte)0);
+        writer.Write(style); writer.Write(0u); writer.Write(x); writer.Write(y); writer.Write(width); writer.Write(height);
+        writer.Write(id); writer.Write((ushort)0xffff); writer.Write(classId); Text(writer, text); writer.Write((ushort)0);
+    }
+
+    private static void Text(BinaryWriter writer, string value)
+    { writer.Write(Encoding.Unicode.GetBytes(value)); writer.Write((ushort)0); }
+}
+
+// Values are operation settings in the reference part's metric units. No model tags or planes.
+internal sealed class EngravingPreset
+{
+    private readonly bool checking;
+    private readonly double unit;
+    private EngravingPreset(double lengthUnit, bool verify) { unit = lengthUnit; checking = verify; }
+
+    private static bool Close(double a, double b)
+    { return !double.IsNaN(a) && !double.IsInfinity(a) && Math.Abs(a - b) <= 1e-8 * Math.Max(1, Math.Abs(b)); }
+
+    private static InvalidOperationException Difference(string name, object actual, object expected)
+    { return new InvalidOperationException("NX вернул другое значение " + name + ": " + actual + " (ожидалось " + expected + ")."); }
+
+    private void Setting<T>(string name, T actual, T expected, Action<T> write)
+    {
+        if (EqualityComparer<T>.Default.Equals(actual, expected)) return;
+        if (checking) throw Difference(name, actual, expected);
+        try { write(expected); }
+        catch (Exception ex) { throw new InvalidOperationException("Не удалось задать " + name + ": " + ex.Message, ex); }
+    }
+
+    private void Number(string name, double actual, double expected, Action<double> write)
+    { if (!Close(actual, expected)) Setting(name, actual, expected, write); }
+
+    private void Inherit(string name, InheritableBuilder field, bool inherit)
+    {
+        Setting(name + ".InheritanceStatus", field.InheritanceStatus, inherit, v => field.InheritanceStatus = v);
+    }
+
+    private void Local(string name, InheritableDoubleBuilder field, double value)
+    {
+        Inherit(name, field, false);
+        Setting(name + ".ValueIntent", field.ValueIntent, ValueIntent.PartUnits, v => field.ValueIntent = v);
+        Number(name, field.Value, value, v => field.Value = v);
+    }
+
+    private void Distance(string name, InheritableToolDepBuilder field, double value, bool toolDependent)
+    {
+        Inherit(name, field, false);
+        Setting(name + ".Intent", field.Intent, toolDependent ? ParamValueIntent.ToolDep : ParamValueIntent.PartUnits, v => field.Intent = v);
+        Setting(name + ".ValueIntent", field.ValueIntent, toolDependent ? ValueIntent.Function : ValueIntent.PartUnits, v => field.ValueIntent = v);
+        Number(name, field.Value, toolDependent ? value : unit * value, v => field.Value = v);
+    }
+
+    internal static void Apply(PlanarMillingBuilder builder, double unit, bool referenceTool, bool verify)
+    {
+        EngravingPreset preset = new EngravingPreset(unit, verify);
+        preset.Cut(builder);
+        preset.Moves(builder.NonCuttingBuilder);
+        preset.Feeds(builder.FeedsBuilder, referenceTool);
+    }
+
+    private void Cut(PlanarMillingBuilder builder)
+    {
+        var cut = builder.CutParameters;
+        var levels = builder.CutLevel;
+        Setting("Cut Pattern", builder.CutPattern.CutPattern, CutPatternBuilder.Types.Profile, v => builder.CutPattern.CutPattern = v);
+        Setting("Cut Direction", cut.CutDirection.Type, CutDirection.Types.Climb, v => cut.CutDirection.Type = v);
+        Setting("Cut Levels", levels.CutLevelType, CutLevelPlanar.Types.Constant, v => levels.CutLevelType = v);
+        Setting("Top Off Critical Depths", levels.TopOffCriticalDepths, true, v => levels.TopOffCriticalDepths = v);
+        Setting("Description", builder.Description, "", v => builder.Description = v);
+        Setting("Post Tool Path Exit", builder.PostToolPathExit, "", v => builder.PostToolPathExit = v);
+        Setting("Defer Cutting", builder.DeferCuttingStatus, false, v => builder.DeferCuttingStatus = v);
+        Setting("Save 2D IPW", builder.Save2dIpw, false, v => builder.Save2dIpw = v);
+        Setting("Gouge Checking", builder.GougeChecking, false, v => builder.GougeChecking = v);
+        Setting("Additional Passes", builder.AdditionalPasses, 0, v => builder.AdditionalPasses = v);
+        Number("Z Depth Offset", builder.ZdepthOffset, 0, v => builder.ZdepthOffset = v);
+        Inherit("Common Depth", levels.CommonDepth, true);
+        Inherit("Distance From Floor", levels.DistanceFromFloor, true);
+        Inherit("Distance From Top", levels.DistanceFromTop, true);
+        Inherit("Minimum Depth", levels.MinimumDepth, true);
+        Inherit("Incremental Side Stock", levels.IncrementalSideStock, true);
+        Setting("Floor Same As Part Stock", cut.FloorSameAsPartStock, false, v => cut.FloorSameAsPartStock = v);
+        Inherit("Part Stock", cut.PartStock, true);
+        Inherit("Floor Stock", cut.FloorStock, true);
+        Inherit("Cut Tolerances", cut.Tolerances, true);
+        Local("Part Stock Offset", cut.PartStockOffset, 0);
+        Distance("Holder Clearance", cut.HolderClearance, 3, false);
+        Distance("Shank Clearance", cut.ShankClearance, 3, false);
+        Distance("Neck Clearance", cut.NeckClearance, 0, false);
+        Distance("Max Cut Step", cut.MaxCutStep, 0.1, false);
+        Distance("Filleting Radius", cut.CornerControl.FilletingRadius, 50, true);
+        Distance("Finish Stepover", cut.FinishPasses.FinishStepoverBuilder, 5, true);
+        Distance("Max Cut Traverse", cut.MaxCutTraverse.Distance, 150, true);
+        Distance("Trochoidal Width", cut.TrochoidalSettings.Width, 60, true);
+        Distance("Trochoidal Min Width", cut.TrochoidalSettings.MinWidth, 20, true);
+        Distance("Trochoidal Step Ahead", cut.TrochoidalSettings.StepAhead, 40, true);
+        Stepover(builder.BndStepover);
+        Stepover(cut.Stepover);
+    }
+
+    private void Stepover(StepoverBuilder step)
+    {
+        Setting("Stepover", step.StepoverType, StepoverBuilder.StepoverTypes.PercentToolFlat, v => step.StepoverType = v);
+        Setting("Stepover Additional Passes", step.AdditionalPasses, 0, v => step.AdditionalPasses = v);
+        Distance("Stepover Distance", step.DistanceBuilder, 15, false);
+        Local("Percent Tool Flat", step.PercentToolFlatBuilder, 40);
+        Local("Stepover Scallop", step.ScallopBuilder, 0.3 * unit);
+    }
+
+    private void Feeds(FeedsBuilder feeds, bool referenceTool)
+    {
+        Setting("Optimize Feed Rate", feeds.OptimizeFeedRateWhenGenerating, false, v => feeds.OptimizeFeedRateWhenGenerating = v);
+        Setting("Spindle RPM Toggle", feeds.SpindleRpmToggle, 1, v => feeds.SpindleRpmToggle = v);
+        if (referenceTool)
+        {
+            Local("Surface Speed", feeds.SurfaceSpeedBuilder, unit == 1 ? 21.991148575128552 : 21.991148575128552 / 0.3048);
+            Local("Feed Per Tooth", feeds.FeedPerToothBuilder, 0.025 * unit);
+        }
+        Local("Spindle RPM", feeds.SpindleRpmBuilder, 7000);
+        if (!checking && !referenceTool) feeds.RecalculateData(FeedsBuilder.RecalculateBasedOn.SpindleSpeed);
+        InheritableFeedBuilder feed = feeds.FeedCutBuilder;
+        Inherit("Feed Cut", feed, false);
+        Setting("Feed Cut Unit", feed.Unit, FeedRateUnit.PerMinute, v => feed.Unit = v);
+        Number("Feed Cut", feed.Value, 350 * unit, v => feed.Value = v);
+        if (!checking && !referenceTool) feeds.RecalculateData(FeedsBuilder.RecalculateBasedOn.CutFeedRate);
+        Inherit("Rapid Output", feeds.FeedRapidOutput, true);
+    }
+
+    private void Moves(NcmPlanarBuilder moves)
+    {
+        Setting("Clearance", moves.ClearanceBuilder.ClearanceType, NcmClearanceBuilder.ClearanceTypes.UseCommon, v => moves.ClearanceBuilder.ClearanceType = v);
+        Setting("Initial", moves.InitialType, NcmPlanarBuilder.InitialTypes.Clearance, v => moves.InitialType = v);
+        Setting("Final", moves.FinalType, NcmPlanarBuilder.FinalTypes.Clearance, v => moves.FinalType = v);
+        var regions = moves.TransferBetweenRegionsBuilder;
+        Setting("Between Regions Transfer", regions.Type, NcmTransfer.TransferTypes.Clearance, v => regions.Type = v);
+        Setting("Within Levels", moves.TransferWithinLevelsType, NcmPlanarBuilder.TransferWithinLevelsTypes.Clearance, v => moves.TransferWithinLevelsType = v);
+        Setting("Within Levels With", moves.TransferWithinLevelsWith, NcmPlanarBuilder.TransferWithinLevelsWiths.UseEngret, v => moves.TransferWithinLevelsWith = v);
+        Setting("Between Levels", moves.TransferBetweenLevelsType, NcmPlanarBuilder.TransferBetweenLevelsTypes.PrevPlane, v => moves.TransferBetweenLevelsType = v);
+        Setting("Collision Check", moves.CollisionCheck, true, v => moves.CollisionCheck = v);
+        Setting("Cutter Compensation", moves.CutcomType, NcmPlanarBuilder.CutcomTypes.None, v => moves.CutcomType = v);
+        Distance("Initial Safe Distance", moves.InitialSafeDistanceBuilder, 3, false);
+        Distance("Final Safe Distance", moves.FinalSafeDistanceBuilder, 3, false);
+        Distance("Between Regions Safe Distance", regions.SafeDistanceBuilder, 3, false);
+        Distance("Within Levels Height", moves.TransferWithinLevelsHeightBuilder, 3, false);
+        Distance("Within Levels Safe Distance", moves.TransferWithinLevelsSafeDistanceBuilder, 3, false);
+        Distance("Within Levels Max Follow", moves.TransferWithinLevelsMaxFollowDistanceBuilder, 500, true);
+        Distance("Start Points Effective Distance", moves.StartPointsEffectDistBuilder, 500, true);
+        Distance("Predrill Effective Distance", moves.PredrillPointsEffectDistBuilder, 300, true);
+        EngageOrRetract(moves.EngageClosedAreaBuilder, NcmPlanarEngRetBuilder.EngRetTypes.PlungeLift, false, false, false);
+        EngageOrRetract(moves.EngageOpenAreaBuilder, NcmPlanarEngRetBuilder.EngRetTypes.SameAsClosed, true, false, false);
+        EngageOrRetract(moves.EngageInitialClosedBuilder, NcmPlanarEngRetBuilder.EngRetTypes.SameAsDefault, false, false, true);
+        EngageOrRetract(moves.EngageInitialOpenBuilder, NcmPlanarEngRetBuilder.EngRetTypes.SameAsDefault, true, false, true);
+        EngageOrRetract(moves.RetractAreaBuilder, NcmPlanarEngRetBuilder.EngRetTypes.SameAsEngage, false, true, false);
+        EngageOrRetract(moves.RetractFinalBuilder, NcmPlanarEngRetBuilder.EngRetTypes.SameAsDefault, false, true, true);
+    }
+
+    private void EngageOrRetract(NcmPlanarEngRetBuilder move, NcmPlanarEngRetBuilder.EngRetTypes type,
+        bool open, bool retract, bool firstOrLast)
+    {
+        string name = (retract ? "Retract" : open ? "Engage Open" : "Engage Closed") + (firstOrLast ? " Initial/Final" : "");
+        bool closedEngage = !open && !retract;
+        Setting(name, move.EngRetType, type, v => move.EngRetType = v);
+        Setting(name + " Height From", move.HeightFrom, NcmPlanarEngRetBuilder.MeasureHeightFrom.PreviousLevel, v => move.HeightFrom = v);
+        var clearance = NcmPlanarEngRetBuilder.MinClearanceTypes.ExtendAndTrim;
+        if (retract) clearance = firstOrLast ? NcmPlanarEngRetBuilder.MinClearanceTypes.SameAsRetract : NcmPlanarEngRetBuilder.MinClearanceTypes.ExtendOnly;
+        else if (open && firstOrLast) clearance = NcmPlanarEngRetBuilder.MinClearanceTypes.SameAsOpenEngage;
+        Setting(name + " Minimum Clearance", move.MinimumClearance, clearance, v => move.MinimumClearance = v);
+        Setting(name + " If Engage Does Not Fit", move.IfEngageDoesNotFit, NcmPlanarEngRetBuilder.IfEngageDoesNotFitTypes.Plunge, v => move.IfEngageDoesNotFit = v);
+        Setting(name + " Ignore Blank On Trim Side", move.IgnoreBlankOnTrimSide, closedEngage, v => move.IgnoreBlankOnTrimSide = v);
+        Setting(name + " Use Effective Distance", move.UseEffectDist, true, v => move.UseEffectDist = v);
+        Setting(name + " Use Max Width", move.UseMaxWidth, false, v => move.UseMaxWidth = v);
+        Setting(name + " Start At Arc Center", move.StartAtArcCenter, false, v => move.StartAtArcCenter = v);
+        Number(name + " Arc Angle", move.ArcAngle, 90, v => move.ArcAngle = v);
+        Number(name + " Swing Angle", move.SwingAngle, 0, v => move.SwingAngle = v);
+        Number(name + " Ramp Angle", move.RampAngle, closedEngage ? 15 : 0, v => move.RampAngle = v);
+        Distance(name + " Height", move.HeightBuilder, retract ? 50 : 3, retract);
+        Distance(name + " Length", move.LengthBuilder, open ? 50 : 90, true);
+        Distance(name + " Radius", move.RadiusBuilder, open ? 7 : 90, !open);
+        Distance(name + " Effective Distance", move.EffectDistBuilder, 500, true);
+        Distance(name + " Max Width", move.MaxWidthBuilder, 500, true);
+        Distance(name + " Min Clearance", move.MinClearanceBuilder, closedEngage ? 0 : 50, !closedEngage);
+        if (firstOrLast)
+        {
+            Inherit(name + " Diameter", move.DiameterBuilder, true);
+            Inherit(name + " Min Ramp Length", move.MinRampLengthBuilder, true);
+            Inherit(name + " Helical Ramp Angle", move.HelicalRampAngleBuilder, true);
+        }
+        else
+        {
+            Distance(name + " Diameter", move.DiameterBuilder, 90, true);
+            Distance(name + " Min Ramp Length", move.MinRampLengthBuilder, 10, true);
+            Local(name + " Helical Ramp Angle", move.HelicalRampAngleBuilder, closedEngage ? 3 : 0);
+        }
+        if (!closedEngage)
+        {
+            Distance(name + " Extend Before Arc", move.ExtendBeforeArc, 0, false);
+            Distance(name + " Extend After Arc", move.ExtendAfterArc, 0, false);
+        }
+    }
+
+    // Public UF operation parameters not covered by the builder, including the separate
+    // boundary tolerance pair. Only documented scalar kinds are written, never pointers or object tags.
+    internal static void SetUfParameters(UFSession uf, PlanarMilling operation, double unit, bool verify)
+    {
+        var fields = new UfFields(uf.Param, operation.Tag, verify);
+        // Retain the source's inheritance of the tool, geometry, method and clearance. A target
+        // group may supply a different value or fall back to the system default.
+        int[] inherited = { 5, 6, 7, 10, 11, 12, 13, 14, 16, 18, 19, 59, 62, 66, 67, 109, 220, 380, 382,
+            430, 1000, 1001, 1002, 1005, 1017, 1038, 1040, 1041, 1042, 1200, 3000, 4000, 4001, 6108, 6113,
+            6125, 7361, 7386, 7387, 8708, 10410, 10412, 16010 };
+        foreach (int index in inherited) fields.FromParent(index);
+
+        fields.Pair(37, "Boundary Tolerances", 0.03 * unit, 0.03 * unit);
+        fields.Integer(30, "Return Method", 1);
+        fields.Integer(45, "Start Method", 1);
+        fields.Real(42, "Min Clearance", 3 * unit);
+        fields.Real(57, "NURBS Fitting Tolerance", 0.03 * unit);
+        fields.Real(58, "NURBS Angular Tolerance", 1);
+        fields.Integer(107, "Post Commands", 1);
+        fields.Flag(116, "Suppressed", false);
+        fields.Flag(141, "Split Toolpath by Holder Collision", true);
+        fields.Integer(202, "Corner Control Fillet Flag", 0);
+        fields.Integer(210, "Corner Control Slowdown Steps Number", 1);
+        fields.Real(211, "Corner Control Previous Tool Diameter", 30 * unit);
+        fields.Real(215, "Engage Auto Overlap", 0);
+        fields.Real(216, "Engage Auto Arc Radius", 7 * unit);
+        fields.Real(217, "Engage Auto Activation Range", 3 * unit);
+        fields.Integer(218, "Engage Auto Ramp On Arc Flag", 1);
+        fields.Real(219, "Engage Auto Ramp Angle", 15);
+        fields.Real(224, "Engage Auto Min Ramp Length", 0);
+        fields.Real(232, "Cutcom Distance", unit);
+        fields.Integer(239, "Active Range Usage", 1);
+        fields.Integer(247, "Engage Pre-Drilled Flag", 1);
+        fields.Real(257, "Retract Clearance", 1.25 * unit);
+        fields.Real(258, "Horizontal Clearance", 3 * unit);
+        fields.Real(259, "Vertical Clearance", 3 * unit);
+        fields.Integer(260, "Island Cleanup", 2);
+        fields.Integer(285, "Material Side", 2);
+        fields.Integer(302, "Region Cut Traverse Type", 1);
+        fields.Integer(303, "Region Cut Order", 1);
+        fields.Integer(307, "Region Display Flag", 0);
+        fields.Integer(308, "Region Pause Flag", 0);
+        fields.Real(317, "Cut Angle", 180);
+        fields.Pair(323, "Stepover Variable Max/Min", 15 * unit, 15 * unit);
+        fields.Real(326, "Uncut Area Overlap", 2 * unit);
+        fields.Integer(329, "Undercut Handle Flag", 0);
+        fields.Integer(332, "Check Geometry Followed Flag", 1);
+        fields.Integer(337, "Boundary Approximation", 1);
+        fields.Integer(351, "IPW Type", 0);
+        fields.Real(392, "Trochoidal Path Width Percent", 60);
+        fields.Integer(394, "Corner Loops", 0);
+        fields.Integer(397, "Max Cut Traverse Specification Type", 1);
+        fields.Real(399, "Max Cut Traverse Percent Tool Diameter", 200);
+        fields.Real(453, "Tool Embedding Limit", 150);
+        fields.Integer(1107, "Tool Adjust Register Toggle", 1);
+        fields.Integer(1108, "Tool Cutcom Register Toggle", 1);
+        fields.Integer(1159, "Tool Number Toggle", 1);
+        fields.Integer(3042, "Region Effective Distance Usage", 1);
+        fields.Integer(3052, "Predrill Effective Distance Usage", 1);
+        fields.Real(5792, "Z Axis Smoothing Radius", 0);
+        fields.Integer(6134, "Uncut Blank Safeshape", 1);
+        fields.Integer(6150, "Pillar Control", 0);
+        fields.Real(6151, "Minimum Curvature Radius", 10 * unit);
+        fields.Integer(7200, "Feed Rate Optimize Status", 0);
+        fields.Integer(7201, "Feed Rate Optimize Range", 0);
+        fields.Real(7202, "Feed Rate Optimize Upper Limit Percent", 200);
+        fields.Real(7203, "Feed Rate Optimize Lower Limit Percent", 50);
+        fields.Real(7204, "Feed Rate Optimize Upper Limit Constant", 1000 * unit);
+        fields.Real(7205, "Feed Rate Optimize Lower Limit Constant", unit);
+        fields.Real(7206, "Feed Rate Optimize Interval Length", 10 * unit);
+        fields.Integer(7207, "Feed Rate Optimize On Generate Status", 2);
+        fields.Real(7208, "Feed Rate Optimize Stepover", 15 * unit);
+        fields.Integer(9703, "Coolant Type", 0);
+        fields.Real(17000, "Conventional Stepover Percentage", 100);
+
+        foreach (UdeSetType set in new UdeSetType[] { UdeSetType.UdeStartSet, UdeSetType.UdeEndSet })
+        {
+            int count; IntPtr[] events;
+            uf.Param.AskUdes(operation.Tag, set, out count, out events);
+            if (count < 0 || (count > 0 && (events == null || events.Length < count)))
+                throw new InvalidOperationException("Не удалось прочитать события операции: " + set + ".");
+            if (count == 0) continue;
+            if (verify) throw Difference(set.ToString(), count, 0);
+            uf.Param.DeleteAllUdes(operation.Tag, set);
+        }
+
+        ParamClrplaneUsage usage;
+        uf.Cam.AskClearPlaneUsage(operation.Tag, out usage);
+        var expected = ParamClrplaneUsage.ParamClrplaneUsageAtOperationStartAndEnd;
+        if (usage != expected || !fields.Overridden(221))
+        {
+            if (verify) throw Difference("Clearance Plane Usage (221)", usage, expected);
+            uf.Cam.SetClearPlaneUsage(operation.Tag, expected);
+        }
+    }
+
+    private sealed class UfFields
+    {
+        private readonly UFParam api;
+        private readonly Tag tag;
+        private readonly bool verifying;
+        internal UfFields(UFParam param, Tag operation, bool verify) { api = param; tag = operation; verifying = verify; }
+        internal bool Overridden(int index)
+        {
+            UFParam.Status status; api.AskParamStatus(tag, index, out status);
+            if (status == UFParam.Status.InvalidIndex) throw new InvalidOperationException("Недоступен параметр UF " + index + ".");
+            return status == UFParam.Status.Overridden;
+        }
+        internal void FromParent(int index)
+        {
+            if (!Overridden(index)) return;
+            if (verifying) throw Difference("UF " + index, "Overridden", "Inherited / Default");
+            api.InheritValue(tag, index);
+        }
+        private void Field(int index, string name, Func<bool> matches, Action write)
+        {
+            try
+            {
+                bool local = Overridden(index);
+                if (local && matches()) return;
+                if (verifying)
+                    throw new InvalidOperationException(local ? "NX изменил значение после Commit." : "NX не сохранил локальное переопределение.");
+                write();
+            }
+            catch (Exception ex) { throw new InvalidOperationException(name + " (UF " + index + "): " + ex.Message, ex); }
+        }
+        internal void Integer(int index, string name, int expected)
+        {
+            Field(index, name, delegate { int actual; api.AskIntValue(tag, index, out actual); return actual == expected; },
+                delegate { api.SetIntValue(tag, index, expected); });
+        }
+        internal void Flag(int index, string name, bool expected)
+        {
+            Field(index, name, delegate { bool actual; api.AskLogicalValue(tag, index, out actual); return actual == expected; },
+                delegate { api.SetLogicalValue(tag, index, expected); });
+        }
+        internal void Real(int index, string name, double expected)
+        {
+            Field(index, name, delegate { double actual; api.AskDoubleValue(tag, index, out actual); return Close(actual, expected); },
+                delegate { api.SetDoubleValue(tag, index, expected); });
+        }
+        internal void Pair(int index, string name, double first, double second)
+        {
+            Field(index, name, delegate { double[] actual = new double[2]; api.Ask2dValue(tag, index, actual);
+                    return Close(actual[0], first) && Close(actual[1], second); },
+                delegate { api.Set2dValue(tag, index, new double[] { first, second }); });
+        }
+    }
 }
 
 // BEGIN PORTABLE ENGRAVING ROUTING CORE
