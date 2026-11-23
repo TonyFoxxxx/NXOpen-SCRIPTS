@@ -64,7 +64,7 @@ class EngravingCreationTests(unittest.TestCase):
         reader = section(source, '    private static void VerifyNewBoundaries(', '    private static bool SameMembers(')
         self.assertNotIn('EngravingPreset.', reader)
         self.assertIn('finally { reader.Destroy(); }', reader)
-        self.assertIn('GeometryRevision = "13"', source)
+        self.assertIn('GeometryRevision = "16"', source)
         for call in ('.GenerateToolPath(', '.Save(', '.SaveAs(', '.SetClearPlaneData(', '.SetClearPlaneTag(', '.CreateTool(', '.SetTagValue('):
             self.assertNotIn(call, source)
 

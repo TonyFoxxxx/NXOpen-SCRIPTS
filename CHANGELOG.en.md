@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-24 — Engraving centerlines for PLANAR_MILL V1.16
+
+The diagonal meets the crossbar of a bevelled ‘4’ at a sharp corner. The curved serif of a ‘1’ reaches the nose before turning onto the stem. [Guide](docs/en/planar-mill-curves.md#latest-release).
+
+V1.16 source SHA-256 is `c470268a5e5d1f111604d247e9514c98cc4d5ab06f4436954d19e76700358a03`.
+
 ## 2026-11-24 — Curves for PLANAR V1.08
 
 The NX Plane constructor now sets the common boundary plane. Choose **At Distance** for an offset, or use a construction method such as **At Angle** or **Bisector**. [Guide](docs/en/planar-add-curves.md#latest-release).

@@ -11,17 +11,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class EngravingCurvedCornerTests(unittest.TestCase):
     def test_sharp_curved_joints_and_tangential_fillets(self):
+        self.run_fixture('EngravingCurvedCorners', 'engraving-curved-corner scenarios passed')
+
+    def test_clipped_miters_and_curved_serifs(self):
+        self.run_fixture('EngravingClippedCorners', '144 clipped-corner scenarios passed')
+
+    def run_fixture(self, fixture, expected):
         source = (ROOT / 'scripts/NX_PlanarMill_Select_Curves.cs').read_text(encoding='utf-8-sig')
         core = source.split('// BEGIN PORTABLE ENGRAVING CENTERLINE CORE\n', 1)[1].split('// END PORTABLE ENGRAVING CENTERLINE CORE', 1)[0]
         core += source.split('// BEGIN PORTABLE ENGRAVING ROUTING CORE\n', 1)[1].split('// END PORTABLE ENGRAVING ROUTING CORE', 1)[0]
         with tempfile.TemporaryDirectory(prefix='nx-engraving-centerline-') as folder:
             path = Path(folder)
             (path / 'Core.cs').write_text('using System;\nusing System.Collections.Generic;\nusing P=EngravingCenterlines.P;\nusing B=EngravingCenterlines.Bezier;\nusing R=EngravingCenterlines.Region;\n' + core, encoding='utf-8')
-            shutil.copyfile(ROOT / 'tests/fixtures/EngravingCurvedCorners.cs', path / 'Checks.cs')
+            shutil.copyfile(ROOT / 'tests/fixtures' / (fixture + '.cs'), path / 'Checks.cs')
+            shutil.copyfile(ROOT / 'tests/fixtures/ManagedTestHost.cs', path / 'Host.cs')
             if os.name == 'nt':
                 compiler = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
                 exe = path / 'Checks.exe'
-                command = [str(compiler), '/nologo', '/codepage:65001', '/out:' + str(exe), str(path / 'Core.cs'), str(path / 'Checks.cs')]
+                command = [str(compiler), '/nologo', '/codepage:65001', '/out:' + str(exe), str(path / 'Core.cs'), str(path / 'Checks.cs'), str(path / 'Host.cs')]
                 run = [str(exe)]
             else:
                 dotnet = shutil.which('dotnet')
@@ -35,9 +42,9 @@ class EngravingCurvedCornerTests(unittest.TestCase):
                 run = [dotnet, str(path / 'bin/Debug/net8.0/Checks.dll')]
             result = subprocess.run(command, capture_output=True, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            result = subprocess.run(run, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(run, capture_output=True, text=True, timeout=180)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn('engraving-curved-corner scenarios passed', result.stdout)
+            self.assertIn(expected, result.stdout)
 
 
 if __name__ == '__main__':

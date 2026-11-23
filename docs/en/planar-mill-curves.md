@@ -4,11 +4,11 @@
 
 ## Latest release
 
-**V1.15 · 2026-11-24**
+**V1.16 · 2026-11-24**
 
-A new `GRAVIROVKA` receives its settings and boundaries in one edit. The journal reports the result as soon as Commit succeeds. NX controls **Coolant Type (UF 9703)**. This fixes the V1.14 rollback when NX kept the coolant setting as inherited or default.
+On a ‘4’ with a bevel at the junction of the diagonal and crossbar, the centerline reaches a sharp vertex inside the bevel and returns to the measured diagonal. On a ‘1’ with a curved serif, the centerline follows the curved flank to its intersection with the straight stem.
 
-V1.15 source SHA-256 is `090e802123b798471315131533cdbc89c890970cff6c7c6e0949ee6209cb0306`.
+V1.16 source SHA-256 is `c470268a5e5d1f111604d247e9514c98cc4d5ab06f4436954d19e76700358a03`.
 
 Source and working filename remain [NX_PlanarMill_Select_Curves.cs](../../scripts/NX_PlanarMill_Select_Curves.cs). Existing buttons need no change. The updater entry is now **«Оси гравировки для PLANAR_MILL»**. No Windows font or original text is required.
 
@@ -32,6 +32,8 @@ For assembly components, the CAM part must be both the work part and the display
 | Tolerances and stock | Local UF Boundary Tolerances of 0.03/0.03 mm. Cut tolerances, part and floor stock, common depth and offsets from floor/top inherit their values. Each new boundary and member has zero stock. |
 | Step and clearance | 40% of tool flat, with stored distance 15 mm and scallop 0.3 mm. Holder and shank clearance 3 mm, neck clearance 0. Tool-dependent percentages are preserved in inch parts. |
 | Non-cutting moves | Common clearance from the selected MCS at operation start and end. Transfers within levels and between regions use clearance, between levels use the previous plane. Safety distances are 3 mm. Closed engage uses Plunge/Lift from the previous level, open engage follows closed, retract follows engage. Collision Check is enabled. |
+
+The journal applies the new operation settings in one Commit. NX controls Coolant Type (UF 9703).
 
 **Settings that need attention in the target part**
 
@@ -61,7 +63,7 @@ Each chain is a separate **NXOpen BoundarySetPlanarMill**. Loops and dot circles
 
 When appending to a **preselected operation**, the journal reopens the builder to check the previous and added boundaries, their member curves and the Open/Closed types. A changed type or an extra closing member triggers rollback. The result shows the number of existing boundaries retained. The selected operation keeps its tool, feeds, depths, compensation and smoothing. Use **Cut Pattern = Profile**. A height difference between the curves and the cut level can look like an offset in perspective.
 
-**When upgrading from V1.01–V1.12, recreate any retained previous axes:** undo that run or remove its curves from the operation boundaries and model. Previous results are not automatically replaced; the journal reports that they use the earlier algorithm.
+**To rebuild axes created by V1.15 or earlier**, undo the run in NX, or remove the old curves for the affected face groups from the operation boundaries and the model. Then select those faces again with V1.16.
 
 An unchanged face group processed by the current algorithm is skipped. Changed source geometry, changed generated boundary membership or a partially selected previous group causes an explanatory stop. For a recalculation, remove the previous axes from the operation and model, or undo the previous run. Repeat detection uses attributes on generated curves; no attributes are added to source faces.
 
@@ -81,6 +83,8 @@ A construction error reports the failed selected face group. Highlight its sourc
 
 ## Validation
 
+144 synthetic cases cover the curved serif and clipped triangular corner, variations in wall shape, rotation, reflection, millimetres and inches, and uneven boundary subdivision. The checks measure the corner and fitted curve, physical end setbacks, and the continuity and separation of the routed strokes. The V1.16 journal compiled against NXOpen 2412 for .NET Framework 4.8 and Windows .NET 10. The screenshots provided the shape references. Verification on the original part in Designcenter 2606 is pending.
+
 V1.13 passes 492 Part Boundaries contract checks: Open/Closed with single and multiple curves, opposite inference during AppendCurves, rejection of a mismatched saved type, member identities, Tool Position On, zero stock, inherited tolerances and restoration of initial settings on failure. These use an API double without running NX. The centerline, junction-routing and chain/plane cores are identical to V1.12.
 
 Retain 582 scenarios for two-island contours with rounded outer corners and for retention of genuine closed rings. Assert branch and node counts, preservation of both islands, corner positions, coverage of original strokes after routing, and absence of intersections. Include three heights, two widths, three fillet radii, rotations, reflections, mm/inch units and different loop starting points. V1.11 fails the new regression. Additional routing checks retain the free endpoint of genuine 0.0045 and 0.005 mm branches with at least 0.004 mm clearance; a 0.003 mm branch is still rejected, never silently removed.
@@ -97,4 +101,4 @@ For V1.12, all 1104 variants of 23 faces from the previously supplied STEP model
 
 An additional local sweep of 456 outlines from four fonts produced 387 results and 69 rejections by existing terminal-setback checks. All three previous routing failures in that set were resolved with no new rejections. This does not establish universal font support. Font files and their outlines are not distributed.
 
-The V1.15 source compiled against NXOpen 2412 with .NET Framework 4.8 and restricted Windows .NET 10 references. Background tests reproduced the V1.14 coolant rollback. A simulated NX commit that normalizes operation settings now succeeds with one builder and one Commit. Both a pre-existing coolant value and an inherited coolant setting are covered. Interactive V1.15 execution in Designcenter 2606 is pending.
+The V1.15 source compiled against NXOpen 2412 with .NET Framework 4.8 and restricted Windows .NET 10 references. Background tests reproduced the V1.14 coolant rollback. A simulated NX commit that normalizes operation settings now succeeds with one builder and one Commit. Both a pre-existing coolant value and an inherited coolant setting are covered.

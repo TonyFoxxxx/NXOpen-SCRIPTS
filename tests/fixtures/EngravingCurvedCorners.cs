@@ -108,5 +108,12 @@ public class CurvedCornerChecks
         }
         Console.WriteLine(scenarios+" engraving-curved-corner scenarios passed");
     }
-    public static void Main(){System.Threading.Thread.CurrentThread.CurrentCulture=System.Globalization.CultureInfo.InvariantCulture;Console.OutputEncoding=new System.Text.UTF8Encoding(false);try{Run();}catch(Exception ex){Console.WriteLine(ex);Environment.Exit(1);}}
+    public static int Main()
+    {
+        return ManagedTestHost.Run(delegate {
+            System.Threading.Thread.CurrentThread.CurrentCulture=System.Globalization.CultureInfo.InvariantCulture;
+            Run();
+            return 0;
+        });
+    }
 }

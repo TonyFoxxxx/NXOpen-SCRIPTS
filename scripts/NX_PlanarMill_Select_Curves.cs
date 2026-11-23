@@ -1,10 +1,10 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.15
+// SCRIPT_VERSION: V1.16
 // Select an existing PLANAR_MILL or choose the parents for a new engraving operation.
 // Reconstructs straight and curved centerlines; round/compact square dots use half-width circles.
 // Free physical ends stop half the local stroke width before the terminal boundary.
 // Rechecks corner spurs after merging nodes; preserves genuine short branches and islands.
-// Restores sharp line/curve joints from the walls, preserving tangential fillets.
+// Restores sharp bevels and curved serifs from their walls, preserving tangential fillets.
 // Part Boundary type follows each chain: Closed for loops, Open for separated/open strokes.
 // Existing operations keep their cutting settings. Floor for a new operation is selected in NX.
 
@@ -27,10 +27,10 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.15";
+    private const string SCRIPT_VERSION = "V1.16";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
-    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "13";
+    private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "16";
     private static readonly string Title = "Оси гравировки для PLANAR_MILL — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
     private sealed class CurveInfo
@@ -1774,7 +1774,7 @@ public static class EngravingCenterlines
         public readonly List<P> Points = new List<P>();
         public bool Closed;
         internal bool ContractedJunction;
-        internal readonly List<P> CurvedCorners = new List<P>();
+        internal readonly List<P> MeasuredCorners = new List<P>();
         public readonly HashSet<int> Corners = new HashSet<int>();
     }
     public sealed class Bezier
@@ -1938,7 +1938,8 @@ public static class EngravingCenterlines
         result.SamplingStep = step;
         Circle dot;
         if (RoundDot(region, tolerance, out dot) || SquareDot(region, tolerance, out dot)) { result.Circles.Add(dot); return result; }
-        if (WallGraph(region, tolerance, result)) return result;
+        List<StraightAxis> axes = StraightAxes(region, tolerance);
+        if (WallGraph(region, tolerance, axes, result)) return result;
         List<P> samples = Sample(region, step);
         result.BoundarySamples = samples.Count;
         if (samples.Count > 10000) throw new InvalidOperationException("Слишком сложная грань: более 10000 точек контура. Выбирайте отдельные грани букв.");
@@ -1977,10 +1978,11 @@ public static class EngravingCenterlines
             throw new InvalidOperationException("Не удалось получить устойчивую среднюю линию этой грани.");
         }
         foreach (Stroke stroke in strokes) Refine(stroke, region, step, tolerance);
-        RestoreStraightStrokes(strokes, region, tolerance);
-        RestoreCurvedCorners(strokes, region, tolerance);
+        RestoreStraightStrokes(strokes, region, axes, tolerance);
+        RestoreCurvedCorners(strokes, region, axes, tolerance);
         CleanSnappedJunctions(strokes, region, tolerance);
-        InsetTerminals(strokes, region, tolerance);
+        RestoreClippedCorners(strokes, region, axes, tolerance, true);
+        InsetTerminals(strokes, region, axes, tolerance);
         foreach (Stroke stroke in strokes)
         {
             if (stroke.Points.Count < 2) continue;
@@ -1993,11 +1995,10 @@ public static class EngravingCenterlines
     }
     // Apply the same end convention to both reconstruction engines, BEFORE splitting
     // junctions for CAM. Only degree-one ends are physical terminals of the engraving.
-    private static void InsetTerminals(List<Stroke> strokes, Region region, double tolerance)
+    private static void InsetTerminals(List<Stroke> strokes, Region region, List<StraightAxis> axes, double tolerance)
     {
         var ends = new List<P>();
         foreach (Stroke s in strokes) { ends.Add(s.Points[0]); ends.Add(s.Points[s.Points.Count - 1]); }
-        List<StraightAxis> axes = StraightAxes(region, tolerance);
         for (int n = 0; n < strokes.Count; n++)
         {
             Stroke s = strokes[n]; if (s.Closed) continue;
@@ -2013,9 +2014,9 @@ public static class EngravingCenterlines
                 {
                     limit += (oriented[i] - oriented[i - 1]).Length;
                     int original = end == 0 ? i : p.Count - 1 - i;
-                    bool curvedCorner = false;
-                    foreach (P corner in s.CurvedCorners) if ((corner - oriented[i]).Length <= tolerance * 0.01) curvedCorner = true;
-                    if (s.Corners.Contains(original) && (curvedCorner || IsWallCorner(oriented[i], axes, region, tolerance))) break;
+                    bool measuredCorner = false;
+                    foreach (P corner in s.MeasuredCorners) if ((corner - oriented[i]).Length <= tolerance * 0.01) measuredCorner = true;
+                    if (s.Corners.Contains(original) && (measuredCorner || IsWallCorner(oriented[i], axes, region, tolerance))) break;
                 }
                 double inset = TerminalInset(oriented, limit, axes, region, tolerance);
                 if (end == 0) start = inset; else finish = inset;
@@ -2597,7 +2598,7 @@ public static class EngravingCenterlines
                 if (old.Corners.Contains(source)) joined.Corners.Add(joined.Points.Count - 1);
             }
             if (side == 0) joined.Corners.Add(joined.Points.Count - 1);
-            joined.CurvedCorners.AddRange(old.CurvedCorners);
+            joined.MeasuredCorners.AddRange(old.MeasuredCorners);
         }
         joined.Closed = (joined.Points[0] - joined.Points[joined.Points.Count - 1]).Length <= tolerance * 0.01;
         strokes[indices[0]] = joined; strokes.RemoveAt(indices[1]);
@@ -2609,6 +2610,13 @@ public static class EngravingCenterlines
         internal readonly List<Segment> Sides = new List<Segment>();
         internal double Parameter(P p) { return P.Dot(p - Origin, Direction); }
         internal P Project(P p) { return Origin + Direction * Parameter(p); }
+        internal bool OnLine(P p, double tolerance) { return (p - Project(p)).Length <= tolerance * 0.1; }
+        internal bool Supports(P a, P b)
+        {
+            foreach (Segment s in Sides)
+                if ((s.A.Equals(a) && s.B.Equals(b)) || (s.B.Equals(a) && s.A.Equals(b))) return true;
+            return false;
+        }
         internal double Outside(P p) { double t = Parameter(p); return Math.Max(0, Math.Max(Low - t, t - High)); }
     }
     private sealed class StraightRun
@@ -2717,9 +2725,8 @@ public static class EngravingCenterlines
         internal P Point;
         internal readonly HashSet<int> Axes = new HashSet<int>();
     }
-    private static bool WallGraph(Region region, double tolerance, Result result)
+    private static bool WallGraph(Region region, double tolerance, List<StraightAxis> axes, Result result)
     {
-        List<StraightAxis> axes = StraightAxes(region, tolerance);
         if (axes.Count == 0 || axes.Count > 100) return false;
         double width = 2 * region.Area / region.Perimeter;
         // Every long boundary run must have a measured opposite wall. Unmatched short
@@ -2815,8 +2822,9 @@ public static class EngravingCenterlines
         // Forward area consistency rejects an incomplete or excessive stroke network.
         // Wall coverage and hole count above test the shape, not only its total area.
         if (restoredArea < region.Area * 0.65 || restoredArea > region.Area * 1.4) return false;
+        RestoreClippedCorners(strokes, region, axes, tolerance, false);
         foreach (Stroke stroke in strokes) for (int i = 1; i + 1 < stroke.Points.Count; i++) stroke.Corners.Add(i);
-        InsetTerminals(strokes, region, tolerance);
+        InsetTerminals(strokes, region, axes, tolerance);
         foreach (Stroke stroke in strokes)
         {
             var path = new List<Bezier>();
@@ -2872,10 +2880,7 @@ public static class EngravingCenterlines
         corner = new P(); double cross = P.Cross(a.Direction, b.Direction);
         if (Math.Abs(cross) < 0.15) return false;
         // Require an actual sharp outline vertex shared by the two directions. Preserve fillets.
-        bool sharp = false;
-        foreach (Segment x in a.Sides) foreach (Segment y in b.Sides)
-            if (Math.Min(Math.Min((x.A - y.A).Length, (x.A - y.B).Length), Math.Min((x.B - y.A).Length, (x.B - y.B).Length)) < tolerance * 0.1) sharp = true;
-        if (!sharp) return false;
+        if (!ShareWallVertex(a, b, tolerance)) return false;
         corner = a.Origin + a.Direction * (P.Cross(b.Origin - a.Origin, b.Direction) / cross);
         // A fixed four-radius reach clips the miter of acute triangles (e.g. the digit 4).
         // Offset-line intersections have an angle-dependent reach, bounded by these two widths.
@@ -2883,9 +2888,9 @@ public static class EngravingCenterlines
         return a.Outside(corner) <= reach && b.Outside(corner) <= reach
             && region.Inside(corner) && region.Distance(corner) >= Math.Min(a.Radius, b.Radius) * 0.5;
     }
-    private static void RestoreStraightStrokes(List<Stroke> strokes, Region region, double tolerance)
+    private static void RestoreStraightStrokes(List<Stroke> strokes, Region region, List<StraightAxis> axes, double tolerance)
     {
-        List<StraightAxis> axes = StraightAxes(region, tolerance); if (axes.Count == 0) return;
+        if (axes.Count == 0) return;
         List<P> before = new List<P>(), after = new List<P>();
         foreach (Stroke stroke in strokes) foreach (int index in new int[] { 0, stroke.Points.Count - 1 })
         {
@@ -3051,9 +3056,9 @@ public static class EngravingCenterlines
                 || ((hit.B - side.A).Length < tolerance * 0.1 && (hit.A - side.B).Length < tolerance * 0.1)) return false;
         mid = p + normal * (distance * 0.5); return region.Inside(mid);
     }
-    private static void RestoreCurvedCorners(List<Stroke> strokes, Region region, double tolerance)
+    private static void RestoreCurvedCorners(List<Stroke> strokes, Region region, List<StraightAxis> axes, double tolerance)
     {
-        List<StraightAxis> axes = StraightAxes(region, tolerance); if (axes.Count == 0) return;
+        if (axes.Count == 0) return;
         var edges = new List<Segment>(); var loops = new List<List<Segment>>();
         foreach (List<P> loop in region.Loops)
         {
@@ -3162,10 +3167,192 @@ public static class EngravingCenterlines
                 if (!valid) continue;
                 if (reversed != 0) { output.Reverse(); var mapped = new HashSet<int>(); foreach (int c in corners) mapped.Add(output.Count - 1 - c); corners = mapped; }
                 stroke.Points.Clear(); stroke.Points.AddRange(output); stroke.Corners.Clear(); foreach (int c in corners) stroke.Corners.Add(c);
-                stroke.CurvedCorners.Add(root);
+                stroke.MeasuredCorners.Add(root);
                 return;
             }
         }
+    }
+    // A flat edge can clip the outside of a sharp turn. Match the consecutive walls
+    // on either side of that bevel before replacing any part of the medial path.
+    private static void RestoreClippedCorners(List<Stroke> strokes, Region region, List<StraightAxis> axes, double tolerance, bool includeSerifs)
+    {
+        foreach (List<P> loop in region.Loops)
+        {
+            List<P> wall = BoundaryVertices(loop, tolerance);
+            for (int orientation = 0; orientation < 2; orientation++, wall.Reverse())
+            {
+                int n = wall.Count;
+                for (int i = 0; i < n; i++)
+                {
+                    P start = wall[i], end = wall[(i + 1) % n], lip = wall[(i + 2) % n], next = wall[(i + 3) % n];
+                    P along = (start - end).Unit(), bevel = lip - end;
+                    if (Math.Abs(P.Dot(along, bevel.Unit())) > 0.35 || P.Dot((next - lip).Unit(), along) < 0.45) continue;
+                    foreach (StraightAxis stem in axes)
+                    {
+                        if (!stem.Supports(start, end) || bevel.Length < stem.Radius || bevel.Length > stem.Radius * 3) continue;
+                        foreach (StraightAxis slope in axes)
+                        {
+                            if (slope == stem || !slope.Supports(lip, next) || !ShareWallVertex(stem, slope, tolerance)) continue;
+                            P across = bevel.Unit(), normal = new P(-across.Y, across.X);
+                            if (P.Dot(normal, along) < 0) normal = normal * -1;
+                            double cross = P.Cross(stem.Direction, slope.Direction);
+                            if (Math.Abs(cross) < 0.15 || Math.Abs(P.Dot(slope.Direction, normal)) >= Math.Abs(P.Dot(stem.Direction, normal))) continue;
+                            P miter = stem.Origin + stem.Direction * (P.Cross(slope.Origin - stem.Origin, slope.Direction) / cross);
+                            double radius = Math.Min(stem.Radius, slope.Radius), clearance = P.Dot(miter - end, normal);
+                            double station = P.Dot(miter - end, across);
+                            if (station < 0 || station > bevel.Length || clearance < -radius || clearance >= radius) continue;
+                            P corner = miter + stem.Direction * ((radius - clearance) / P.Dot(stem.Direction, normal));
+                            double reach = (stem.Radius + slope.Radius) / Math.Abs(cross) + tolerance;
+                            if (stem.Outside(corner) > reach || slope.Outside(corner) > reach || !region.Inside(corner)) continue;
+                            // Rejoin the diagonal at the near end of its measured pair of walls.
+                            double near = Math.Max(slope.Low, Math.Min(slope.High, slope.Parameter(corner)));
+                            P contact = slope.Origin + slope.Direction * near;
+                            foreach (Stroke stroke in strokes)
+                                SpliceBevel(stroke, stem, slope, along, (next - lip).Unit(), corner, contact, reach, region, tolerance);
+                        }
+                        if (includeSerifs) RestoreSerif(strokes, stem, wall, i, region, tolerance);
+                    }
+                }
+            }
+        }
+    }
+    private static bool ShareWallVertex(StraightAxis a, StraightAxis b, double tolerance)
+    {
+        foreach (Segment x in a.Sides) foreach (Segment y in b.Sides)
+            if (Math.Min(Math.Min((x.A - y.A).Length, (x.A - y.B).Length),
+                Math.Min((x.B - y.A).Length, (x.B - y.B).Length)) < tolerance * 0.1) return true;
+        return false;
+    }
+    private static void SpliceBevel(Stroke stroke, StraightAxis stem, StraightAxis slope, P along, P up,
+        P corner, P contact, double reach, Region region, double tolerance)
+    {
+        var p = new List<P>(stroke.Points);
+        for (int order = 0; order < 2; order++, p.Reverse())
+        {
+            for (int i = 0; i + 2 < p.Count; i++)
+            {
+                if (!stem.OnLine(p[i], tolerance) || !stem.OnLine(p[i + 1], tolerance)
+                    || P.Dot(p[i] - p[i + 1], along) < stem.Radius || (p[i + 1] - corner).Length > reach) continue;
+                double length = 0;
+                for (int j = i + 1; j + 1 < p.Count && length <= 2 * reach; j++)
+                {
+                    if ((p[j] - corner).Length > reach) break;
+                    if (slope.OnLine(p[j], tolerance) && slope.OnLine(p[j + 1], tolerance)
+                        && P.Dot(p[j + 1] - p[j], up) >= slope.Radius && P.Dot(p[j + 1] - corner, up) > 0)
+                    {
+                        var replacement = new List<P> { corner };
+                        if (!slope.OnLine(corner, tolerance) && P.Dot(contact - corner, up) > tolerance
+                            && P.Dot(p[j + 1] - contact, up) > tolerance) replacement.Add(contact);
+                        if (ReplaceCorner(stroke, i + 1, j, order != 0, replacement, 0, true, region, tolerance)) return;
+                    }
+                    length += (p[j + 1] - p[j]).Length;
+                }
+            }
+        }
+    }
+    private static void RestoreSerif(List<Stroke> strokes, StraightAxis stem, List<P> loop, int i, Region region, double tolerance)
+    {
+        int n = loop.Count, first = (i + 2) % n;
+        P lip = loop[first], along = (loop[i] - loop[(i + 1) % n]).Unit();
+        double wallLength = 0;
+        var wall = new List<P> { lip }; P direction = (loop[(first + 1) % n] - lip).Unit();
+        if (P.Dot(direction, along) < 0.9) return;
+        // Follow the curved flank to its flat terminal cap. Its return wall must end
+        // on the other side of the same measured straight stroke.
+        for (int k = 1; k < n - 3; k++)
+        {
+            int j = (first + k) % n; P p = loop[j], q = loop[(j + 1) % n];
+            wallLength += (p - wall[wall.Count - 1]).Length;
+            wall.Add(p); P next = (q - p).Unit();
+            if (P.Dot(direction, next) >= 0.8) { direction = next; continue; }
+            P inner = loop[(j + 2) % n], outer = loop[(j + 3) % n];
+            if (wall.Count < 5 || !stem.Supports(inner, outer) || P.Dot(outer - inner, along) <= 0
+                || P.Dot(direction, along) > 0.6 || P.Dot(direction, (q - inner).Unit()) < 0.9
+                || Math.Abs(P.Dot(direction, next)) > 0.3 || Math.Abs(P.Dot(next, (q - inner).Unit())) > 0.3) return;
+            double radius = (q - p).Length * 0.5;
+            if (radius < stem.Radius * 0.4 || radius > stem.Radius * 1.6 || (inner - q).Length < 2 * radius) return;
+            wall.Reverse();
+            List<P> axis = SerifAxis(wall, (p + q) * 0.5, radius, stem, tolerance);
+            if (axis == null || (axis[axis.Count - 1] - lip).Length > radius * 2.5) return;
+            foreach (Stroke stroke in strokes)
+            {
+                if (stroke.Closed) continue;
+                var old = new List<P>(stroke.Points);
+                for (int order = 0; order < 2; order++, old.Reverse())
+                {
+                    // Replace only the free arm leading from this cap onto the stem.
+                    if ((old[0] - axis[0]).Length > radius * 1.8 || Math.Abs(P.Cross(old[0] - axis[0], direction)) > radius * 0.6) continue;
+                    int degree = 0;
+                    foreach (Stroke arm in strokes)
+                    {
+                        if ((arm.Points[0] - old[0]).Length <= tolerance * 0.01) degree++;
+                        if ((arm.Points[arm.Points.Count - 1] - old[0]).Length <= tolerance * 0.01) degree++;
+                    }
+                    if (degree != 1) continue;
+                    double length = 0;
+                    for (int m = 1; m + 1 < old.Count; m++)
+                    {
+                        length += (old[m] - old[m - 1]).Length;
+                        if (length > wallLength + (lip - inner).Length + stem.Radius) break;
+                        if (!stem.OnLine(old[m], tolerance) || !stem.OnLine(old[m + 1], tolerance)
+                            || (old[m] - stem.Project(inner)).Length > 2 * stem.Radius
+                            || P.Dot(old[m + 1] - old[m], along) < stem.Radius) continue;
+                        if (ReplaceCorner(stroke, 0, m, order != 0, axis, axis.Count - 1, false, region, tolerance)) return;
+                    }
+                }
+            }
+            return;
+        }
+    }
+    private static List<P> SerifAxis(List<P> wall, P cap, double radius, StraightAxis stem, double tolerance)
+    {
+        var points = new List<P> { cap }; P tangent = (wall[1] - wall[0]).Unit();
+        int side = Math.Sign(P.Cross(tangent, cap - wall[0]));
+        if (side == 0) return null;
+        double previous = P.Cross(stem.Direction, cap - stem.Origin);
+        for (int i = 1; i < wall.Count; i++)
+        {
+            P next = i + 1 == wall.Count ? tangent : (wall[i + 1] - wall[i]).Unit();
+            P u = (tangent + next).Unit();
+            P point = wall[i] + new P(-u.Y, u.X) * (side * radius);
+            double distance = P.Cross(stem.Direction, point - stem.Origin);
+            if (previous * distance <= 0)
+            {
+                if (points.Count < 2 || previous == distance) return null;
+                P last = points[points.Count - 1];
+                AddDistinct(points, stem.Project(last + (point - last) * (previous / (previous - distance))), tolerance);
+                // Start inside the cap. The common terminal rule sets the final setback.
+                points[0] += (points[1] - cap).Unit() * Math.Min(tolerance * 0.1, (points[1] - cap).Length * 0.1);
+                return points;
+            }
+            AddDistinct(points, point, tolerance); previous = distance; tangent = next;
+        }
+        return null;
+    }
+    private static bool ReplaceCorner(Stroke stroke, int first, int last, bool reverse, List<P> replacement,
+        int vertex, bool straight, Region region, double tolerance)
+    {
+        var insert = new List<P>(replacement);
+        if (reverse)
+        {
+            insert.Reverse(); vertex = insert.Count - 1 - vertex;
+            int end = stroke.Points.Count - 1 - first; first = stroke.Points.Count - 1 - last; last = end;
+        }
+        var points = stroke.Points;
+        if (first > 0 && !region.SegmentInside(points[first - 1], insert[0], tolerance)) return false;
+        for (int i = 1; i < insert.Count; i++) if (!region.SegmentInside(insert[i - 1], insert[i], tolerance)) return false;
+        if (last + 1 < points.Count && !region.SegmentInside(insert[insert.Count - 1], points[last + 1], tolerance)) return false;
+        var corners = new List<int>(stroke.Corners); stroke.Corners.Clear();
+        int removed = last - first + 1;
+        foreach (int c in corners)
+        {
+            if (c < first) stroke.Corners.Add(c);
+            if (c > last) stroke.Corners.Add(c + insert.Count - removed);
+        }
+        points.RemoveRange(first, removed); points.InsertRange(first, insert);
+        for (int i = 0; i < insert.Count; i++) if (straight || i == vertex) stroke.Corners.Add(first + i);
+        stroke.MeasuredCorners.Add(insert[vertex]);
+        return true;
     }
     private static void AddDistinct(List<P> points, P point, double tolerance)
     { if (points.Count == 0 || (points[points.Count - 1] - point).Length > tolerance * 0.001) points.Add(point); }
