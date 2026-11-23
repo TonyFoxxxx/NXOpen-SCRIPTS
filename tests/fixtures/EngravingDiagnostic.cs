@@ -71,7 +71,8 @@ public static class DiagnosticChecks
     private static int checks;
     private static void Check(bool ok,string text){checks++;if(!ok)throw new Exception(text);}
     private static void Reject(Action action){bool failed=false;try{action();}catch{failed=true;}Check(failed,"expected rejection");}
-    public static void Main()
+    public static int Main() { return ManagedTestHost.Run(RunChecks); }
+    private static int RunChecks()
     {
         Console.OutputEncoding=new UTF8Encoding(false);
         CultureInfo.CurrentCulture=CultureInfo.GetCultureInfo("ru-RU");
@@ -126,5 +127,6 @@ public static class DiagnosticChecks
         report.Record("parameter","index",105,"value",new string('Ж',120000));
         report.Finish();
         Console.Error.WriteLine(checks+" diagnostic checks passed");Console.Write(report.ToJson());
+        return 0;
     }
 }

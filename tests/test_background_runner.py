@@ -38,6 +38,14 @@ class BackgroundTests(unittest.TestCase):
                 'name=c.create_unicode_buffer(256); needed=c.c_ulong()\n'
                 'assert u.GetUserObjectInformationW(desk, 2, name, c.sizeof(name), c.byref(needed))\n'
                 'print("Observed " + name.value, flush=True)\n'
+                'assert name.value.startswith("NXOpenTests_")\n'
+                'u.CreateWindowExW.restype=c.c_void_p\n'
+                'hwnd=c.c_void_p(u.CreateWindowExW(0, "STATIC", "test", 0, 0, 0, 20, 20, None, None, None, None))\n'
+                'assert hwnd.value\n'
+                'try:\n'
+                '    u.ShowWindow(hwnd, 5)\n'
+                '    assert u.IsWindowVisible(hwnd), "first ShowWindow on the private desktop"\n'
+                'finally: u.DestroyWindow(hwnd)\n'
                 'if len(sys.argv)==1: subprocess.run([sys.executable, __file__, "child"], check=True)\n',
                 encoding='utf-8')
             result = invoke(log, [str(probe)])

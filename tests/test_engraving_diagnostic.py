@@ -20,9 +20,12 @@ class EngravingDiagnosticTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='nx-engraving-diagnostic-test-') as folder:
             tmp = Path(folder)
             (tmp / 'Program.cs').write_text(harness + '\n' + core, encoding='utf-8')
+            shutil.copyfile(ROOT / 'tests/fixtures/ManagedTestHost.cs', tmp / 'ManagedTestHost.cs')
+            hidden = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
             csc = Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
             if os.name == 'nt' and csc.exists():
-                build = [str(csc), '/nologo', '/utf8output', '/optimize+', '/out:' + str(tmp / 'check.exe'), str(tmp / 'Program.cs')]
+                build = [str(csc), '/nologo', '/utf8output', '/codepage:65001', '/optimize+', '/out:' + str(tmp / 'check.exe'),
+                         str(tmp / 'Program.cs'), str(tmp / 'ManagedTestHost.cs')]
                 run = [str(tmp / 'check.exe')]
             elif shutil.which('dotnet'):
                 (tmp / 'Check.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework><OutputType>Exe</OutputType></PropertyGroup></Project>')
@@ -30,9 +33,9 @@ class EngravingDiagnosticTests(unittest.TestCase):
                 run = ['dotnet', str(tmp / 'out/Check.dll')]
             else:
                 self.skipTest('C# compiler not installed')
-            result = subprocess.run(build, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(build, capture_output=True, encoding='utf-8', errors='replace', timeout=120, creationflags=hidden)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            result = subprocess.run(run, capture_output=True, encoding='utf-8', errors='replace', timeout=60)
+            result = subprocess.run(run, capture_output=True, encoding='utf-8', errors='replace', timeout=60, creationflags=hidden)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('diagnostic checks passed', result.stderr)
             data = json.loads(result.stdout.lstrip('\ufeff'))

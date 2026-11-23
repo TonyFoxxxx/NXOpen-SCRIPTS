@@ -83,7 +83,8 @@ def run(command, log, seconds):
         startup = Startup()
         startup.cb = C.sizeof(startup)
         startup.lpDesktop = name
-        startup.dwFlags = 0x101  # STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW (SW_HIDE)
+        # The desktop itself is private. Allow UI tests to show controls within it.
+        startup.dwFlags = 0x100  # STARTF_USESTDHANDLES
         startup.hStdInput = msvcrt.get_osfhandle(stdin.fileno())
         startup.hStdOutput = startup.hStdError = msvcrt.get_osfhandle(log.fileno())
         process = Process()
