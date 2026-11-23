@@ -87,6 +87,15 @@
       "description": "Средние линии по граням гравировки с разделением пересечений; точки D/2; назначение отдельных цепочек в PLANAR_MILL с Tool Position On."
     },
     {
+      "id": "NX_Engraving_Operation_Diagnostic",
+      "name": "Диагностика операции гравировки",
+      "file": "NX_Engraving_Operation_Diagnostic.cs",
+      "version": "V1",
+      "path": "scripts/NX_Engraving_Operation_Diagnostic.cs",
+      "sha256": "f519f98a0e941eead7fb65f6b6dfd687a5c700fff9ee62066e95231d3112d36e",
+      "description": "Параметры выбранной PLANAR_MILL / PLANAR_PROFILE, наследование, инструмент и геометрия; отчёт и JSON по запросу."
+    },
+    {
       "id": "NX_GOST_Smooth_Text",
       "name": "Гладкий текст ГОСТ А",
       "file": "NX_GOST_Smooth_Text.cs",
