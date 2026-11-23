@@ -21,7 +21,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Clean copy/instance suffixes and counters in all operation names while preserving Z. | [All features](docs/en/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
 | [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.08 | One boundary per curve for PLANAR_MILL / PLANAR_PROFILE. Native Plane construction with offsets, automatic planes, ON and TANTO. | [All features](docs/en/planar-add-curves.md) |
-| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.16 | Engraving centerlines and D/2 dots for an existing or new PLANAR_MILL. | [Full guide](docs/en/planar-mill-curves.md) |
+| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.17 | Engraving centerlines and D/2 dots for an existing or new PLANAR_MILL. | [Full guide](docs/en/planar-mill-curves.md) |
 | [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1.01 | Engraving-operation settings snapshot with a text report and JSON export. | [All features](docs/en/engraving-operation-diagnostic.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Create single-stroke GOST A text from lines and smooth splines using an external FON. | [All features](docs/en/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
@@ -39,7 +39,13 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Engraving centerlines for PLANAR_MILL V1.16 · 2026-11-24
+### Latest update — Engraving centerlines for PLANAR_MILL V1.17 · 2026-11-24
+
+The journal now reads the work part by its UF tag. If NX reports **User abort** at startup, the journal exits normally. An interruption during editing rolls back the curves, boundaries and any new operation from that run. [Guide](docs/en/planar-mill-curves.md#latest-release).
+
+V1.17 source SHA-256 is `9470e594d7f6a105d2031025c533f29c2e61224ce62295a6e6af13bb37a3a5aa`.
+
+### Also released — Engraving centerlines for PLANAR_MILL V1.16 · 2026-11-24
 
 The diagonal meets the crossbar of a bevelled ‘4’ at a sharp corner. The curved serif of a ‘1’ reaches the nose before turning onto the stem. [Guide](docs/en/planar-mill-curves.md#latest-release).
 

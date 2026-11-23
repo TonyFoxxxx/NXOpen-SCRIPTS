@@ -4,11 +4,13 @@
 
 ## Latest release
 
-**V1.16 · 2026-11-24**
+**V1.17 · 2026-11-24**
 
-On a ‘4’ with a bevel at the junction of the diagonal and crossbar, the centerline reaches a sharp vertex inside the bevel and returns to the measured diagonal. On a ‘1’ with a curved serif, the centerline follows the curved flank to its intersection with the straight stem.
+The journal now reads the work part by its UF tag. If NX reports **User abort** at startup, the journal exits normally. An interruption during editing rolls back the curves, boundaries and any new operation from that run.
 
-V1.16 source SHA-256 is `c470268a5e5d1f111604d247e9514c98cc4d5ab06f4436954d19e76700358a03`.
+If NX interrupts the command, the status line shows the stage when available. If rollback fails, the report includes the original error and the undo error. If the report window itself fails to open, the journal writes the report to the NX system log.
+
+V1.17 source SHA-256 is `9470e594d7f6a105d2031025c533f29c2e61224ce62295a6e6af13bb37a3a5aa`.
 
 Source and working filename remain [NX_PlanarMill_Select_Curves.cs](../../scripts/NX_PlanarMill_Select_Curves.cs). Existing buttons need no change. The updater entry is now **«Оси гравировки для PLANAR_MILL»**. No Windows font or original text is required.
 
@@ -44,6 +46,7 @@ The journal applies the new operation settings in one Commit. NX controls Coolan
 
 ## Geometry
 
+- On a ‘4’ with a bevel at the junction of the diagonal and crossbar, the centerline reaches a sharp vertex inside the bevel and returns to the measured diagonal. On a ‘1’ with a curved serif, the centerline follows the curved flank to its intersection with the straight stem.
 - First find visible pairs of straight walls. Build their center axes and intersection graph without character identities, font names or orientation rules. Rectangular, angled and branching strokes share the same method. Short unmatched outline runs can be end caps. Accept the reconstruction only after wall-coverage, connectivity, hole-count and area-consistency checks.
 - This supported outline bypasses skeletonization: a sharp corner is constructed directly as the intersection of two stroke axes. No terminal branch towards the outer outline vertex is created. Moderately tapering walls use their internal angle bisector. A short edge is accepted as a cap only when it meets both walls of the same stroke; a bevel between neighbouring strokes does not create an extra endpoint.
 - If straight wall pairs do not describe the complete outline, use approximate medial reconstruction with straight-run restoration and cubic fitting for curved portions. This is a hybrid geometric method; the original path of an arbitrary font is not always uniquely recoverable.
@@ -63,7 +66,7 @@ Each chain is a separate **NXOpen BoundarySetPlanarMill**. Loops and dot circles
 
 When appending to a **preselected operation**, the journal reopens the builder to check the previous and added boundaries, their member curves and the Open/Closed types. A changed type or an extra closing member triggers rollback. The result shows the number of existing boundaries retained. The selected operation keeps its tool, feeds, depths, compensation and smoothing. Use **Cut Pattern = Profile**. A height difference between the curves and the cut level can look like an offset in perspective.
 
-**To rebuild axes created by V1.15 or earlier**, undo the run in NX, or remove the old curves for the affected face groups from the operation boundaries and the model. Then select those faces again with V1.16.
+**To rebuild axes created by V1.15 or earlier**, undo the run in NX, or remove the old curves for the affected face groups from the operation boundaries and the model. Then select those faces again with the current journal.
 
 An unchanged face group processed by the current algorithm is skipped. Changed source geometry, changed generated boundary membership or a partially selected previous group causes an explanatory stop. For a recalculation, remove the previous axes from the operation and model, or undo the previous run. Repeat detection uses attributes on generated curves; no attributes are added to source faces.
 
@@ -82,6 +85,8 @@ A construction error reports the failed selected face group. Highlight its sourc
 - The journal creates model curves, one shared boundary plane and the operation boundaries. The creation workflow adds one operation. Toolpath calculation and PRT saving are separate NX commands.
 
 ## Validation
+
+The V1.16 entry point reproduced the reported User abort in PartCollection.get_Work in an NX API double. V1.17 cases cover startup, a pending interrupt, a changed or closed work part before editing, cancellation during creation or Commit, failed undo and report-window failure. The full journal compiled as C# 5 against NXOpen 2412 for .NET Framework 4.8 and Windows .NET 10. Interactive verification of V1.17 in Designcenter 2606 is pending.
 
 144 synthetic cases cover the curved serif and clipped triangular corner, variations in wall shape, rotation, reflection, millimetres and inches, and uneven boundary subdivision. The checks measure the corner and fitted curve, physical end setbacks, and the continuity and separation of the routed strokes. The V1.16 journal compiled against NXOpen 2412 for .NET Framework 4.8 and Windows .NET 10. The screenshots provided the shape references. Verification on the original part in Designcenter 2606 is pending.
 

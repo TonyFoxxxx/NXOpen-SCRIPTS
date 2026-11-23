@@ -21,7 +21,7 @@
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Очистка служебных хвостов и нумерации в именах всех операций с сохранением Z. | [Все функции](docs/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
 | [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.08 | Отдельная граница для каждой кривой в PLANAR_MILL / PLANAR_PROFILE. Конструктор Plane со смещением, автоматическая плоскость, ON и TANTO. | [Все функции](docs/planar-add-curves.md) |
-| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.16 | Оси гравировки и точки D/2 для выбранной или новой PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
+| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.17 | Оси гравировки и точки D/2 для выбранной или новой PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
 | [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1.01 | Снимок параметров операции гравировки, отчёт и JSON для диагностики. | [Все функции](docs/engraving-operation-diagnostic.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Создание однолинейного текста ГОСТ А из линий и гладких сплайнов по внешнему FON. | [Все функции](docs/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
@@ -39,7 +39,13 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Оси гравировки для PLANAR_MILL V1.16 · 24.11.2026
+### Последнее обновление — Оси гравировки для PLANAR_MILL V1.17 · 24.11.2026
+
+Журнал получает рабочую деталь по идентификатору UF. Если NX возвращает **User abort** при запуске, журнал штатно завершается. При прерывании записи журнал отменяет созданные за этот запуск кривые, границы и новую операцию, если она успела появиться. [Руководство](docs/planar-mill-curves.md#изменения-последней-версии).
+
+SHA-256 исходника V1.17 — `9470e594d7f6a105d2031025c533f29c2e61224ce62295a6e6af13bb37a3a5aa`.
+
+### Также опубликовано — Оси гравировки для PLANAR_MILL V1.16 · 24.11.2026
 
 У «4» диагональ сходится с перекладиной под острым углом. У «1» ось изогнутой засечки доходит до носика и там переходит в прямой штрих. [Руководство](docs/planar-mill-curves.md#изменения-последней-версии).
 

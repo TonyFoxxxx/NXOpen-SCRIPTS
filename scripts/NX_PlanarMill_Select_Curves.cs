@@ -1,5 +1,5 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.16
+// SCRIPT_VERSION: V1.17
 // Select an existing PLANAR_MILL or choose the parents for a new engraving operation.
 // Reconstructs straight and curved centerlines; round/compact square dots use half-width circles.
 // Free physical ends stop half the local stroke width before the terminal boundary.
@@ -27,7 +27,7 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.16";
+    private const string SCRIPT_VERSION = "V1.17";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
     private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "16";
@@ -71,11 +71,17 @@ public class NXPlanarMillSelectCurves
     }
     public static void Main(string[] args)
     {
-        Session session = Session.GetSession(); UFSession uf = UFSession.GetUFSession(); Part part = session.Parts.Work;
+        Session session = null; UFSession uf = null;
         Session.UndoMarkId mark = default(Session.UndoMarkId); bool hasMark = false, committed = false;
+        string stage = "Подключение к NX", status = "";
         try
         {
+            session = Session.GetSession(); uf = UFSession.GetUFSession();
+            stage = "Чтение рабочей детали";
+            Tag workTag = ReadWorkPartTag(uf);
+            Part part = workTag == Tag.Null ? null : NXObjectManager.Get(workTag) as Part;
             if (part == null || part.CAMSetup == null) throw new InvalidOperationException("Откройте CAM-проект в Manufacturing.");
+            stage = "Определение операции гравировки";
             NCGroup selectedGroup;
             PlanarMilling operation = SelectedOperation(uf, part, out selectedGroup);
             EngravingParents parents = null;
@@ -90,37 +96,106 @@ public class NXPlanarMillSelectCurves
                 EnsureNoInheritedBoundaries(uf, operation);
                 assigned = AssignedCurves(uf, operation);
             }
+            stage = "Выбор граней";
             Face[] faces = SelectFaces(); if (faces == null) return;
+            stage = "Построение осей";
             double unit = part.PartUnits == BasePart.Units.Inches ? 1 / 25.4 : 1;
             double tolerance = 0.002 * unit, joinTolerance = 0.000001 * unit;
             PlanarCurveChains.Frame frame; int skipped;
             List<FaceGroup> groups = Prepare(uf, part, faces, assigned, tolerance, joinTolerance, out frame, out skipped);
-            if (groups.Count == 0) { Show(NXMessageBox.DialogType.Information, "Средние линии выбранных граней уже назначены этой операции."); return; }
-            if (session.Parts.Work == null || session.Parts.Work.Tag != part.Tag)
+            if (groups.Count == 0) { status = ShowReport(session, NXMessageBox.DialogType.Information, "Средние линии выбранных граней уже назначены этой операции."); return; }
+            stage = "Проверка рабочей детали перед записью";
+            if (ReadWorkPartTag(uf) != workTag)
                 throw new InvalidOperationException("Рабочая деталь изменилась. Запустите скрипт заново.");
+            stage = "Запись операции и границ";
             mark = session.SetUndoMark(Session.MarkVisibility.Visible, "Оси гравировки: " + (operation == null ? "GRAVIROVKA" : operation.Name));
             hasMark = true;
             if (parents != null) operation = parents.Create(part);
             string report = AssignAxes(uf, part, operation, parents, groups, frame, assigned, skipped, unit, joinTolerance);
             committed = true; hasMark = false;
             try { uf.UiOnt.Refresh(); } catch { }
-            Show(NXMessageBox.DialogType.Information, report);
+            status = ShowReport(session, NXMessageBox.DialogType.Information, report);
         }
         catch (Exception ex)
         {
-            string state = committed ? "Изменения уже внесены; отмена доступна через Ctrl+Z." : "Операция не изменена.";
-            if (hasMark) try { session.UndoToMark(mark, null); session.DeleteUndoMark(mark, null); state = "Изменения этого запуска отменены."; }
-                catch (Exception undoError) { state = "Не удалось полностью отменить изменения: " + undoError.Message; }
+            string state = committed ? "Изменения уже внесены. Их можно отменить через Ctrl+Z." : "Операция не изменена.";
+            bool undoProblem = false;
+            if (hasMark)
+            {
+                bool undone = false;
+                try
+                {
+                    session.UndoToMark(mark, null); undone = true; state = "Изменения этого запуска отменены.";
+                    session.DeleteUndoMark(mark, null);
+                }
+                catch (Exception undoError)
+                {
+                    undoProblem = true;
+                    state = (undone ? state + " Не удалось удалить метку отмены." : "Не удалось полностью отменить изменения.")
+                        + "\n" + ErrorDetails(undoError);
+                }
+            }
+            if (!undoProblem && IsUserAbort(ex))
+            {
+                status = "NX прервал выполнение на этапе «" + stage + "». " + state;
+                WriteLog(session, status + "\n" + ErrorDetails(ex));
+                return;
+            }
             // Highlight only the failed source group while its error is visible.
             // This is display feedback, not a partial commit or a geometry edit.
             var highlighted = new List<Face>(); FaceGeometryException geometry = ex as FaceGeometryException;
             if (geometry != null) foreach (Face face in geometry.Faces)
                 try { face.Highlight(); highlighted.Add(face); } catch { }
-            try { Show(NXMessageBox.DialogType.Error, ex.Message
+            try { status = ShowReport(session, NXMessageBox.DialogType.Error, stage + "\n" + ErrorDetails(ex)
                 + (highlighted.Count > 0 ? "\n\nПроблемные грани подсвечены на время этого сообщения." : "") + "\n\n" + state); }
             finally { foreach (Face face in highlighted) try { face.Unhighlight(); } catch { } }
         }
-        finally { try { uf.Ui.SetStatus(""); } catch { } }
+        finally { if (uf != null) try { uf.Ui.SetStatus(status); } catch { } }
+    }
+    private static Tag ReadWorkPartTag(UFSession uf)
+    {
+        // UF returns the actual work part, including in an assembly. Leave pending
+        // interrupts to NX and never substitute the displayed part or retry a lookup.
+        bool interrupted; uf.Abort.AskFlagStatus(out interrupted);
+        if (interrupted) throw new OperationCanceledException("От NX поступил запрос остановки.");
+        return uf.Assem.AskWorkPart();
+    }
+    private static bool IsUserAbort(Exception error)
+    {
+        if (error is OperationCanceledException) return true;
+        NXException native = NativeError(error);
+        return native != null && (native.ErrorCode == UFConstants.UF_STD_ERR_USER_ABORT || native.ErrorCode == UFConstants.USER_ABORT
+            || String.Equals(native.Message.Trim().TrimEnd('.'), "User abort", StringComparison.OrdinalIgnoreCase));
+    }
+    private static NXException NativeError(Exception error)
+    {
+        for (; error != null; error = error.InnerException)
+            if (error is NXException) return (NXException)error;
+        return null;
+    }
+    private static string ErrorDetails(Exception error)
+    {
+        NXException native = NativeError(error);
+        if (native == null) return error.Message;
+        string message = error.Message;
+        if (!message.Contains(native.Message)) message += "\n" + native.Message;
+        return message + "\nКод NX " + native.ErrorCode.ToString(CultureInfo.InvariantCulture);
+    }
+    private static bool WriteLog(Session session, string message)
+    {
+        if (session == null) return false;
+        try { session.LogFile.WriteLine(Title + "\n" + message); return true; } catch { return false; }
+    }
+    private static string ShowReport(Session session, NXMessageBox.DialogType type, string report)
+    {
+        try { Show(type, report); return ""; }
+        catch (Exception error)
+        {
+            // The NX dialog can itself raise User abort. Preserve the original report.
+            if (WriteLog(session, report + "\nОшибка окна отчёта. " + ErrorDetails(error)))
+                return "Отчёт журнала гравировки записан в системный журнал NX.";
+            return report.Replace("\n", " ");
+        }
     }
     private static string AssignAxes(UFSession uf, Part part, PlanarMilling operation, EngravingParents parents,
         List<FaceGroup> groups, PlanarCurveChains.Frame frame, HashSet<Tag> assigned, int skipped, double unit, double joinTolerance)

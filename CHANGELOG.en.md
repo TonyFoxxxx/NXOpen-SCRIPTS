@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-24 — Engraving centerlines for PLANAR_MILL V1.17
+
+The journal now reads the work part by its UF tag. If NX reports **User abort** at startup, the journal exits normally. An interruption during editing rolls back the curves, boundaries and any new operation from that run. [Guide](docs/en/planar-mill-curves.md#latest-release).
+
+V1.17 source SHA-256 is `9470e594d7f6a105d2031025c533f29c2e61224ce62295a6e6af13bb37a3a5aa`.
+
 ## 2026-11-24 — Engraving centerlines for PLANAR_MILL V1.16
 
 The diagonal meets the crossbar of a bevelled ‘4’ at a sharp corner. The curved serif of a ‘1’ reaches the nose before turning onto the stem. [Guide](docs/en/planar-mill-curves.md#latest-release).

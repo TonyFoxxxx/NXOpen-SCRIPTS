@@ -5,6 +5,16 @@ using System.Globalization;
 using CamOperation = Operation;
 
 internal enum Tag { Null }
+internal static class UFConstants
+{
+    public const int UF_STD_ERR_USER_ABORT = 1570003;
+    public const int USER_ABORT = 875127;
+}
+internal class NXException : Exception
+{
+    internal int ErrorCode { get; private set; }
+    internal NXException(int code, string message) : base(message) { ErrorCode = code; }
+}
 internal class NXObject
 {
     static int sequence;
@@ -47,6 +57,8 @@ internal class OperationCollection
         var op = new PlanarMilling { Name = name, Parents = new NCGroup[] { p, m, t, g }, OwningPart = Checks.Part };
         Items.Add(op);
         if (Checks.Mode == "create-failure") throw new Exception("synthetic partial creation");
+        if (Checks.Mode == "create-abort" || Checks.Mode == "undo-failure" || Checks.Mode == "delete-mark-failure")
+            throw new NXException(UFConstants.USER_ABORT, "Отмена");
         NXObjectManager.Items[op.Tag] = op;
         return op;
     }
@@ -107,6 +119,7 @@ internal class PlanarMillingBuilder
     {
         owner.Commits++; Checks.Edits.Add("axes");
         if (Checks.Mode == "after-axes") throw new InvalidOperationException("synthetic native Commit failure");
+        if (Checks.Mode == "commit-abort") throw new NXException(UFConstants.UF_STD_ERR_USER_ABORT, "Отмена");
         operation.Saved.Clear();
         foreach (BoundarySetPlanarMill item in PartBoundary.Items) operation.Saved.Add(item);
         if (Checks.Mode == "normalized")
@@ -131,25 +144,81 @@ internal class Session
 {
     internal enum UndoMarkId { Edit }
     internal enum MarkVisibility { Visible }
-    internal class PartsList { internal Part Work; }
+    internal class PartsList
+    {
+        internal Part Work
+        {
+            get
+            {
+                if (Checks.Mode == "managed-work-abort") throw new NXException(999, "User abort");
+                return Checks.Part;
+            }
+        }
+    }
     internal PartsList Parts = new PartsList();
+    internal class Log
+    {
+        internal string Text = "";
+        public void WriteLine(string message) { Text += message + "\n"; }
+    }
+    internal Log LogFile = new Log();
     public static Session Current;
-    public static Session GetSession() { return Current; }
+    public static Session GetSession()
+    {
+        if (Checks.Mode == "session-abort") throw new NXException(UFConstants.UF_STD_ERR_USER_ABORT, "Отмена");
+        return Current;
+    }
     internal int Marks, Undos, RemovedMarks;
     private Operation[] before;
     internal UndoMarkId SetUndoMark(MarkVisibility visible, string name)
-    { Marks++; before = Parts.Work.CAMSetup.CAMOperationCollection.ToArray(); return UndoMarkId.Edit; }
+    { Marks++; before = Checks.Part.CAMSetup.CAMOperationCollection.ToArray(); return UndoMarkId.Edit; }
     internal void UndoToMark(UndoMarkId mark, string name)
     {
-        Undos++; var list = Parts.Work.CAMSetup.CAMOperationCollection.Items;
+        Undos++;
+        if (Checks.Mode == "undo-failure") throw new NXException(605, "synthetic undo failure");
+        var list = Checks.Part.CAMSetup.CAMOperationCollection.Items;
         list.Clear(); list.AddRange(before); Checks.Edits.Clear();
     }
-    internal void DeleteUndoMark(UndoMarkId mark, string name) { RemovedMarks++; }
+    internal void DeleteUndoMark(UndoMarkId mark, string name)
+    {
+        if (Checks.Mode == "delete-mark-failure") throw new NXException(606, "synthetic delete mark failure");
+        RemovedMarks++;
+    }
 }
 internal class UFSession
 {
     public static UFSession Current;
-    public static UFSession GetUFSession() { return Current; }
+    public static UFSession GetUFSession()
+    {
+        if (Checks.Mode == "uf-abort") throw new NXException(UFConstants.USER_ABORT, "Отмена");
+        return Current;
+    }
+    internal class Assembly
+    {
+        internal int Calls;
+        public Tag AskWorkPart()
+        {
+            Calls++;
+            if (Checks.Mode == "work-abort") throw new NXException(999, "User abort");
+            if (Checks.Mode == "work-error" || Checks.Mode == "error-dialog-abort")
+                throw new NXException(314, "synthetic work part failure");
+            if (Checks.Mode == "null-work" || (Calls == 2 && Checks.Mode == "closed-work")) return Tag.Null;
+            if (Calls == 2 && Checks.Mode == "changed-work") return (Tag)909;
+            if (Calls == 2 && Checks.Mode == "recheck-abort") throw new NXException(UFConstants.UF_STD_ERR_USER_ABORT, "Отмена");
+            return Checks.Part.Tag;
+        }
+    }
+    internal readonly Assembly Assem = new Assembly();
+    internal class AbortApi
+    {
+        int reads;
+        public void AskFlagStatus(out bool interrupted)
+        {
+            reads++;
+            interrupted = Checks.Mode == "pending-abort" || (reads == 2 && Checks.Mode == "pending-at-write");
+        }
+    }
+    internal readonly AbortApi Abort = new AbortApi();
     internal class Navigator
     {
         public int Count;
@@ -157,7 +226,12 @@ internal class UFSession
         public void AskSelectedNodes(out int count, out Tag[] tags) { count = Count; tags = Tags; }
         public void Refresh() { }
     }
-    internal class UiApi { public IntPtr GetDefaultParent() { return (IntPtr)1; } public void SetStatus(string text) { } }
+    internal class UiApi
+    {
+        public string Status = "";
+        public IntPtr GetDefaultParent() { return (IntPtr)1; }
+        public void SetStatus(string text) { Status = text; }
+    }
     internal readonly Navigator UiOnt = new Navigator();
     internal readonly UiApi Ui = new UiApi();
     internal readonly UFParam Param = new UFParam();
@@ -187,6 +261,8 @@ internal class Workflow
     {
         skipped = 0; frame = new PlanarCurveChains.Frame();
         if (Checks.Mode == "bad-geometry") throw new Exception("synthetic invalid face");
+        if (Checks.Mode == "wrapped-abort") throw new InvalidOperationException("synthetic group", new NXException(999, "User abort"));
+        if (Checks.Mode == "similar-error") throw new NXException(315, "User abort recovery failed");
         return Checks.Mode == "already-assigned" ? new List<FaceGroup>() : new List<FaceGroup> { new FaceGroup() };
     }
     static void EnsureNoInheritedBoundaries(UFSession uf, PlanarMilling op) { }
@@ -215,7 +291,12 @@ internal class Workflow
         CommitBoundaries(uf, part, op, parents, unit, new Plane(), new Matrix3x3(), curves, chains, previous, assigned);
         return op.Name;
     }
-    static void Show(NXMessageBox.DialogType type, string message) { Checks.LastMessage = message; Checks.LastType = type; }
+    static void Show(NXMessageBox.DialogType type, string message)
+    {
+        Checks.Dialogs++;
+        if (Checks.Mode == "success-dialog-abort" || Checks.Mode == "error-dialog-abort") throw new NXException(999, "User abort");
+        Checks.LastMessage = message; Checks.LastType = type;
+    }
     // JOURNAL WORKFLOW
 }
 
@@ -316,6 +397,7 @@ internal class Checks
     internal static string Mode, LastMessage;
     internal static NXMessageBox.DialogType LastType;
     internal static List<string> Edits = new List<string>();
+    internal static int Dialogs;
     static int count;
     public static void Expect(bool result, string reason)
     { if (!result) throw new Exception(reason); count++; }
@@ -328,9 +410,9 @@ internal class Checks
     }
     static void Reset(string mode)
     {
-        Mode = mode; Edits.Clear(); LastMessage = ""; LastType = NXMessageBox.DialogType.Information;
+        Mode = mode; Edits.Clear(); Dialogs = 0; LastMessage = ""; LastType = NXMessageBox.DialogType.Information;
         EngravingParentDialog.Calls = 0; EngravingParentDialog.Defaults = null; NXObjectManager.Items.Clear();
-        Session.Current = new Session(); Part = Session.Current.Parts.Work = new Part();
+        Session.Current = new Session(); Part = new Part(); NXObjectManager.Items[Part.Tag] = Part;
         UFSession.Current = new UFSession(); UFSession.Current.Cam = new ClearanceApi { Param = UFSession.Current.Param };
         var prog = Group<NCGroup>("Programs", null); Group<NCGroup>("Pocket", prog);
         var method = Group<Method>("Method", null); Group<Method>("Finish", method);
@@ -347,6 +429,45 @@ internal class Checks
     }
     static void Run() { Workflow.Main(new string[0]); }
     static int Ops { get { return Part.CAMSetup.CAMOperationCollection.Items.Count; } }
+    static void InterruptCases()
+    {
+        // The live stack stopped in PartCollection.get_Work. The UF work-part tag can
+        // identify a valid CAM part directly, including when a different part is displayed.
+        Reset("managed-work-abort"); Run();
+        Expect(Ops == 1 && UFSession.Current.Assem.Calls == 2 && Session.Current.Undos == 0, "work-part entry and pre-edit identity");
+        foreach (string mode in new[] { "session-abort", "uf-abort", "work-abort", "recheck-abort", "wrapped-abort", "pending-abort", "pending-at-write" })
+        {
+            Reset(mode); Run();
+            Expect(Ops == 0 && Edits.Count == 0 && Session.Current.Marks == 0 && Dialogs == 0, mode);
+            if (mode == "work-abort")
+                Expect(UFSession.Current.Assem.Calls == 1 && EngravingParentDialog.Calls == 0 && Session.Current.LogFile.Text.Contains("999"), "retried or lost cancellation code");
+            if (mode == "pending-abort" || mode == "pending-at-write")
+                Expect(UFSession.Current.Assem.Calls == (mode == "pending-abort" ? 0 : 1), "ignored pending NX interrupt");
+        }
+        foreach (string mode in new[] { "null-work", "closed-work", "changed-work", "work-error", "similar-error" })
+        {
+            Reset(mode); Run();
+            Expect(Ops == 0 && Session.Current.Marks == 0 && LastType == NXMessageBox.DialogType.Error && Dialogs == 1, mode);
+            if (mode == "work-error") Expect(LastMessage.Contains("314") && LastMessage.Contains("synthetic work part failure"), "lost work-part diagnostic");
+        }
+        foreach (string mode in new[] { "create-abort", "commit-abort" })
+        {
+            Reset(mode); Run();
+            Expect(Ops == 0 && Edits.Count == 0 && Session.Current.Undos == 1 && Session.Current.RemovedMarks == 1 && Dialogs == 0, mode);
+            Expect(UFSession.Current.Ui.Status.Contains("отменены"), "lost rollback status");
+        }
+        Reset("undo-failure"); Run();
+        Expect(Ops == 1 && Session.Current.Undos == 1 && Session.Current.RemovedMarks == 0 && Dialogs == 1
+            && LastType == NXMessageBox.DialogType.Error && LastMessage.Contains("synthetic undo failure") && LastMessage.Contains("605"), "hidden rollback failure");
+        Reset("delete-mark-failure"); Run();
+        Expect(Ops == 0 && Session.Current.Undos == 1 && LastMessage.Contains("отменены")
+            && LastMessage.Contains("synthetic delete mark failure"), "mark cleanup misreported as a failed undo");
+        Reset("success-dialog-abort"); Run();
+        Expect(Ops == 1 && Session.Current.Undos == 0 && Dialogs == 1 && Session.Current.LogFile.Text.Contains("GRAVIROVKA"), "lost committed result");
+        Reset("error-dialog-abort"); Run();
+        Expect(Ops == 0 && Dialogs == 1 && Session.Current.LogFile.Text.Contains("314")
+            && Session.Current.LogFile.Text.Contains("synthetic work part failure"), "secondary dialog failure masked the original error");
+    }
     static void WorkflowCases()
     {
         foreach (string mode in new string[] { "parent-cancel", "face-cancel", "bad-geometry", "already-assigned" })
@@ -447,6 +568,6 @@ internal class Checks
     }
     public static int Main()
     {
-        return ManagedTestHost.Run(delegate { WorkflowCases(); PresetCases(); Console.WriteLine(count + " engraving creation checks passed"); return 0; });
+        return ManagedTestHost.Run(delegate { InterruptCases(); WorkflowCases(); PresetCases(); Console.WriteLine(count + " engraving creation checks passed"); return 0; });
     }
 }
