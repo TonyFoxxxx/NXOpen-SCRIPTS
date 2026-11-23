@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-23 — Engraving operation diagnostic V1
+
+A separate journal reads the selected PLANAR_MILL / PLANAR_PROFILE, inheritance, groups, tool, geometry and available editor properties. Save JSON writes to a chosen location; Copy all copies the complete report. The main engraving script does not yet create operations automatically.
+
+JSON preserves typed values and explicit unavailable-data markers. The journal never commits, creates operations or saves the PRT. Compilation for both DC 2606 runtimes, readers, JSON and failure handling were checked outside NX. Live execution is still unverified.
+
 ## 2026-11-23 — Curves for PLANAR V1.03
 
 TANTO now has two independent pairs of checkboxes. Select Inside or Outside for closed curves and Left or Right for open curves. A mixed selection can use any of the four combinations in a single run. ON remains the default. [Guide](docs/en/planar-add-curves.md#latest-release).
