@@ -179,7 +179,8 @@ public class Record
     }
     public void Apply(BoundarySetPlanarMill row)
     {
-        Position=row.ToolPosition; Side=row.ToolSide; CustomOffset=row.CustomOffset; Offset=row.Offset;
+        Position=row.ToolPosition; CustomOffset=row.CustomOffset; Offset=row.Offset;
+        if (!Model.IgnoreOpenSide || row.BoundaryType!=BoundarySet.BoundaryTypes.Open) Side=row.ToolSide;
         Settings.has_stock=row.CustomStock?1:0; Settings.has_tolerances=row.CustomTolerance?1:0;
         for(int i=0;i<Members.Length;i++) {
             var item=(BoundaryMemberSetPlanarMill)row.BoundaryMemberList[i];
@@ -194,7 +195,7 @@ public static class Model
     public static Dictionary<Tag,Curve> Curves; public static List<TaggedObject> Selection;
     public static List<Record> Records; public static PlanarCurveOptions Options;
     public static string Report; public static int Severity,Marks,Undos,Commits,Calls,FailAt,MergeAt;
-    public static bool Inherited,KeepPlaceholder,NullPlaceholderMember,WrongEditorDefaults,DropOnCommit,CorruptOld,WrongClosure;
+    public static bool Inherited,KeepPlaceholder,NullPlaceholderMember,WrongEditorDefaults,DropOnCommit,CorruptOld,WrongClosure,IgnoreOpenSide;
     public static Tag DropTag,DuplicateTag,SubstituteTag; static List<Record> undo; static bool undoInherited;
     public static void SaveUndo(){ undo=Records.ConvertAll(r=>r.Copy()); undoInherited=Inherited; }
     public static void RestoreUndo(){ Records=undo.ConvertAll(r=>r.Copy()); Inherited=undoInherited; }
@@ -204,7 +205,7 @@ public static class Model
         Op=new PlanarMilling {Tag=(Tag)9000, OwningPart=Session.Parts.Work, Name="PLANAR_TEST"};
         Curves=new Dictionary<Tag,Curve>(); Selection=new List<TaggedObject>(); Records=new List<Record>();
         Options=new PlanarCurveOptions(); Report=""; Severity=-1; Marks=Undos=Commits=Calls=FailAt=MergeAt=0;
-        Inherited=KeepPlaceholder=NullPlaceholderMember=WrongEditorDefaults=DropOnCommit=CorruptOld=WrongClosure=false;
+        Inherited=KeepPlaceholder=NullPlaceholderMember=WrongEditorDefaults=DropOnCommit=CorruptOld=WrongClosure=IgnoreOpenSide=false;
         DuplicateTag=DropTag=SubstituteTag=Tag.Null;
     }
     public static Curve AddCurve(int n,bool closed)
@@ -228,6 +229,7 @@ public static class PlanarChecks
     static void EmptyTo36(bool keepPlaceholder,bool inherited)
     {
         Model.Reset(); Model.KeepPlaceholder=keepPlaceholder; Model.NullPlaceholderMember=keepPlaceholder; Model.Inherited=inherited;
+        Model.Options.ClosedOutside=true; Model.Options.OpenRight=true; // Dormant choices after returning to ON.
         Select36(); Model.Selection.Add(Model.Selection[0]); Model.Run(); Success();
         Check(Model.Report.Contains("до запуска: 0") && Model.Report.Contains("до добавления: 1"),"separate editor and saved counts");
         Check(Model.Records.Count==36 && Model.Calls==36 && Model.Marks==1 && Model.Commits==0,"one native append per curve, one undo, no redundant commit");
@@ -236,30 +238,55 @@ public static class PlanarChecks
             Record r=Model.Records[i];
             Check(r.Tags.Length==1 && r.Tags[0]==(Tag)(101+i),"one original tag per boundary");
             Check(r.Members[0].tool_position==CamToolPosition.CamToolPositionOn && r.Position==BoundarySet.ToolPositionTypes.On,"ON");
+            Check(r.Definition.material_side==CamMaterialSide.CamMaterialSideInLeft,"ON ignores dormant TANTO settings");
             Check((r.Definition.boundary_type==CamBoundaryType.CamBoundaryTypeClosed)==((i+1)%4==0),"Open/Closed");
         }
         Check(Model.Report.Contains("Open: 27; Closed: 9"),"correct breakdown");
         Model.Run(); Check(Model.Severity==1 && Model.Calls==36 && Model.Marks==1,"second run skips assigned curves");
         Model.Session.UndoToMark(new Session.UndoMarkId(),null); Check(Model.Records.Count==0 && Model.Inherited==inherited,"one-step undo");
     }
-    static void PreserveAndTanto(bool outside)
+    static void PreserveAndTanto(bool outside, bool right)
     {
         Model.Reset(); Model.AddCurve(500,true); Model.Run(); Success();
         Record old=Model.Records[0]; old.CustomOffset=true; old.Offset=1.25; old.Settings.has_stock=1; old.Settings.stock=4.5;
         Model.Records.Add(new Record {Tags=new Tag[0],Members=new UFCambnd.AppData[0],Definition=old.Definition});
         Model.Records.Add(new Record {Tags=new[]{Tag.Null},Members=new UFCambnd.AppData[1],Definition=old.Definition});
-        Model.Options.Tanto=true; Model.Options.Outside=outside; Model.WrongEditorDefaults=outside;
+        Model.Options.Tanto=true; Model.Options.ClosedOutside=outside; Model.Options.OpenRight=right; Model.WrongEditorDefaults=outside || right;
         Model.AddCurve(501,false); Model.AddCurve(502,true); Model.Run(); Success();
         Check(Model.Records.Count==5 && Model.Records[1].Tags.Length==0 && Model.Records[2].Tags[0]==Tag.Null,"preserve real empty/permanent boundaries");
         Check(Model.Records[0].Settings.stock==4.5 && Model.Records[0].Position==BoundarySet.ToolPositionTypes.On && Model.Records[0].Offset==1.25,"existing options");
-        Check(Model.Records[3].Side==(outside?BoundarySet.ToolSideTypes.OutsideOrRight:BoundarySet.ToolSideTypes.InsideOrLeft)
-            && Model.Records[4].Members[0].tool_position==CamToolPosition.CamToolPositionTanto,"TANTO applied to each new boundary");
-        Check(Model.Commits==(outside?1:0),"commit only corrected settings"); Check(Model.Report.Contains("пропущено: 1"),"existing curve skipped");
+        Check(Model.Records[3].Side==(right?BoundarySet.ToolSideTypes.OutsideOrRight:BoundarySet.ToolSideTypes.InsideOrLeft),"open tool side");
+        Check(Model.Records[4].Side==(outside?BoundarySet.ToolSideTypes.OutsideOrRight:BoundarySet.ToolSideTypes.InsideOrLeft),"closed tool side");
+        Check(Model.Records[3].Members[0].tool_position==CamToolPosition.CamToolPositionTanto && Model.Records[4].Members[0].tool_position==CamToolPosition.CamToolPositionTanto,"TANTO on both members");
+        Check(Model.Commits==((outside||right)?1:0),"commit only corrected settings"); Check(Model.Report.Contains("пропущено: 1"),"existing curve skipped");
+    }
+    static void Mixed36(bool outside,bool right)
+    {
+        Model.Reset(); Select36(); Model.Options.Tanto=true;
+        Model.Options.ClosedOutside=outside; Model.Options.OpenRight=right;
+        Model.Run(); Success();
+        Check(Model.Records.Count==36 && Model.Calls==36 && Model.Marks==1,"36 separate TANTO boundaries");
+        foreach(Record record in Model.Records)
+        {
+            bool closed=Model.Curves[record.Tags[0]].Closed;
+            bool alternate=closed ? outside : right;
+            Check(record.Tags.Length==1 && record.Members[0].tool_position==CamToolPosition.CamToolPositionTanto,"one TANTO member");
+            Check(record.Definition.material_side==(alternate?CamMaterialSide.CamMaterialSideOutRight:CamMaterialSide.CamMaterialSideInLeft),"native side chosen per curve");
+            Check(record.Side==(alternate?BoundarySet.ToolSideTypes.OutsideOrRight:BoundarySet.ToolSideTypes.InsideOrLeft),"verified editor side per curve");
+        }
+        Check(Model.Report.Contains("Замкнутых границ со стороной "+(outside?"Outside — снаружи":"Inside — внутри")+": 9"),"closed report");
+        Check(Model.Report.Contains("Открытых границ со стороной "+(right?"Right — справа":"Left — слева")+": 27"),"open report");
     }
     public static void Main()
     {
         EmptyTo36(false,true); EmptyTo36(true,false);
-        PreserveAndTanto(false); PreserveAndTanto(true);
+        foreach(bool outside in new[]{false,true}) foreach(bool right in new[]{false,true})
+        {
+            PreserveAndTanto(outside,right); Mixed36(outside,right);
+        }
+        Model.Reset(); Select36(); Model.Options.Tanto=true; Model.Options.OpenRight=true;
+        Model.WrongEditorDefaults=true; Model.IgnoreOpenSide=true; Model.Run(); RolledBack();
+        Check(Model.Records.Count==0 && Model.Report.Contains("OutsideOrRight"),"an unpersisted side on open curves triggers rollback");
         Model.Reset(); Select36(); Model.Inherited=true; Model.DropTag=(Tag)136; Model.Run(); RolledBack();
         Check(Model.Records.Count==0 && Model.Inherited && Model.Report.Contains("ожидалось 36, фактически 35") && Model.Report.Contains("136"),"missing curve diagnosed and original restored");
         Model.Reset(); Select36(); Model.MergeAt=2; Model.Run(); RolledBack(); Check(Model.Report.Contains("101, 102"),"merged rows identified");

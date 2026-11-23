@@ -13,18 +13,24 @@ CSC = Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Microsoft.NET/Framework64/
 
 class SeparatePlanarBoundaries(unittest.TestCase):
     @unittest.skipUnless(CSC.is_file(), 'Windows .NET Framework compiler unavailable')
-    def test_dialogs_compile_with_base_runtime_only(self):
+    def test_native_side_checkboxes_with_base_runtime_only(self):
         source = SOURCE.read_text(encoding='utf-8')
         imports = [line for line in source.splitlines() if line.startswith('using ') and 'NXOpen' not in line]
         windows = source.split('// BEGIN PLANAR CURVE WINDOWS\n', 1)[1].split('// END PLANAR CURVE WINDOWS', 1)[0]
         with tempfile.TemporaryDirectory(prefix='nx-planar-ui-') as folder:
             unit = Path(folder) / 'Dialogs.cs'
             unit.write_text('\n'.join(imports) + '\n' + windows, encoding='utf-8-sig')
-            command = [str(CSC), '/nologo', '/noconfig', '/nostdlib+', '/target:library',
+            executable = unit.with_suffix('.exe')
+            fixture = ROOT / 'tests/fixtures/PlanarSideSelection.cs'
+            command = [str(CSC), '/nologo', '/noconfig', '/nostdlib+', '/target:exe',
                        '/reference:' + str(CSC.parent / 'mscorlib.dll'), '/reference:' + str(CSC.parent / 'System.dll'),
-                       '/out:' + str(unit.with_suffix('.dll')), str(unit)]
+                       '/out:' + str(executable), str(unit), str(fixture)]
             result = subprocess.run(command, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            checked = subprocess.run([str(executable)], text=True, capture_output=True, timeout=25)
+            if checked.returncode == 77:
+                self.skipTest('A private Windows desktop is unavailable')
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
 
     @unittest.skipUnless(CSC.is_file() or (shutil.which('mcs') and shutil.which('mono')), 'C# compiler unavailable')
     def test_journal_boundary_transactions(self):

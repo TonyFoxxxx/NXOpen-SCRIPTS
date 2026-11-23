@@ -1,5 +1,5 @@
 // NX_Planar_Add_Curves.cs - separate curve boundaries for PLANAR_MILL / PLANAR_PROFILE.
-// SCRIPT_VERSION: V1.02
+// SCRIPT_VERSION: V1.03
 // Select one planar operation, choose ON / TANTO, then select existing work-part curves.
 // Each new curve becomes one Part Boundary; geometrically closed curves remain Closed.
 // Existing assignments are skipped. No chaining, new curves, files or automatic toolpath generation.
@@ -18,7 +18,7 @@ using CamOperation = NXOpen.CAM.Operation;
 
 public class NXPlanarAddCurves
 {
-    private const string SCRIPT_VERSION = "V1.02";
+    private const string SCRIPT_VERSION = "V1.03";
     private static readonly string Title = "Кривые в PLANAR — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
 
@@ -46,7 +46,11 @@ public class NXPlanarAddCurves
             PlanarCurveOptions options = PlanarCurveWindows.AskOptions(uf.Ui.GetDefaultParent(), Title, operation.Name);
             if (options == null) return;
             report.AppendLine("Режим: " + options.ModeLabel);
-            if (options.Tanto) report.AppendLine("Сторона: " + options.SideLabel);
+            if (options.Tanto)
+            {
+                report.AppendLine("Замкнутые кривые: " + options.ClosedSideLabel);
+                report.AppendLine("Открытые кривые: " + options.OpenSideLabel);
+            }
 
             stage = "Выбор кривых";
             List<Curve> selected = SelectCurves();
@@ -100,7 +104,7 @@ public class NXPlanarAddCurves
                 Curve curve = pending[i];
                 stage = "Добавление кривой " + (i + 1) + "/" + pending.Count + ": " + CurveLabel(curve);
                 uf.Ui.SetStatus(stage);
-                SeparatePlanarBoundary.Append(uf.Cambnd, operation.Tag, curve.Tag, requested[curve.Tag], options.Tanto, options.Outside);
+                SeparatePlanarBoundary.Append(uf.Cambnd, operation.Tag, curve.Tag, requested[curve.Tag], options);
             }
             stage = "Чтение сохранённых Part Boundaries после добавления";
             SeparatePlanarBoundary.Saved added = SeparatePlanarBoundary.Read(uf.Cambnd, operation.Tag);
@@ -122,8 +126,9 @@ public class NXPlanarAddCurves
             report.AppendLine("Результат: успешно.");
             report.AppendLine("Добавлено отдельных границ: " + pending.Count);
             report.AppendLine("Open: " + (pending.Count - closed) + "; Closed: " + closed + ".");
-            report.AppendLine("Проверено в сохранённой геометрии: одна кривая в каждой новой границе; тип Open/Closed; " + options.ModeLabel
-                + (options.Tanto ? "; " + options.SideLabel : "") + ".");
+            report.AppendLine("Проверено в сохранённой геометрии: одна кривая в каждой новой границе, тип Open/Closed и положение " + options.ModeLabel + ".");
+            if (options.Tanto && closed > 0) report.AppendLine("Замкнутых границ со стороной " + options.ClosedSideLabel + ": " + closed + ".");
+            if (options.Tanto && pending.Count > closed) report.AppendLine("Открытых границ со стороной " + options.OpenSideLabel + ": " + (pending.Count - closed) + ".");
             report.AppendLine("Проверены состав и считанные параметры прежних границ.");
             report.AppendLine("Припуск и допуск новых границ наследуются из операции.");
             report.AppendLine("Траектория не рассчитывалась. Проверьте её средствами NX.");
@@ -267,8 +272,7 @@ public class NXPlanarAddCurves
             bool changed;
             BoundarySet[] rows = builder.PartBoundary.BoundaryList.GetContents();
             if (report != null) report.AppendLine("Строк в редакторе NX " + (requested == null ? "до" : "после") + " добавления: " + rows.Length + ".");
-            List<string> originals = SeparatePlanarBoundary.CheckEditor(rows, oldSources, requested,
-                options != null && options.Tanto, options != null && options.Outside, configure, out changed);
+            List<string> originals = SeparatePlanarBoundary.CheckEditor(rows, oldSources, requested, options, configure, out changed);
             if (previous != null && !SeparatePlanarBoundary.SameKeys(previous, originals))
                 throw new InvalidOperationException("Состав или настройки прежних заполненных границ редактора изменились.");
             if (changed)
@@ -321,16 +325,16 @@ public static class SeparatePlanarBoundary
 
     // UF creates one permanent CAM boundary per call on the selected operation.
     // Boundary-level app_data is optional. Planar member tool position uses the UF enum.
-    public static void Append(UFCambnd api, Tag operation, Tag curve, bool closed, bool tanto, bool outside)
+    public static void Append(UFCambnd api, Tag operation, Tag curve, bool closed, PlanarCurveOptions options)
     {
         UFCambnd.BoundaryData definition = new UFCambnd.BoundaryData {
             boundary_type = closed ? CamBoundaryType.CamBoundaryTypeClosed : CamBoundaryType.CamBoundaryTypeOpen,
             plane_type = 1, origin = new double[3], matrix = new double[] {1,0,0, 0,1,0, 0,0,1},
-            material_side = outside ? CamMaterialSide.CamMaterialSideOutRight : CamMaterialSide.CamMaterialSideInLeft
+            material_side = options.UsesOutsideOrRight(closed) ? CamMaterialSide.CamMaterialSideOutRight : CamMaterialSide.CamMaterialSideInLeft
         };
         UFCambnd.AppData member = new UFCambnd.AppData {
             tolerances = new double[2], has_tool_position = 1,
-            tool_position = tanto ? CamToolPosition.CamToolPositionTanto : CamToolPosition.CamToolPositionOn
+            tool_position = options.Tanto ? CamToolPosition.CamToolPositionTanto : CamToolPosition.CamToolPositionOn
         };
         api.AppendBndFromCurve(operation, CamGeomType.CamPart, 1, new Tag[] { curve }, ref definition, new UFCambnd.AppData[] { member });
     }
@@ -455,7 +459,7 @@ public static class SeparatePlanarBoundary
     // The editor may include an empty input row. All permanent entries, even genuine empty ones,
     // are protected separately by the UF snapshot. Here match the geometry-backed rows by source tag.
     public static List<string> CheckEditor(BoundarySet[] rows, HashSet<Tag> oldSources, Dictionary<Tag, bool> requested,
-        bool tanto, bool outside, bool configure, out bool changed)
+        PlanarCurveOptions options, bool configure, out bool changed)
     {
         changed = false;
         List<string> previous = new List<string>();
@@ -481,9 +485,10 @@ public static class SeparatePlanarBoundary
             BoundarySetPlanarMill set = row as BoundarySetPlanarMill;
             BoundaryMemberSetPlanarMill item = members[0] as BoundaryMemberSetPlanarMill;
             if (set == null || item == null) throw new InvalidOperationException("Неизвестный тип границы для кривой [" + selected + "].");
-            BoundarySet.BoundaryTypes shape = requested[selected] ? BoundarySet.BoundaryTypes.Closed : BoundarySet.BoundaryTypes.Open;
+            bool closed = requested[selected], tanto = options.Tanto;
+            BoundarySet.BoundaryTypes shape = closed ? BoundarySet.BoundaryTypes.Closed : BoundarySet.BoundaryTypes.Open;
             BoundarySet.ToolPositionTypes position = tanto ? BoundarySet.ToolPositionTypes.Contact : BoundarySet.ToolPositionTypes.On;
-            BoundarySet.ToolSideTypes side = outside ? BoundarySet.ToolSideTypes.OutsideOrRight : BoundarySet.ToolSideTypes.InsideOrLeft;
+            BoundarySet.ToolSideTypes side = options.UsesOutsideOrRight(closed) ? BoundarySet.ToolSideTypes.OutsideOrRight : BoundarySet.ToolSideTypes.InsideOrLeft;
             int memberPosition = tanto ? 1 : 0; // NXOpen editor values differ from CamToolPosition in UF.
             if (set.BoundaryType == shape && set.ToolPosition == position && (!tanto || set.ToolSide == side)
                 && item.ToolPosition == memberPosition && !set.CustomStock && !set.CustomTolerance && !item.CustomStock && !item.CustomTolerance) continue;
@@ -540,9 +545,11 @@ public static class SeparatePlanarBoundary
 // BEGIN PLANAR CURVE WINDOWS
 public sealed class PlanarCurveOptions
 {
-    public bool Tanto, Outside;
+    public bool Tanto, ClosedOutside, OpenRight;
+    public bool UsesOutsideOrRight(bool closed) { return Tanto && (closed ? ClosedOutside : OpenRight); }
     public string ModeLabel { get { return Tanto ? "TANTO" : "ON"; } }
-    public string SideLabel { get { return Outside ? "Outside / Right — снаружи / справа" : "Inside / Left — внутри / слева"; } }
+    public string ClosedSideLabel { get { return ClosedOutside ? "Outside — снаружи" : "Inside — внутри"; } }
+    public string OpenSideLabel { get { return OpenRight ? "Right — справа" : "Left — слева"; } }
 }
 
 // These dialogs use the same in-memory Win32 dialog mechanism as the project's PDF
@@ -563,12 +570,14 @@ public static class PlanarCurveWindows
     private const int OK = 1, Cancel = 2;
     private const int Heading = 100, Summary = 101, On = 110, Tanto = 111;
     private const int OnRule = 112, TantoRule = 113, OnHint = 114, TantoHint = 115;
-    private const int SideLabel = 120, Side = 121, SideHint = 122, Note = 123;
+    private const int ClosedLabel = 120, Inside = 121, Outside = 122, OpenLabel = 123, Left = 124, Right = 125, SideHint = 126, Note = 127;
+    private static readonly int[] SideControls = { ClosedLabel, Inside, Outside, OpenLabel, Left, Right, SideHint };
     private const int ReportEdit = 130, Copy = 131;
     private const uint TabStop = 0x00010000, Group = 0x00020000;
-    private const uint ButtonAutoRadio = 9, ButtonPushLike = 0x1000;
+    private const uint ButtonCheckBox = 2, ButtonAutoRadio = 9, ButtonPushLike = 0x1000;
     private const uint StaticNoPrefix = 0x80, StaticNotify = 0x100;
-    private const uint WmSetFont = 0x30, CbAddString = 0x143, CbGetCurSel = 0x147, CbSetCurSel = 0x14e;
+    private const uint WmSetFont = 0x30, BmSetCheck = 0xf1;
+    private const int OptionsHeight = 230;
 
     private static int Rgb(int r, int g, int b) { return r | (g << 8) | (b << 16); }
     private static readonly int Canvas = Rgb(245, 247, 248), Ink = Rgb(31, 43, 49);
@@ -597,7 +606,7 @@ public static class PlanarCurveWindows
 
         internal int Show(IntPtr owner)
         {
-            byte[] template = Template(title, IsReport ? 398 : 374, IsReport ? 250 : 211);
+            byte[] template = Template(title, IsReport ? 398 : 374, IsReport ? 250 : OptionsHeight);
             IntPtr memory = Marshal.AllocHGlobal(template.Length);
             Native.DialogProc procedure = HandleMessage;
             try
@@ -687,13 +696,16 @@ public static class PlanarCurveWindows
             Add("STATIC", TantoRule, "", StaticNotify, normal);
             Add("STATIC", OnHint, "Инструмент расположен на выбранной границе.", StaticNoPrefix | StaticNotify, normal);
             Add("STATIC", TantoHint, "Инструмент касается границы с выбранной стороны.", StaticNoPrefix | StaticNotify, normal);
-            Add("STATIC", SideLabel, "Сторона инструмента · TANTO", StaticNoPrefix, normal);
-            Add("COMBOBOX", Side, "", TabStop | 0x00200003u, normal); // CBS_DROPDOWNLIST | WS_VSCROLL
-            AddSide(0, "Inside / Left — внутри замкнутой границы / слева от открытой");
-            AddSide(1, "Outside / Right — снаружи замкнутой границы / справа от открытой");
-            if (Native.SendMessageW(Item(Side), CbSetCurSel, IntPtr.Zero, IntPtr.Zero).ToInt64() != 0)
-                throw new InvalidOperationException("Не удалось выбрать исходную сторону TANTO.");
-            Add("STATIC", SideHint, "Слева и справа определяются по направлению открытой кривой.", StaticNoPrefix, normal);
+            IntPtr groupFont = CreateFont(10, 600, "Segoe UI", normal);
+            Add("STATIC", ClosedLabel, "Замкнутые кривые", Group | StaticNoPrefix, groupFont);
+            Add("BUTTON", Inside, "Внутри (Inside)", TabStop | ButtonCheckBox, normal);
+            Add("BUTTON", Outside, "Снаружи (Outside)", TabStop | ButtonCheckBox, normal);
+            Add("STATIC", OpenLabel, "Открытые кривые", Group | StaticNoPrefix, groupFont);
+            Add("BUTTON", Left, "Слева (Left)", TabStop | ButtonCheckBox, normal);
+            Add("BUTTON", Right, "Справа (Right)", TabStop | ButtonCheckBox, normal);
+            SetCheckedPair(Inside, Outside, Options.ClosedOutside);
+            SetCheckedPair(Left, Right, Options.OpenRight);
+            Add("STATIC", SideHint, "Левая и правая стороны задаются по направлению открытой кривой.", Group | StaticNoPrefix, normal);
             Add("STATIC", Note, "Одна выбранная кривая образует одну границу.", StaticNoPrefix, normal);
             Add("BUTTON", Cancel, "Отмена", TabStop, normal);
             Add("BUTTON", OK, "Выбрать кривые  →", TabStop | 1u, normal);
@@ -719,19 +731,17 @@ public static class PlanarCurveWindows
             return font;
         }
 
-        private void AddSide(int expected, string text)
+        private void SetCheckedPair(int first, int second, bool secondSelected)
         {
-            if (Native.SendMessageTextW(Item(Side), CbAddString, IntPtr.Zero, text).ToInt64() != expected)
-                throw new InvalidOperationException("Не удалось заполнить список сторон TANTO.");
+            Native.SendMessageW(Item(first), BmSetCheck, new IntPtr(secondSelected ? 0 : 1), IntPtr.Zero);
+            Native.SendMessageW(Item(second), BmSetCheck, new IntPtr(secondSelected ? 1 : 0), IntPtr.Zero);
         }
 
         private void SetMode(bool tanto)
         {
             Options.Tanto = tanto;
             Native.CheckRadioButton(window, On, Tanto, tanto ? Tanto : On);
-            Native.EnableWindow(Item(Side), tanto);
-            Native.EnableWindow(Item(SideLabel), tanto);
-            Native.EnableWindow(Item(SideHint), tanto);
+            foreach (int id in SideControls) Native.EnableWindow(Item(id), tanto);
             Native.InvalidateRect(Item(OnRule), IntPtr.Zero, true);
             Native.InvalidateRect(Item(TantoRule), IntPtr.Zero, true);
         }
@@ -743,14 +753,22 @@ public static class PlanarCurveWindows
             {
                 case On: case OnRule: case OnHint: SetMode(false); return true;
                 case Tanto: case TantoRule: case TantoHint: SetMode(true); return true;
+                case Inside: case Outside:
+                    if (Options.Tanto)
+                    {
+                        Options.ClosedOutside = id == Outside;
+                        SetCheckedPair(Inside, Outside, Options.ClosedOutside);
+                    }
+                    return true;
+                case Left: case Right:
+                    if (Options.Tanto)
+                    {
+                        Options.OpenRight = id == Right;
+                        SetCheckedPair(Left, Right, Options.OpenRight);
+                    }
+                    return true;
                 case Cancel: Native.EndDialog(window, new IntPtr(Cancel)); return true;
                 case OK:
-                    if (!IsReport && Options.Tanto)
-                    {
-                        int index = Native.SendMessageW(Item(Side), CbGetCurSel, IntPtr.Zero, IntPtr.Zero).ToInt32();
-                        if (index != 0 && index != 1) throw new InvalidOperationException("Выберите сторону TANTO.");
-                        Options.Outside = index == 1;
-                    }
                     Native.EndDialog(window, new IntPtr(OK));
                     return true;
                 case Copy:
@@ -781,7 +799,7 @@ public static class PlanarCurveWindows
                 return Brush(dc, ((id == TantoRule) == Options.Tanto) ? Accent : Neutral, Ink);
             int color = Muted;
             if (id == Heading) color = !IsReport ? Ink : severity == 2 ? Rgb(162, 54, 49) : severity == 1 ? Rgb(136, 96, 28) : Accent;
-            if (!IsReport && Options.Tanto && id == SideLabel) color = Ink;
+            if (!IsReport && Options.Tanto && (id == ClosedLabel || id == OpenLabel)) color = Ink;
             return Brush(dc, Canvas, color);
         }
 
@@ -812,10 +830,11 @@ public static class PlanarCurveWindows
                 Place(On, pad, 60, first, 27); Place(Tanto, right, 60, second, 27);
                 Place(OnRule, pad, 87, first, 2); Place(TantoRule, right, 87, second, 2);
                 Place(OnHint, pad + 2, 94, first - 3, 22); Place(TantoHint, right + 2, 94, second - 3, 22);
-                Place(SideLabel, pad, 120, usable, 12);
-                Place(Side, pad, 134, usable, 64); // Includes the height of the opened dropdown.
-                Place(SideHint, pad, 151, usable, 13);
-                Place(Note, pad, 167, usable, 13);
+                Place(ClosedLabel, pad, 119, first, 14); Place(OpenLabel, right, 119, second, 14);
+                Place(Inside, pad, 135, first, 16); Place(Left, right, 135, second, 16);
+                Place(Outside, pad, 153, first, 16); Place(Right, right, 153, second, 16);
+                Place(SideHint, pad, 174, usable, 13);
+                Place(Note, pad, 190, usable, 13);
                 Place(Cancel, width - pad - 101 - gap - 61, buttonsY, 61, buttonHeight);
                 Place(OK, width - pad - 101, buttonsY, 101, buttonHeight);
             }
@@ -838,7 +857,7 @@ public static class PlanarCurveWindows
         {
             Native.Rect client, outer;
             if (!Native.GetClientRect(window, out client) || !Native.GetWindowRect(window, out outer)) return;
-            Native.Rect min = Units(IsReport ? 275 : 330, IsReport ? 136 : 211);
+            Native.Rect min = Units(IsReport ? 275 : 330, IsReport ? 136 : OptionsHeight);
             Native.MinMaxInfo limits = (Native.MinMaxInfo)Marshal.PtrToStructure(data, typeof(Native.MinMaxInfo));
             limits.MinTrack.X = Math.Max(limits.MinTrack.X, min.Right + outer.Right - outer.Left - client.Right);
             limits.MinTrack.Y = Math.Max(limits.MinTrack.Y, min.Bottom + outer.Bottom - outer.Top - client.Bottom);
@@ -907,7 +926,6 @@ public static class PlanarCurveWindows
         [DllImport("user32.dll")] internal static extern IntPtr SetFocus(IntPtr hwnd);
         [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)] internal static extern bool SetWindowTextW(IntPtr hwnd, string text);
         [DllImport("user32.dll", ExactSpelling = true)] internal static extern IntPtr SendMessageW(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
-        [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode, ExactSpelling = true)] internal static extern IntPtr SendMessageTextW(IntPtr hwnd, uint msg, IntPtr wParam, string text);
         [DllImport("user32.dll")] internal static extern bool InvalidateRect(IntPtr hwnd, IntPtr rect, bool erase);
         [DllImport("user32.dll")] internal static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
         [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);

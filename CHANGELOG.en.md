@@ -2,6 +2,10 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-23 — Curves for PLANAR V1.03
+
+TANTO now has two independent pairs of checkboxes. Select Inside or Outside for closed curves and Left or Right for open curves. A mixed selection can use any of the four combinations in a single run. ON remains the default. [Guide](docs/en/planar-add-curves.md#latest-release).
+
 ## 2026-11-23 — Curves for PLANAR V1.02
 
 Each selected curve is appended to the operation as its own Part Boundary. The journal counts saved CAM boundaries. An empty entry row in the editor no longer adds one to the expected total. Selecting 36 curves in an empty operation gives an expected total of 36. [Guide](docs/en/planar-add-curves.md#latest-release).

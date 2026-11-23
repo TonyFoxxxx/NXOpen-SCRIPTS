@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.02 · 2026-11-23** — Each selected curve is appended to the operation as its own Part Boundary. The journal counts saved CAM boundaries. An empty entry row in the editor no longer adds one to the expected total. Selecting 36 curves in an empty operation gives an expected total of 36.
+**V1.03 · 2026-11-23** — TANTO now has two independent pairs of checkboxes. Select Inside or Outside for closed curves and Left or Right for open curves. A mixed selection can use any of the four combinations in a single run. ON remains the default.
 
 File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater name: **«Кривые в PLANAR_MILL / PROFILE»**. This is a separate script for existing curves; [engraving centerline construction](planar-mill-curves.md) remains a separate tool.
 
@@ -13,15 +13,17 @@ File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater 
 1. Prepare an existing **PLANAR_MILL** or **PLANAR_PROFILE** in Manufacturing, including the tool, orientation, levels, stock, tolerance, approaches and retracts.
 2. Close the operation editor and select one operation in **Operation Navigator**. Its name can be arbitrary.
 3. Run `NX_Planar_Add_Curves.cs` using **Tools → Journal → Play** or a custom button.
-4. Choose **ON** or **TANTO** in the opening dialog. ON is the default. For TANTO, choose the side.
+4. Choose **ON** (default) or **TANTO**. For TANTO, check one side in each group. When the selection contains only one curve type, only that group applies. Switching back to ON disables both groups.
 5. Click **«Выбрать кривые →»**, select work-part curves and accept the NX selection dialog.
 6. Review the result. Each previously unassigned curve receives its own new **Part Boundary**. Inspect the geometry and generate the toolpath using NX commands.
 
-| Mode | Behavior |
-| --- | --- |
-| ON | Position the tool on the boundary. The side selector is disabled. |
-| TANTO + Inside / Left | Contact inside a closed boundary or to the left of an open curve's direction. |
-| TANTO + Outside / Right | Contact outside a closed boundary or to the right of an open curve's direction. |
+| Position | Closed curves | Open curves |
+| --- | --- | --- |
+| ON | On the boundary | On the boundary |
+| TANTO | Inside | Left |
+| TANTO | Inside | Right |
+| TANTO | Outside | Left |
+| TANTO | Outside | Right |
 
 The exact cutting geometry also depends on the tool and operation settings. The source curve direction determines left and right for open curves. The NXOpen field for ON/TANTO is **Tool Position**; the TANTO side is **Tool Side**.
 
@@ -48,6 +50,6 @@ The result window is resizable. **«Копировать всё»** copies the e
 - The operation must belong to the CAM work part. Component curves, body edges, faces and bodies are not selected.
 - If the operation inherits nonempty Part Boundaries from parent geometry, first define local boundaries in NX. The script does not change the parent geometry.
 - No new curves, toolpath generation or automatic part saving. No files, folders, logs, temporary files or disk settings are created.
-- V1.02 compiled against the installed Designcenter 2606 NXOpen libraries on .NET 10. A fixture exercised the journal entry point with 36 curves, a placeholder row, existing boundaries, both TANTO sides, repeat selections and rollback on lost or merged curves. A live run on a CAM part is still unverified.
+- The complete V1.03 journal compiled with the Designcenter 2606 C# compiler and NXOpen on .NET 10. Tests exercised the actual Windows checkboxes, all four TANTO combinations on a fixture with 36 mixed curves, ON, and rollback if NX returns a different tool side. A live CAM run is still unverified.
 
 [Download script](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Planar_Add_Curves.cs) · [Catalog](../../README.en.md) · [Changelog](../../CHANGELOG.en.md)

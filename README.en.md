@@ -20,7 +20,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Clean copy/instance suffixes and counters in all operation names while preserving Z. | [All features](docs/en/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
-| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.02 | Separate curve boundaries in PLANAR_MILL / PLANAR_PROFILE, with ON / TANTO selection. | [All features](docs/en/planar-add-curves.md) |
+| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.03 | One Part Boundary per curve in PLANAR_MILL / PLANAR_PROFILE. ON or TANTO with independent sides for closed and open curves. | [All features](docs/en/planar-add-curves.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.13 | Centerlines from engraving faces and D/2 circles for dots, assigned to PLANAR_MILL. | [Full guide](docs/en/planar-mill-curves.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Create single-stroke GOST A text from lines and smooth splines using an external FON. | [All features](docs/en/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
@@ -38,9 +38,9 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Curves for PLANAR V1.02 · 2026-11-23
+### Latest update — Curves for PLANAR V1.03 · 2026-11-23
 
-Each selected curve is appended to the operation as its own Part Boundary. The journal counts saved CAM boundaries. An empty entry row in the editor no longer adds one to the expected total. Selecting 36 curves in an empty operation gives an expected total of 36. [Guide](docs/en/planar-add-curves.md#latest-release).
+TANTO now has two independent pairs of checkboxes. Select Inside or Outside for closed curves and Left or Right for open curves. A mixed selection can use any of the four combinations in a single run. ON remains the default. [Guide](docs/en/planar-add-curves.md#latest-release).
 
 ### Also released — Setup sheets V2.72 · 2026-11-19
 
