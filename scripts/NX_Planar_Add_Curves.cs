@@ -1,5 +1,5 @@
 // NX_Planar_Add_Curves.cs - separate curve boundaries for PLANAR_MILL / PLANAR_PROFILE.
-// SCRIPT_VERSION: V1.07
+// SCRIPT_VERSION: V1.08
 // Select one planar operation, choose ON / TANTO and a boundary plane, then pick existing curves.
 // Each new curve becomes one Part Boundary; geometrically closed curves remain Closed.
 // Existing assignments are skipped. No chaining, new curves, files or automatic toolpath generation.
@@ -14,11 +14,12 @@ using NXOpen;
 using NXOpen.CAM;
 using NXOpen.UF;
 using NXOpen.Utilities;
+using BlockUI = NXOpen.BlockStyler;
 using CamOperation = NXOpen.CAM.Operation;
 
 public class NXPlanarAddCurves
 {
-    private const string SCRIPT_VERSION = "V1.07";
+    private const string SCRIPT_VERSION = "V1.08";
     private static readonly string Title = "Кривые в PLANAR — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
 
@@ -52,14 +53,13 @@ public class NXPlanarAddCurves
                 report.AppendLine("Открытые кривые: " + options.OpenSideLabel);
             }
 
-            NXObject planeReference = null;
+            PlanarBoundaryPlane plane = null;
             if (options.SelectPlane)
             {
-                stage = "Выбор плоскости границ";
-                planeReference = SelectPlaneReference();
-                if (planeReference == null) return;
-                report.AppendLine("Плоскость границ: " + (planeReference is Face ? "плоская грань" : "базовая плоскость")
-                    + " [" + planeReference.Tag + "].");
+                stage = "Построение плоскости границ в окне Plane";
+                plane = PlanarBoundaryPlane.Choose(session, part, uf, "Выберите плоскость в модели — " + Title, report);
+                if (plane == null) return;
+                report.AppendLine("Плоскость в ABS рабочей детали: " + plane.Description + ".");
             }
             else report.AppendLine("Плоскость границ: автоматически для каждой кривой.");
 
@@ -110,13 +110,6 @@ public class NXPlanarAddCurves
                 throw new InvalidOperationException("Границы операции изменились во время выбора. Повторите запуск.");
             mark = session.SetUndoMark(Session.MarkVisibility.Visible, "Кривые в PLANAR: " + options.ModeLabel);
             pendingUndo = true;
-            PlanarBoundaryPlane plane = null;
-            if (planeReference != null)
-            {
-                stage = "Чтение выбранной плоскости в координатах CAM-детали";
-                plane = PlanarBoundaryPlane.FromReference(part, uf, planeReference);
-                report.AppendLine("Плоскость в ABS рабочей детали: " + plane.Description + ".");
-            }
             for (int i = 0; i < pending.Count; i++)
             {
                 Curve curve = pending[i];
@@ -220,24 +213,6 @@ public class NXPlanarAddCurves
         if (operations[0].OwningPart == null || operations[0].OwningPart.Tag != part.Tag)
             throw new InvalidOperationException("Выбранная операция должна принадлежать рабочей детали.");
         return (PlanarMilling)operations[0];
-    }
-
-    private static NXObject SelectPlaneReference()
-    {
-        Selection.MaskTriple[] mask = {
-            new Selection.MaskTriple(UFConstants.UF_solid_type, 0, UFConstants.UF_UI_SEL_FEATURE_PLANAR_FACE),
-            new Selection.MaskTriple(UFConstants.UF_datum_plane_type, 0, 0)
-        };
-        TaggedObject picked;
-        Point3d cursor;
-        Selection.Response answer = UI.GetUI().SelectionManager.SelectTaggedObject(
-            PlanarCurveOptions.PlanePickPrompt, "Выберите плоскость в модели — " + Title,
-            Selection.SelectionScope.AnyInAssembly, Selection.SelectionAction.ClearAndEnableSpecific,
-            false, false, mask, out picked, out cursor);
-        if (answer == Selection.Response.Cancel || answer == Selection.Response.Back) return null;
-        Face face = picked as Face;
-        if (picked is DatumPlane || (face != null && face.SolidFaceType == Face.FaceType.Planar)) return (NXObject)picked;
-        throw new InvalidOperationException("Для границ нужна плоская грань или базовая плоскость.");
     }
 
     private static List<Curve> SelectCurves()
@@ -347,17 +322,70 @@ public sealed class PlanarBoundaryPlane
         uf.Mtx3.InitializeZ(new double[] { normal.X, normal.Y, normal.Z }, rotation);
     }
 
-    public static PlanarBoundaryPlane FromReference(Part part, UFSession uf, NXObject reference)
+    public static PlanarBoundaryPlane Choose(Session session, Part part, UFSession uf, string title, StringBuilder report)
     {
-        // NX resolves the selected face/datum in work-part ABS, including component placement.
-        Plane support = part.Planes.CreatePlane(PlaneTypes.MethodType.Distance, PlaneTypes.AlternateType.One,
-            new Point3d(0, 0, 0), new Vector3d(0, 0, 1), "0", false, false, new NXObject[] { reference });
+        // The constructor can create temporary NX planes and expressions. Keep only the solved ABS geometry.
+        Session.UndoMarkId mark = session.SetUndoMark(Session.MarkVisibility.Invisible, "Построение плоскости границ");
         try
         {
-            support.Evaluate();
-            return new PlanarBoundaryPlane(part, uf, support.Origin, support.Normal);
+            using (BlockUI.SnapBlockDialog dialog = UI.GetUI().CreateSnapDialog(title))
+            {
+                dialog.AddItem("Specify Plane", "boundaryPlane");
+                dialog.AddItem("Label", "offsetHint");
+                BlockUI.SpecifyPlane block = null;
+                PlanarBoundaryPlane selected = null;
+                Exception callbackError = null;
+                dialog.AddInitializeHandler(delegate {
+                    try
+                    {
+                        dialog.TopBlock.Label = title;
+                        block = (BlockUI.SpecifyPlane)dialog.TopBlock.FindBlock("boundaryPlane");
+                        block.LabelString = "Задайте плоскость границ";
+                        block.ShowShortcuts = true;
+                        block.StepStatusAsString = "Required";
+                        block.BalloonTooltipText = PlanarCurveOptions.PlanePickPrompt;
+                        dialog.TopBlock.FindBlock("offsetHint").Label = PlanarCurveOptions.PlanePickPrompt;
+                    }
+                    catch (Exception ex) { callbackError = ex; }
+                });
+                dialog.AddOkHandler(delegate {
+                    try
+                    {
+                        if (callbackError != null) return 0;
+                        TaggedObject[] objects = block.GetSelectedObjects();
+                        Plane result = objects != null && objects.Length == 1 ? objects[0] as Plane : null;
+                        if (result == null) throw new InvalidOperationException("Конструктор Plane не вернул построенную плоскость.");
+                        result.Evaluate();
+                        selected = new PlanarBoundaryPlane(part, uf, result.Origin, result.Normal);
+                        PlaneTypes.MethodType method = result.Method;
+                        report.AppendLine("Способ построения плоскости NX: " + (method == PlaneTypes.MethodType.Distance ? "At Distance" : method.ToString()) + ".");
+                        if (method == PlaneTypes.MethodType.Distance)
+                        {
+                            try
+                            {
+                                Expression distance = result.Expression;
+                                if (distance != null) report.AppendLine("Выражение смещения в NX: " + distance.RightHandSide
+                                    + ". Обратное направление смещения: " + (result.OffsetFlip ? "да." : "нет."));
+                            }
+                            catch (NXException ex) { report.AppendLine("Не удалось прочитать выражение смещения: " + ex.Message); }
+                        }
+                    }
+                    catch (Exception ex) { callbackError = ex; }
+                    return 0;
+                });
+                BlockUI.BlockDialog.DialogResponse answer = dialog.LaunchInDialogMode(BlockUI.BlockDialog.DialogMode.Edit);
+                if (callbackError != null) throw new InvalidOperationException("Не удалось прочитать плоскость из конструктора NX.", callbackError);
+                if (answer == BlockUI.BlockDialog.DialogResponse.Cancel || answer == BlockUI.BlockDialog.DialogResponse.Back) return null;
+                if (answer != BlockUI.BlockDialog.DialogResponse.Ok || selected == null)
+                    throw new InvalidOperationException("NX не подтвердил построение плоскости: " + answer + ".");
+                return selected;
+            }
         }
-        finally { support.DestroyPlane(); }
+        finally
+        {
+            session.UndoToMark(mark, null);
+            session.DeleteUndoMark(mark, null);
+        }
     }
 
     public void SetDefinition(ref UFCambnd.BoundaryData data)
@@ -702,7 +730,7 @@ public static class SeparatePlanarBoundary
 // BEGIN PLANAR CURVE WINDOWS
 public sealed class PlanarCurveOptions
 {
-    internal const string PlanePickPrompt = "Щёлкните в модели по плоской грани или базовой плоскости (Datum Plane).";
+    internal const string PlanePickPrompt = "Для смещения выберите At Distance в окне Plane и задайте расстояние.";
     public bool SelectPlane = true;
     public bool Tanto, ClosedOutside, OpenRight;
     public bool UsesOutsideOrRight(bool closed) { return Tanto && (closed ? ClosedOutside : OpenRight); }

@@ -35,7 +35,7 @@ internal static class PlanarSideSelection
         Check(caption.ToString().Contains(enabled?"плоскость":"кривые"),"continue indicates next selection");
         GetWindowText(GetDlgItem(w,PlaneHint),caption,caption.Capacity);
         string hint=caption.ToString();
-        Check(enabled ? hint.Contains("Щёлкните в модели") && hint.Contains("плоской грани") && hint.Contains("базовой плоскости")
+        Check(enabled ? hint.Contains("At Distance") && hint.Contains("расстояние")
             : hint.Contains("автоматически"), "visible instruction matches the next action");
     }
     private static void CheckPair(IntPtr w, int first, int second, bool useSecond)

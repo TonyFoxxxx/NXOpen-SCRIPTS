@@ -20,26 +20,30 @@ namespace NXOpen
         public double X,Y,Z;
         public Vector3d(double x,double y,double z) { X=x; Y=y; Z=z; }
     }
-    public class Face : NXObject { public enum FaceType { Planar, Cylindrical } public FaceType SolidFaceType; }
-    public class DatumPlane : NXObject {}
-    public class PlaneTypes { public enum MethodType { Distance } public enum AlternateType { One } }
+    public class PlaneTypes { public enum MethodType { Fixed, Distance, Angle, Bisector } }
+    public class Expression { public string RightHandSide; }
     public class SmartObject { public enum UpdateOption { AfterModeling } }
-    public class Plane
+    public class Plane : NXObject
     {
         public Point3d Origin; public Vector3d Normal; public bool Temporary;
-        public void Evaluate() { if(Temporary) Model.PlaneEvaluations++; }
-        public void DestroyPlane() { if(Temporary) Model.PlaneDisposals++; }
+        public PlaneTypes.MethodType Method; public Expression Expression; public bool OffsetFlip;
+        public void Evaluate()
+        {
+            if(!Temporary) return;
+            if(!Model.DialogOpen || !Model.PreviewActive) throw new Exception("Plane evaluated after its native dialog closed");
+            Model.PlaneEvaluations++;
+            Origin=Model.ReferencePoint; Normal=Model.ReferenceNormal;
+            double length=Math.Sqrt(Normal.X*Normal.X+Normal.Y*Normal.Y+Normal.Z*Normal.Z);
+            if(Method==PlaneTypes.MethodType.Distance && length>0)
+            {
+                double shift=Model.Distance*(OffsetFlip?-1:1)/length;
+                Origin=new Point3d(Origin.X+Normal.X*shift,Origin.Y+Normal.Y*shift,Origin.Z+Normal.Z*shift);
+            }
+        }
+        public void DestroyPlane() { if(Temporary) throw new Exception("Dialog owns the constructed plane"); }
     }
     public class PlaneCollection
     {
-        public Plane CreatePlane(PlaneTypes.MethodType method, PlaneTypes.AlternateType alternate, Point3d origin,
-            Vector3d normal, string offset, bool flip, bool reverse, NXObject[] references)
-        {
-            if(references.Length!=1 || references[0]!=Model.Reference || offset!="0" || flip || reverse || Model.Marks==0)
-                throw new Exception("Incorrect reference plane construction");
-            Model.PlaneBuilds++;
-            return new Plane { Origin=Model.ReferencePoint, Normal=Model.ReferenceNormal, Temporary=true };
-        }
         public Plane CreatePlane(Point3d origin,Vector3d normal,SmartObject.UpdateOption update)
         {
             Model.Replacements++;
@@ -54,13 +58,30 @@ namespace NXOpen
     public class ListingWindow { public void Open() {} public void WriteLine(string line) { throw new Exception(line); } }
     public class Session
     {
-        public enum LibraryUnloadOption { Immediately } public enum MarkVisibility { Visible } public struct UndoMarkId {}
+        public enum LibraryUnloadOption { Immediately } public enum MarkVisibility { Visible, Invisible }
+        public struct UndoMarkId { internal bool Preview; }
         public PartList Parts = new PartList(); public ListingWindow ListingWindow = new ListingWindow();
         public static Session GetSession() { return Model.Session; }
         public UndoMarkId SetUndoMark(MarkVisibility visibility, string name)
-        { Model.Marks++; Model.SaveUndo(); return new UndoMarkId(); }
-        public void UndoToMark(UndoMarkId mark,string name) { Model.Undos++; Model.RestoreUndo(); }
-        public void DeleteUndoMark(UndoMarkId mark,string name) {}
+        {
+            if(Model.PreviewActive) throw new Exception("Previous plane preview is still active");
+            if(visibility==MarkVisibility.Invisible) { Model.PreviewActive=true; return new UndoMarkId {Preview=true}; }
+            Model.Marks++; Model.SaveUndo(); return new UndoMarkId();
+        }
+        public void UndoToMark(UndoMarkId mark,string name)
+        {
+            if(mark.Preview)
+            {
+                if(Model.DialogOpen || !Model.PreviewActive) throw new Exception("Incorrect native cleanup order");
+                if(Model.PlaneBuilt) { Model.PlaneDisposals++; Model.PlaneBuilt=false; }
+                return;
+            }
+            Model.Undos++; Model.RestoreUndo();
+        }
+        public void DeleteUndoMark(UndoMarkId mark,string name)
+        {
+            if(mark.Preview) { if(Model.PlaneBuilt) throw new Exception("Plane preview data left in model"); Model.PreviewActive=false; }
+        }
     }
     public class Selection
     {
@@ -71,26 +92,71 @@ namespace NXOpen
         }
         public enum Response { OK, ObjectSelected, Cancel, Back } public enum SelectionScope { WorkPart, AnyInAssembly }
         public enum SelectionAction { ClearAndEnableSpecific }
-        public Response SelectTaggedObject(string prompt,string title,SelectionScope scope,SelectionAction action,
-            bool features,bool highlight,MaskTriple[] mask,out TaggedObject picked,out Point3d cursor)
-        {
-            if(!title.StartsWith("Выберите плоскость в модели",StringComparison.Ordinal) ||
-                !prompt.Contains("плоской грани") || !prompt.Contains("базовой плоскости"))
-                throw new Exception("The plane picker needs the action first in its caption and both selectable objects in the prompt");
-            if(scope!=SelectionScope.AnyInAssembly || features || highlight || mask.Length!=2 ||
-               mask[0].Type!=UFConstants.UF_solid_type || mask[0].SolidBodySubtype!=UFConstants.UF_UI_SEL_FEATURE_PLANAR_FACE ||
-               mask[1].Type!=UFConstants.UF_datum_plane_type) throw new Exception("Invalid plane selection filter");
-            Model.Picks+="P"; picked=Model.Reference; cursor=new Point3d(); return Model.PlaneResponse;
-        }
         public Response SelectTaggedObjects(string prompt,string title,SelectionScope scope,SelectionAction action,
             bool features,bool highlight,MaskTriple[] mask,out TaggedObject[] objects)
         {
-            if(!title.StartsWith("Выберите кривые в модели",StringComparison.Ordinal))
+            if(Model.PreviewActive || !title.StartsWith("Выберите кривые в модели",StringComparison.Ordinal))
                 throw new Exception("The curve picker must identify the next action at the start of its caption");
             Model.Picks+="C"; objects=Model.Selection.ToArray(); return Model.CurveResponse;
         }
     }
-    public class UI { public Selection SelectionManager=new Selection(); public static UI GetUI() { return new UI(); } }
+    public class UI
+    {
+        public Selection SelectionManager=new Selection(); public static UI GetUI() { return new UI(); }
+        public BlockStyler.SnapBlockDialog CreateSnapDialog(string title) { return new BlockStyler.SnapBlockDialog(title); }
+    }
+}
+namespace NXOpen.BlockStyler
+{
+    public class UIBlock { public string Label; }
+    public class SpecifyPlane : UIBlock
+    {
+        public string LabelString, StepStatusAsString, BalloonTooltipText; public bool ShowShortcuts;
+        public TaggedObject[] GetSelectedObjects()
+        {
+            if(!Model.DialogOpen) throw new Exception("Read plane outside the dialog");
+            if(Model.MissingPlane) return new TaggedObject[0];
+            return new TaggedObject[] {new Plane { Temporary=true, Method=Model.Method, OffsetFlip=Model.OffsetFlip,
+                Expression=Model.Method==PlaneTypes.MethodType.Distance ? new Expression {RightHandSide=Model.Distance.ToString(System.Globalization.CultureInfo.InvariantCulture)} : null }};
+        }
+    }
+    public class CompositeBlock : UIBlock
+    {
+        internal readonly Dictionary<string,UIBlock> Blocks=new Dictionary<string,UIBlock>();
+        public UIBlock FindBlock(string name){return Blocks[name];}
+    }
+    public class BlockDialog
+    {
+        public enum DialogResponse { Ok, Cancel, Back } public enum DialogMode { Create, Edit }
+    }
+    public class SnapBlockDialog : BlockDialog, IDisposable
+    {
+        public CompositeBlock TopBlock=new CompositeBlock();
+        private Action init; private Func<int> ok; private string title;
+        public SnapBlockDialog(string title) { this.title=title; }
+        public void AddItem(string type,string id)
+        {
+            if(type!="Specify Plane" && type!="Label") throw new Exception("Expected native NX block type");
+            TopBlock.Blocks.Add(id,type=="Specify Plane"?(UIBlock)new SpecifyPlane():new UIBlock());
+        }
+        public void AddInitializeHandler(Action callback) {init=callback;}
+        public void AddOkHandler(Func<int> callback) {ok=callback;}
+        public DialogResponse LaunchInDialogMode(DialogMode mode)
+        {
+            if(mode!=DialogMode.Edit || !Model.PreviewActive) throw new Exception("Unscoped constructor or repeating Apply mode");
+            Model.Picks+="P"; Model.DialogOpen=true; init();
+            var plane=(SpecifyPlane)TopBlock.FindBlock("boundaryPlane");
+            if(TopBlock.Label!=title || !title.StartsWith("Выберите плоскость в модели",StringComparison.Ordinal) ||
+                !plane.ShowShortcuts || plane.StepStatusAsString!="Required" || !plane.LabelString.Contains("плоскость") ||
+                !TopBlock.FindBlock("offsetHint").Label.Contains("At Distance")) throw new Exception("Missing native plane instructions");
+            Model.PlaneBuilds++; Model.PlaneBuilt=true;
+            if(Model.PlaneResponse==Selection.Response.Back) return DialogResponse.Back;
+            if(Model.PlaneResponse==Selection.Response.Cancel) return DialogResponse.Cancel;
+            if(ok()!=0) throw new Exception("OK callback failed");
+            return DialogResponse.Ok;
+        }
+        public void Dispose() {Model.DialogOpen=false;}
+    }
 }
 namespace NXOpen.Utilities
 {
@@ -306,7 +372,9 @@ public static class Model
     public static string Report; public static int Severity,Marks,Undos,Commits,Calls,FailAt,MergeAt;
     public static bool Inherited,KeepPlaceholder,NullPlaceholderMember,WrongEditorDefaults,DropOnCommit,CorruptOld,WrongClosure,IgnoreOpenSide;
     public static bool IgnoreShapeEdits;
-    public static NXObject Reference; public static Point3d ReferencePoint; public static Vector3d ReferenceNormal;
+    public static Point3d ReferencePoint; public static Vector3d ReferenceNormal;
+    public static PlaneTypes.MethodType Method; public static double Distance;
+    public static bool OffsetFlip,MissingPlane,DialogOpen,PreviewActive,PlaneBuilt;
     public static Selection.Response PlaneResponse,CurveResponse;
     public static string Picks; public static int PlaneBuilds,PlaneEvaluations,PlaneDisposals,Replacements;
     public static Action<Record> AdjustInitialPlane; public static bool IgnorePlaneEdits;
@@ -321,7 +389,8 @@ public static class Model
         Op=new PlanarMilling {Tag=(Tag)9000, OwningPart=Session.Parts.Work, Name="PLANAR_TEST"};
         Curves=new Dictionary<Tag,Curve>(); Selection=new List<TaggedObject>(); Records=new List<Record>();
         Options=new PlanarCurveOptions { SelectPlane=false }; Report=""; Severity=-1; Marks=Undos=Commits=Calls=FailAt=MergeAt=0;
-        Reference=new DatumPlane {Tag=(Tag)10000,OwningPart=Session.Parts.Work};
+        Method=PlaneTypes.MethodType.Fixed; Distance=0;
+        OffsetFlip=MissingPlane=DialogOpen=PreviewActive=PlaneBuilt=false;
         ReferencePoint=new Point3d(11,-4,29); ReferenceNormal=new Vector3d(0,3,4);
         Picks=""; PlaneBuilds=PlaneEvaluations=PlaneDisposals=Replacements=0;
         PlaneResponse=NXOpen.Selection.Response.ObjectSelected; CurveResponse=NXOpen.Selection.Response.OK;
@@ -403,34 +472,45 @@ public static class PlanarChecks
     static void PlaneSelection()
     {
         Model.Reset(); Select36(); Model.Options.SelectPlane=true;
-        Model.Reference=new Face {Tag=(Tag)20000, IsOccurrence=true, SolidFaceType=Face.FaceType.Planar};
+        Model.Method=PlaneTypes.MethodType.Distance; Model.Distance=5;
         Model.UfReadType=2; Model.Options.Tanto=true; Model.Options.ClosedOutside=true;
         Model.Run(); Success();
         Check(Model.Picks=="PC" && Model.PlaneBuilds==1 && Model.PlaneEvaluations==1 && Model.PlaneDisposals==1,
             "select a plane before curves and evaluate its placement once");
         Check(Model.Commits==0 && Model.Replacements==0 && Model.Records.Count==36,"keep correctly saved native planes");
-        Check(Model.Report.Contains("плоская грань [20000]") && Model.Report.Contains("плоскость подтверждена для всех новых границ: 36"),"selected plane in result");
+        Check(Model.Report.Contains("At Distance") && Model.Report.Contains("Выражение смещения в NX: 5") &&
+            Model.Report.Contains("плоскость подтверждена для всех новых границ: 36"),"offset plane in result");
         foreach(Record rec in Model.Records)
         {
             var o=rec.Definition.origin; var m=rec.Definition.matrix;
-            Check(rec.Definition.plane_type==0 && o[0]==11 && o[1]==-4 && o[2]==29 && m[6]==0 && m[7]==0.6 && m[8]==0.8,
-                "correct translated and inclined plane for each source");
+            Check(rec.Definition.plane_type==0 && o[0]==11 && o[1]==-1 && o[2]==33 && m[6]==0 && m[7]==0.6 && m[8]==0.8,
+                "all 36 boundaries use the +5 offset along the inclined normal exactly once");
             Check(rec.Tags.Length==1 && rec.Members[0].tool_position==CamToolPosition.CamToolPositionTanto &&
                 rec.Side==(Model.Curves[rec.Tags[0]].Closed?BoundarySet.ToolSideTypes.OutsideOrRight:BoundarySet.ToolSideTypes.InsideOrLeft),
                 "mixed closed/outside and open/left on one common plane");
         }
-        Model.Reference=new DatumPlane {Tag=(Tag)20001}; Model.Options.Tanto=false;
+        Model.Method=PlaneTypes.MethodType.Bisector; Model.Options.Tanto=false;
         Model.ReferencePoint=new Point3d(-13,0,0); Model.ReferenceNormal=new Vector3d(-4,0,0);
         Model.Run();
-        Check(Model.Severity==1 && Model.Marks==1 && Model.PlaneBuilds==1 && Model.Calls==36,"duplicate-only selection creates no plane or undo step");
+        Check(Model.Severity==1 && Model.Marks==1 && Model.PlaneDisposals==Model.PlaneBuilds && Model.Calls==36,"duplicate-only selection leaves no plane or visible undo step");
         Model.AddCurve(999,false);
         Model.AdjustInitialPlane=delegate(Record r) { r.Definition.plane_type=1; };
         Model.Run(); Success();
         var added=Model.Records[36];
         Check(added.Position==BoundarySet.ToolPositionTypes.On && added.Definition.plane_type==0 &&
-            added.Definition.origin[0]==-13 && added.Definition.matrix[6]==-1,"datum plane with negative normal in ON");
-        Check(Model.Replacements==1 && Model.Commits==1 && Model.Records[0].Definition.origin[2]==29 &&
-            Model.Report.Contains("базовая плоскость [20001]"),"correct a new automatic row without changing existing planes");
+            added.Definition.origin[0]==-13 && added.Definition.matrix[6]==-1,"bisector with negative normal in ON");
+        Check(Model.Replacements==1 && Model.Commits==1 && Model.Records[0].Definition.origin[2]==33 &&
+            Model.Report.Contains("Bisector"),"correct new row without changing the earlier offset planes");
+
+        foreach(double distance in new[]{-5.0,0,5.0}) foreach(bool reverse in new[]{false,true})
+        {
+            Model.Reset(); Model.Options.SelectPlane=true; Model.Method=PlaneTypes.MethodType.Distance;
+            Model.Distance=distance; Model.OffsetFlip=reverse; Model.AddCurve(335,false); Model.Run(); Success();
+            var data=Model.Records[0].Definition;
+            double effective=reverse?-distance:distance;
+            Check(Math.Abs(data.origin[1]-(-4+0.6*effective))<1e-9 && Math.Abs(data.origin[2]-(29+0.8*effective))<1e-9 &&
+                data.matrix[7]==0.6 && data.matrix[8]==0.8, "signed and reversed offset uses NX result and keeps its normal");
+        }
 
         Model.Reset(); Model.Options.SelectPlane=true; Model.AddCurve(333,false);
         Model.AdjustInitialPlane=delegate(Record r) { r.Definition.origin[0]+=100; };
@@ -450,15 +530,17 @@ public static class PlanarChecks
         foreach(Selection.Response cancel in new[]{Selection.Response.Cancel,Selection.Response.Back})
         {
             Model.Reset(); Model.AddCurve(101,false); Model.Options.SelectPlane=true; Model.PlaneResponse=cancel; Model.Run();
-            Check(Model.Picks=="P" && Model.Marks==0 && Model.PlaneBuilds==0 && Model.Severity==-1,"cancel plane selection");
+            Check(Model.Picks=="P" && Model.Marks==0 && Model.PlaneDisposals==1 && !Model.PreviewActive && Model.Severity==-1,"cancel removes preview and skips curves");
             Model.Reset(); Model.AddCurve(101,false); Model.Options.SelectPlane=true; Model.CurveResponse=cancel; Model.Run();
-            Check(Model.Picks=="PC" && Model.Marks==0 && Model.PlaneBuilds==0 && Model.Severity==-1,"cancel subsequent curve selection");
+            Check(Model.Picks=="PC" && Model.Marks==0 && Model.PlaneDisposals==1 && !Model.PreviewActive && Model.Severity==-1,"cancel subsequent curve selection");
         }
         Model.Reset(); Model.AddCurve(101,false); Model.Options.SelectPlane=true;
-        Model.Reference=new Face {SolidFaceType=Face.FaceType.Cylindrical}; Model.Run();
-        Check(Model.Severity==2 && Model.Picks=="P" && Model.Marks==0 && Model.Calls==0,"non-planar selection rejected before changes");
-        Model.Reset(); Model.AddCurve(101,false); Model.Options.SelectPlane=true; Model.ReferenceNormal=new Vector3d(); Model.Run(); RolledBack();
-        Check(Model.PlaneDisposals==1 && Model.Calls==0,"invalid reference geometry releases the temporary plane");
+        Model.MissingPlane=true; Model.Run();
+        Check(Model.Severity==2 && Model.Picks=="P" && Model.Marks==0 && Model.Calls==0 && Model.PlaneDisposals==1,
+            "empty constructor result rejected before CAM changes");
+        Model.Reset(); Model.AddCurve(101,false); Model.Options.SelectPlane=true; Model.ReferenceNormal=new Vector3d(); Model.Run();
+        Check(Model.Severity==2 && Model.PlaneDisposals==1 && !Model.PreviewActive && Model.Calls==0 && Model.Marks==0,
+            "invalid solved plane releases the preview before curve selection");
         Model.Reset(); Model.AddCurve(101,false); Model.Run(); Success();
         Check(Model.Picks=="C" && Model.PlaneBuilds==0 && Model.Replacements==0 && Model.Records[0].Definition.plane_type==1,
             "automatic path stays independent of reference geometry");

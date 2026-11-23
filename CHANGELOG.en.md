@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-24 — Curves for PLANAR V1.08
+
+The NX Plane constructor now sets the common boundary plane. Choose **At Distance** for an offset, or use a construction method such as **At Angle** or **Bisector**. [Guide](docs/en/planar-add-curves.md#latest-release).
+
+Every new boundary uses the position and normal evaluated by NX. Cancelling the constructor or the following curve selection discards the preview.
+
 ## 2026-11-24 — Engraving centerlines for PLANAR_MILL V1.15
 
 A new `GRAVIROVKA` receives its settings and boundaries in one edit. The journal reports the result as soon as Commit succeeds. NX controls **Coolant Type (UF 9703)**. This fixes the V1.14 rollback when NX kept the coolant setting as inherited or default. [Guide](docs/en/planar-mill-curves.md#latest-release).
