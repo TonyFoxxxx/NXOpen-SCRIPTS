@@ -4,13 +4,13 @@
 
 ## Latest release
 
-**V1.17 · 2026-11-24**
+**V1.18 · 2026-11-24**
 
-The journal now reads the work part by its UF tag. If NX reports **User abort** at startup, the journal exits normally. An interruption during editing rolls back the curves, boundaries and any new operation from that run.
+An NX interrupt during startup now opens a Windows **Retry / Cancel** dialog. Retry acknowledges the interrupt and reads the work part once more. Cancel ends the journal before any CAM edit.
 
-If NX interrupts the command, the status line shows the stage when available. If rollback fails, the report includes the original error and the undo error. If the report window itself fails to open, the journal writes the report to the NX system log.
+The interruption report names the NX call and includes the error code when NX supplies one. The dialog shows the full path to a diagnostic file in `%TEMP%\NXOpen-SCRIPTS\engraving`. A second interruption ends the attempt and displays its cause. An interruption during editing rolls back that run. If the NX report window fails, a Windows dialog shows the original report.
 
-V1.17 source SHA-256 is `9470e594d7f6a105d2031025c533f29c2e61224ce62295a6e6af13bb37a3a5aa`.
+V1.18 source SHA-256 is `05355bc3f2fa5d50799292b41571b4a645be5e72a9c782f258d3d82fc41a809d`.
 
 Source and working filename remain [NX_PlanarMill_Select_Curves.cs](../../scripts/NX_PlanarMill_Select_Curves.cs). Existing buttons need no change. The updater entry is now **«Оси гравировки для PLANAR_MILL»**. No Windows font or original text is required.
 
@@ -86,7 +86,9 @@ A construction error reports the failed selected face group. Highlight its sourc
 
 ## Validation
 
-The V1.16 entry point reproduced the reported User abort in PartCollection.get_Work in an NX API double. V1.17 cases cover startup, a pending interrupt, a changed or closed work part before editing, cancellation during creation or Commit, failed undo and report-window failure. The full journal compiled as C# 5 against NXOpen 2412 for .NET Framework 4.8 and Windows .NET 10. Interactive verification of V1.17 in Designcenter 2606 is pending.
+The V1.17 regression reproduces a pending interrupt together with error 66 in NXOpen.LogFile.WriteLine. V1.18 background tests use dialog and NX API doubles to exercise Retry, Cancel, a repeated native error, failure to clear the interrupt, a changed work part and interruption during CAM editing. They also read the saved diagnostic from an isolated temporary directory. The complete C# 5 journal compiled against NXOpen 2412 for .NET Framework 4.8 and Windows .NET 10. Interactive verification in Designcenter 2606 is pending.
+
+The V1.16 entry point reproduced the reported User abort in PartCollection.get_Work in an NX API double. V1.17 cases cover startup, a pending interrupt, a changed or closed work part before editing, cancellation during creation or Commit, failed undo and report-window failure. The full journal compiled as C# 5 against NXOpen 2412 for .NET Framework 4.8 and Windows .NET 10.
 
 144 synthetic cases cover the curved serif and clipped triangular corner, variations in wall shape, rotation, reflection, millimetres and inches, and uneven boundary subdivision. The checks measure the corner and fitted curve, physical end setbacks, and the continuity and separation of the routed strokes. The V1.16 journal compiled against NXOpen 2412 for .NET Framework 4.8 and Windows .NET 10. The screenshots provided the shape references. Verification on the original part in Designcenter 2606 is pending.
 

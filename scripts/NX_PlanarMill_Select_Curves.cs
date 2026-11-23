@@ -1,5 +1,5 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.17
+// SCRIPT_VERSION: V1.18
 // Select an existing PLANAR_MILL or choose the parents for a new engraving operation.
 // Reconstructs straight and curved centerlines; round/compact square dots use half-width circles.
 // Free physical ends stop half the local stroke width before the terminal boundary.
@@ -27,7 +27,7 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.17";
+    private const string SCRIPT_VERSION = "V1.18";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
     private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "16";
@@ -77,10 +77,29 @@ public class NXPlanarMillSelectCurves
         try
         {
             session = Session.GetSession(); uf = UFSession.GetUFSession();
-            stage = "Чтение рабочей детали";
-            Tag workTag = ReadWorkPartTag(uf);
-            Part part = workTag == Tag.Null ? null : NXObjectManager.Get(workTag) as Part;
-            if (part == null || part.CAMSetup == null) throw new InvalidOperationException("Откройте CAM-проект в Manufacturing.");
+            Tag workTag = Tag.Null;
+            Part part;
+            try
+            {
+                part = ReadCamPart(uf, ref workTag, ref stage);
+                stage = "Проверка запроса остановки NX при запуске";
+                CheckInterrupt(uf);
+            }
+            catch (Exception startError)
+            {
+                if (!IsUserAbort(startError)) throw;
+                string notice = SaveDiagnostic("NX прервал запуск на этапе «" + stage + "».\n" + ErrorDetails(startError));
+                bool retry;
+                try { retry = AskToResume(notice + "\n\n«Повторить» снимет запрос остановки NX и ещё раз прочитает рабочую деталь. «Отмена» завершит журнал."); }
+                catch (Exception windowError)
+                { throw new InvalidOperationException(notice + "\nНе удалось открыть окно продолжения. " + windowError.Message, startError); }
+                if (!retry) return;
+                // Only an explicit Retry at startup acknowledges the pending interrupt.
+                // No selection, undo mark or CAM edit has taken place.
+                stage = "Снятие запроса остановки NX по кнопке «Повторить»";
+                uf.Abort.ClearAbort();
+                part = ReadCamPart(uf, ref workTag, ref stage);
+            }
             stage = "Определение операции гравировки";
             NCGroup selectedGroup;
             PlanarMilling operation = SelectedOperation(uf, part, out selectedGroup);
@@ -103,9 +122,10 @@ public class NXPlanarMillSelectCurves
             double tolerance = 0.002 * unit, joinTolerance = 0.000001 * unit;
             PlanarCurveChains.Frame frame; int skipped;
             List<FaceGroup> groups = Prepare(uf, part, faces, assigned, tolerance, joinTolerance, out frame, out skipped);
-            if (groups.Count == 0) { status = ShowReport(session, NXMessageBox.DialogType.Information, "Средние линии выбранных граней уже назначены этой операции."); return; }
+            if (groups.Count == 0) { status = ShowReport(NXMessageBox.DialogType.Information, "Средние линии выбранных граней уже назначены этой операции."); return; }
             stage = "Проверка рабочей детали перед записью";
-            if (ReadWorkPartTag(uf) != workTag)
+            CheckInterrupt(uf);
+            if (uf.Assem.AskWorkPart() != workTag)
                 throw new InvalidOperationException("Рабочая деталь изменилась. Запустите скрипт заново.");
             stage = "Запись операции и границ";
             mark = session.SetUndoMark(Session.MarkVisibility.Visible, "Оси гравировки: " + (operation == null ? "GRAVIROVKA" : operation.Name));
@@ -114,7 +134,7 @@ public class NXPlanarMillSelectCurves
             string report = AssignAxes(uf, part, operation, parents, groups, frame, assigned, skipped, unit, joinTolerance);
             committed = true; hasMark = false;
             try { uf.UiOnt.Refresh(); } catch { }
-            status = ShowReport(session, NXMessageBox.DialogType.Information, report);
+            status = ShowReport(NXMessageBox.DialogType.Information, report);
         }
         catch (Exception ex)
         {
@@ -137,8 +157,8 @@ public class NXPlanarMillSelectCurves
             }
             if (!undoProblem && IsUserAbort(ex))
             {
-                status = "NX прервал выполнение на этапе «" + stage + "». " + state;
-                WriteLog(session, status + "\n" + ErrorDetails(ex));
+                status = NativeReport(NXMessageBox.DialogType.Information,
+                    "NX прервал выполнение на этапе «" + stage + "». " + state + "\n" + ErrorDetails(ex));
                 return;
             }
             // Highlight only the failed source group while its error is visible.
@@ -146,25 +166,36 @@ public class NXPlanarMillSelectCurves
             var highlighted = new List<Face>(); FaceGeometryException geometry = ex as FaceGeometryException;
             if (geometry != null) foreach (Face face in geometry.Faces)
                 try { face.Highlight(); highlighted.Add(face); } catch { }
-            try { status = ShowReport(session, NXMessageBox.DialogType.Error, stage + "\n" + ErrorDetails(ex)
+            try { status = ShowReport(NXMessageBox.DialogType.Error, stage + "\n" + ErrorDetails(ex)
                 + (highlighted.Count > 0 ? "\n\nПроблемные грани подсвечены на время этого сообщения." : "") + "\n\n" + state); }
             finally { foreach (Face face in highlighted) try { face.Unhighlight(); } catch { } }
         }
         finally { if (uf != null) try { uf.Ui.SetStatus(status); } catch { } }
     }
-    private static Tag ReadWorkPartTag(UFSession uf)
+    private static Part ReadCamPart(UFSession uf, ref Tag workTag, ref string stage)
     {
-        // UF returns the actual work part, including in an assembly. Leave pending
-        // interrupts to NX and never substitute the displayed part or retry a lookup.
+        stage = "Получение идентификатора рабочей детали (UFAssem.AskWorkPart)";
+        Tag current = uf.Assem.AskWorkPart();
+        if (workTag != Tag.Null && current != workTag) throw new InvalidOperationException("Рабочая деталь изменилась. Запустите журнал заново.");
+        if (current == Tag.Null) throw new InvalidOperationException("Откройте CAM-проект в Manufacturing.");
+        workTag = current;
+        stage = "Получение объекта рабочей детали (NXObjectManager.Get)";
+        Part part = NXObjectManager.Get(current) as Part;
+        if (part == null) throw new InvalidOperationException("NX не вернул рабочую деталь по её идентификатору.");
+        stage = "Чтение CAM-установки (Part.CAMSetup)";
+        if (part.CAMSetup == null) throw new InvalidOperationException("Откройте CAM-проект в Manufacturing.");
+        return part;
+    }
+    private static void CheckInterrupt(UFSession uf)
+    {
         bool interrupted; uf.Abort.AskFlagStatus(out interrupted);
         if (interrupted) throw new OperationCanceledException("От NX поступил запрос остановки.");
-        return uf.Assem.AskWorkPart();
     }
     private static bool IsUserAbort(Exception error)
     {
         if (error is OperationCanceledException) return true;
         NXException native = NativeError(error);
-        return native != null && (native.ErrorCode == UFConstants.UF_STD_ERR_USER_ABORT || native.ErrorCode == UFConstants.USER_ABORT
+        return native != null && (native.ErrorCode == 66 || native.ErrorCode == UFConstants.UF_STD_ERR_USER_ABORT || native.ErrorCode == UFConstants.USER_ABORT
             || String.Equals(native.Message.Trim().TrimEnd('.'), "User abort", StringComparison.OrdinalIgnoreCase));
     }
     private static NXException NativeError(Exception error)
@@ -181,21 +212,33 @@ public class NXPlanarMillSelectCurves
         if (!message.Contains(native.Message)) message += "\n" + native.Message;
         return message + "\nКод NX " + native.ErrorCode.ToString(CultureInfo.InvariantCulture);
     }
-    private static bool WriteLog(Session session, string message)
-    {
-        if (session == null) return false;
-        try { session.LogFile.WriteLine(Title + "\n" + message); return true; } catch { return false; }
-    }
-    private static string ShowReport(Session session, NXMessageBox.DialogType type, string report)
+    private static string ShowReport(NXMessageBox.DialogType type, string report)
     {
         try { Show(type, report); return ""; }
         catch (Exception error)
         {
-            // The NX dialog can itself raise User abort. Preserve the original report.
-            if (WriteLog(session, report + "\nОшибка окна отчёта. " + ErrorDetails(error)))
-                return "Отчёт журнала гравировки записан в системный журнал NX.";
-            return report.Replace("\n", " ");
+            return NativeReport(type, report + "\n\nОшибка окна отчёта NX. " + ErrorDetails(error));
         }
+    }
+    private static string NativeReport(NXMessageBox.DialogType type, string report)
+    {
+        string text = SaveDiagnostic(report);
+        try { ShowWindowsReport(type, text); return ""; }
+        catch (Exception error) { return text.Replace("\n", " ") + " Ошибка окна Windows. " + error.Message; }
+    }
+    private static string SaveDiagnostic(string report)
+    {
+        // NXOpen.LogFile.WriteLine can itself raise error 66 while an abort is pending.
+        try
+        {
+            string directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "NXOpen-SCRIPTS", "engraving");
+            Directory.CreateDirectory(directory);
+            string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
+            string path = System.IO.Path.Combine(directory, "NX_Engraving_" + stamp + "_" + Guid.NewGuid().ToString("N") + ".log");
+            File.WriteAllText(path, Title + Environment.NewLine + report, new UTF8Encoding(false));
+            return report + "\n\nФайл отчёта\n" + path;
+        }
+        catch (Exception error) { return report + "\n\nНе удалось записать файл отчёта. " + error.Message; }
     }
     private static string AssignAxes(UFSession uf, Part part, PlanarMilling operation, EngravingParents parents,
         List<FaceGroup> groups, PlanarCurveChains.Frame frame, HashSet<Tag> assigned, int skipped, double unit, double joinTolerance)
@@ -680,6 +723,29 @@ public class NXPlanarMillSelectCurves
     }
 
     private static void Show(NXMessageBox.DialogType type, string message) { UI.GetUI().NXMessageBox.Show(Title, type, message); }
+    private static bool AskToResume(string message)
+    {
+        const uint retryCancel = 5, warning = 0x30, defaultCancel = 0x100;
+        return WindowsMessage(message, retryCancel | warning | defaultCancel) == 4; // IDRETRY
+    }
+    private static void ShowWindowsReport(NXMessageBox.DialogType type, string message)
+    {
+        WindowsMessage(message, type == NXMessageBox.DialogType.Error ? 0x10u : 0x40u);
+    }
+    private static int WindowsMessage(string message, uint style)
+    {
+        const uint foreground = 0x10000, taskModal = 0x2000;
+        IntPtr owner = GetActiveWindow();
+        int result = MessageBoxW(owner, message, Title, style | foreground | (owner == IntPtr.Zero ? taskModal : 0u));
+        if (result == 0 && owner != IntPtr.Zero)
+            result = MessageBoxW(IntPtr.Zero, message, Title, style | foreground | taskModal);
+        if (result == 0) throw new InvalidOperationException("Windows не открыла окно. Код " + Marshal.GetLastWin32Error());
+        return result;
+    }
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern IntPtr GetActiveWindow();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    private static extern int MessageBoxW(IntPtr owner, string message, string caption, uint style);
     public static int GetUnloadOption(string unused) { return (int)Session.LibraryUnloadOption.Immediately; }
 }
 

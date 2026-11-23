@@ -2,6 +2,8 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Text;
 using CamOperation = Operation;
 
 internal enum Tag { Null }
@@ -26,7 +28,12 @@ internal class NXObject
 internal static class NXObjectManager
 {
     public static Dictionary<Tag, NXObject> Items = new Dictionary<Tag, NXObject>();
-    public static NXObject Get(Tag tag) { return Items[tag]; }
+    public static NXObject Get(Tag tag)
+    {
+        if (Checks.Mode == "object-abort" && tag == Checks.Part.Tag && UFSession.Current.Abort.Clears == 0)
+            throw new NXException(66, "Прерывание NX");
+        return Items[tag];
+    }
 }
 internal class CAMObject : NXObject { }
 internal class NCGroup : CAMObject
@@ -77,7 +84,20 @@ internal class CAMSetup
     public NCGroupCollection CAMGroupCollection = new NCGroupCollection();
 }
 internal class BasePart { public enum Units { Millimeters, Inches } }
-internal class Part : NXObject { internal CAMSetup CAMSetup = new CAMSetup(); internal BasePart.Units PartUnits = BasePart.Units.Millimeters; }
+internal class Part : NXObject
+{
+    readonly CAMSetup setup = new CAMSetup();
+    internal CAMSetup CAMSetup
+    {
+        get
+        {
+            if (Checks.Running && Checks.Mode == "setup-abort" && UFSession.Current.Abort.Clears == 0)
+                throw new NXException(66, "Прерывание NX");
+            return setup;
+        }
+    }
+    internal BasePart.Units PartUnits = BasePart.Units.Millimeters;
+}
 internal class NXMessageBox { internal enum DialogType { Information, Error } }
 internal class Face { public void Highlight() { } public void Unhighlight() { } }
 internal class PlanarCurveChains
@@ -159,7 +179,12 @@ internal class Session
     internal class Log
     {
         internal string Text = "";
-        public void WriteLine(string message) { Text += message + "\n"; }
+        public void WriteLine(string message)
+        {
+            if (Checks.Mode == "sticky-flag" || Checks.Mode == "error-dialog-abort")
+                throw new NXException(66, "User abort");
+            Text += message + "\n";
+        }
     }
     internal Log LogFile = new Log();
     public static Session Current;
@@ -199,11 +224,14 @@ internal class UFSession
         public Tag AskWorkPart()
         {
             Calls++;
+            if (Checks.Mode == "retry-always-abort" || (Checks.Mode == "retry-work-abort" && Current.Abort.Clears == 0))
+                throw new NXException(66, "Прерывание NX");
             if (Checks.Mode == "work-abort") throw new NXException(999, "User abort");
             if (Checks.Mode == "work-error" || Checks.Mode == "error-dialog-abort")
                 throw new NXException(314, "synthetic work part failure");
             if (Checks.Mode == "null-work" || (Calls == 2 && Checks.Mode == "closed-work")) return Tag.Null;
             if (Calls == 2 && Checks.Mode == "changed-work") return (Tag)909;
+            if (Checks.Mode == "retry-part-changed" && Current.Abort.Clears != 0) return (Tag)909;
             if (Calls == 2 && Checks.Mode == "recheck-abort") throw new NXException(UFConstants.UF_STD_ERR_USER_ABORT, "Отмена");
             return Checks.Part.Tag;
         }
@@ -211,11 +239,17 @@ internal class UFSession
     internal readonly Assembly Assem = new Assembly();
     internal class AbortApi
     {
-        int reads;
+        internal int Reads, Clears;
         public void AskFlagStatus(out bool interrupted)
         {
-            reads++;
-            interrupted = Checks.Mode == "pending-abort" || (reads == 2 && Checks.Mode == "pending-at-write");
+            Reads++;
+            interrupted = (Checks.Mode == "sticky-flag" || Checks.Mode == "pending-abort" || Checks.Mode == "retry-part-changed" || Checks.Mode == "clear-fails") && Clears == 0
+                || (Reads == 2 && Checks.Mode == "pending-at-write");
+        }
+        public void ClearAbort()
+        {
+            Clears++;
+            if (Checks.Mode == "clear-fails") throw new NXException(66, "Прерывание NX");
         }
     }
     internal readonly AbortApi Abort = new AbortApi();
@@ -296,6 +330,15 @@ internal class Workflow
         Checks.Dialogs++;
         if (Checks.Mode == "success-dialog-abort" || Checks.Mode == "error-dialog-abort") throw new NXException(999, "User abort");
         Checks.LastMessage = message; Checks.LastType = type;
+    }
+    static bool AskToResume(string message)
+    {
+        Checks.RetryDialogs++; Checks.LastNative = message;
+        return Checks.Mode != "pending-abort" && Checks.Mode != "work-abort";
+    }
+    static void ShowWindowsReport(NXMessageBox.DialogType type, string message)
+    {
+        Checks.NativeReports++; Checks.LastNative = message;
     }
     // JOURNAL WORKFLOW
 }
@@ -397,7 +440,9 @@ internal class Checks
     internal static string Mode, LastMessage;
     internal static NXMessageBox.DialogType LastType;
     internal static List<string> Edits = new List<string>();
-    internal static int Dialogs;
+    internal static int Dialogs, RetryDialogs, NativeReports;
+    internal static string LastNative;
+    internal static bool Running;
     static int count;
     public static void Expect(bool result, string reason)
     { if (!result) throw new Exception(reason); count++; }
@@ -410,7 +455,8 @@ internal class Checks
     }
     static void Reset(string mode)
     {
-        Mode = mode; Edits.Clear(); Dialogs = 0; LastMessage = ""; LastType = NXMessageBox.DialogType.Information;
+        Mode = mode; Edits.Clear(); Dialogs = 0; RetryDialogs = 0; NativeReports = 0; LastNative = "";
+        LastMessage = ""; LastType = NXMessageBox.DialogType.Information;
         EngravingParentDialog.Calls = 0; EngravingParentDialog.Defaults = null; NXObjectManager.Items.Clear();
         Session.Current = new Session(); Part = new Part(); NXObjectManager.Items[Part.Tag] = Part;
         UFSession.Current = new UFSession(); UFSession.Current.Cam = new ClearanceApi { Param = UFSession.Current.Param };
@@ -427,23 +473,49 @@ internal class Checks
         foreach (NXObject o in objects) { NXObjectManager.Items[o.Tag] = o; tags.Add(o.Tag); }
         UFSession.Current.UiOnt.Count = tags.Count; UFSession.Current.UiOnt.Tags = tags.ToArray();
     }
-    static void Run() { Workflow.Main(new string[0]); }
+    static void Run()
+    {
+        Running = true;
+        try { Workflow.Main(new string[0]); } finally { Running = false; }
+    }
     static int Ops { get { return Part.CAMSetup.CAMOperationCollection.Items.Count; } }
     static void InterruptCases()
     {
+        Reset("sticky-flag"); Run();
+        Expect(Ops == 1 && EngravingParentDialog.Calls == 1 && RetryDialogs == 1 && UFSession.Current.Abort.Clears == 1,
+            "V1.17 silent exit before the first window on a pending interrupt and LogFile::WriteLine error 66");
         // The live stack stopped in PartCollection.get_Work. The UF work-part tag can
         // identify a valid CAM part directly, including when a different part is displayed.
         Reset("managed-work-abort"); Run();
         Expect(Ops == 1 && UFSession.Current.Assem.Calls == 2 && Session.Current.Undos == 0, "work-part entry and pre-edit identity");
+        Expect(RetryDialogs == 0 && NativeReports == 0 && UFSession.Current.Abort.Clears == 0, "clean startup prompted or cleared an interrupt");
         foreach (string mode in new[] { "session-abort", "uf-abort", "work-abort", "recheck-abort", "wrapped-abort", "pending-abort", "pending-at-write" })
         {
             Reset(mode); Run();
-            Expect(Ops == 0 && Edits.Count == 0 && Session.Current.Marks == 0 && Dialogs == 0, mode);
-            if (mode == "work-abort")
-                Expect(UFSession.Current.Assem.Calls == 1 && EngravingParentDialog.Calls == 0 && Session.Current.LogFile.Text.Contains("999"), "retried or lost cancellation code");
-            if (mode == "pending-abort" || mode == "pending-at-write")
-                Expect(UFSession.Current.Assem.Calls == (mode == "pending-abort" ? 0 : 1), "ignored pending NX interrupt");
+            Expect(Ops == 0 && Edits.Count == 0 && Session.Current.Marks == 0 && Dialogs == 0 && UFSession.Current.Abort.Clears == 0, mode);
+            Expect(RetryDialogs + NativeReports == 1, "silent stop or duplicate notice: " + mode);
+            bool cancelledPrompt = mode == "work-abort" || mode == "pending-abort";
+            Expect(RetryDialogs == (cancelledPrompt ? 1 : 0), "offered a retry outside startup: " + mode);
+            if (cancelledPrompt) Expect(UFSession.Current.Assem.Calls == 1 && EngravingParentDialog.Calls == 0, "ran after Cancel");
+            if (mode == "work-abort") Expect(LastNative.Contains("999") && LastNative.Contains("UFAssem.AskWorkPart"), "missing code or call site");
         }
+        foreach (string mode in new[] { "retry-work-abort", "object-abort", "setup-abort" })
+        {
+            Reset(mode); Run();
+            Expect(Ops == 1 && Session.Current.Marks == 1 && UFSession.Current.Abort.Clears == 1
+                && RetryDialogs == 1 && NativeReports == 0 && EngravingParentDialog.Calls == 1, mode);
+            string method = mode == "object-abort" ? "NXObjectManager.Get" : mode == "setup-abort" ? "Part.CAMSetup" : "UFAssem.AskWorkPart";
+            Expect(LastNative.Contains("66") && LastNative.Contains(method), "wrong diagnostic for " + mode);
+        }
+        Reset("retry-always-abort"); Run();
+        Expect(Ops == 0 && Session.Current.Marks == 0 && UFSession.Current.Assem.Calls == 2 && UFSession.Current.Abort.Clears == 1
+            && RetryDialogs == 1 && NativeReports == 1 && LastNative.Contains("66"), "repeated native abort must stop visibly");
+        Reset("clear-fails"); Run();
+        Expect(Ops == 0 && Session.Current.Marks == 0 && UFSession.Current.Assem.Calls == 1 && UFSession.Current.Abort.Clears == 1
+            && RetryDialogs == 1 && NativeReports == 1 && LastNative.Contains("Снятие запроса") && LastNative.Contains("66"), "lost ClearAbort failure");
+        Reset("retry-part-changed"); Run();
+        Expect(Ops == 0 && Session.Current.Marks == 0 && RetryDialogs == 1 && EngravingParentDialog.Calls == 0
+            && LastType == NXMessageBox.DialogType.Error && LastMessage.Contains("Рабочая деталь изменилась"), "changed target during Retry");
         foreach (string mode in new[] { "null-work", "closed-work", "changed-work", "work-error", "similar-error" })
         {
             Reset(mode); Run();
@@ -454,7 +526,7 @@ internal class Checks
         {
             Reset(mode); Run();
             Expect(Ops == 0 && Edits.Count == 0 && Session.Current.Undos == 1 && Session.Current.RemovedMarks == 1 && Dialogs == 0, mode);
-            Expect(UFSession.Current.Ui.Status.Contains("отменены"), "lost rollback status");
+            Expect(NativeReports == 1 && LastNative.Contains("отменены") && RetryDialogs == 0 && UFSession.Current.Abort.Clears == 0, "lost rollback report");
         }
         Reset("undo-failure"); Run();
         Expect(Ops == 1 && Session.Current.Undos == 1 && Session.Current.RemovedMarks == 0 && Dialogs == 1
@@ -463,10 +535,14 @@ internal class Checks
         Expect(Ops == 0 && Session.Current.Undos == 1 && LastMessage.Contains("отменены")
             && LastMessage.Contains("synthetic delete mark failure"), "mark cleanup misreported as a failed undo");
         Reset("success-dialog-abort"); Run();
-        Expect(Ops == 1 && Session.Current.Undos == 0 && Dialogs == 1 && Session.Current.LogFile.Text.Contains("GRAVIROVKA"), "lost committed result");
+        Expect(Ops == 1 && Session.Current.Undos == 0 && Dialogs == 1 && NativeReports == 1 && LastNative.Contains("GRAVIROVKA"), "lost committed result");
         Reset("error-dialog-abort"); Run();
-        Expect(Ops == 0 && Dialogs == 1 && Session.Current.LogFile.Text.Contains("314")
-            && Session.Current.LogFile.Text.Contains("synthetic work part failure"), "secondary dialog failure masked the original error");
+        Expect(Ops == 0 && Dialogs == 1 && NativeReports == 1 && LastNative.Contains("314")
+            && LastNative.Contains("synthetic work part failure"), "secondary dialog failure masked the original error");
+        string[] lines = LastNative.Split('\n');
+        string file = lines[lines.Length - 1];
+        Expect(File.ReadAllText(file).Contains("synthetic work part failure") && Path.GetDirectoryName(file) ==
+            Path.Combine(Path.GetTempPath(), "NXOpen-SCRIPTS", "engraving"), "missing diagnostic independent of NX");
     }
     static void WorkflowCases()
     {
@@ -474,6 +550,8 @@ internal class Checks
         {
             Reset(mode); Run(); Expect(Ops == 0 && Edits.Count == 0 && Session.Current.Marks == 0, "early " + mode);
             Expect(LastType == (mode == "bad-geometry" ? NXMessageBox.DialogType.Error : NXMessageBox.DialogType.Information), mode);
+            if (mode == "parent-cancel" || mode == "face-cancel")
+                Expect(Dialogs == 0 && RetryDialogs == 0 && NativeReports == 0 && UFSession.Current.Abort.Clears == 0, "retried an explicit selection Cancel");
         }
         foreach (string mode in new string[] { "create-failure", "after-axes" })
         {

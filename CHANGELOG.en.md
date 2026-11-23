@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-24 — Engraving centerlines for PLANAR_MILL V1.18
+
+An NX interrupt during startup now opens a Windows **Retry / Cancel** dialog. Retry acknowledges the interrupt and reads the work part once more. Cancel ends the journal before any CAM edit. [Guide](docs/en/planar-mill-curves.md#latest-release).
+
+V1.18 source SHA-256 is `05355bc3f2fa5d50799292b41571b4a645be5e72a9c782f258d3d82fc41a809d`.
+
 ## 2026-11-24 — Engraving centerlines for PLANAR_MILL V1.17
 
 The journal now reads the work part by its UF tag. If NX reports **User abort** at startup, the journal exits normally. An interruption during editing rolls back the curves, boundaries and any new operation from that run. [Guide](docs/en/planar-mill-curves.md#latest-release).

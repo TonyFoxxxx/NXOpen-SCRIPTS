@@ -48,9 +48,12 @@ class EngravingCreationTests(unittest.TestCase):
                 run = ['dotnet', str(tmp / 'out/Checks.dll')]
             else:
                 self.skipTest('C# compiler not installed')
+            scratch = tmp / 'temp'
+            scratch.mkdir()
+            environment = dict(os.environ, TMPDIR=str(scratch), TEMP=str(scratch), TMP=str(scratch))
             for command in (build, run):
                 result = subprocess.run(command, cwd=tmp, capture_output=True, encoding='utf-8', errors='replace',
-                                        timeout=120, creationflags=hidden)
+                                        timeout=120, creationflags=hidden, env=environment)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('engraving creation checks passed', result.stdout)
 
