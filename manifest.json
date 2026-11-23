@@ -81,9 +81,9 @@
       "id": "NX_PlanarMill_Select_Curves",
       "name": "Оси гравировки для PLANAR_MILL",
       "file": "NX_PlanarMill_Select_Curves.cs",
-      "version": "V1.14",
+      "version": "V1.15",
       "path": "scripts/NX_PlanarMill_Select_Curves.cs",
-      "sha256": "84296d240ae6beb2fea7fc50953ebc8cf614f17d1a18f645a6ada61f86711759",
+      "sha256": "090e802123b798471315131533cdbc89c890970cff6c7c6e0949ee6209cb0306",
       "description": "Оси гравировки и точки D/2 с Tool Position On в выбранной или новой PLANAR_MILL."
     },
     {

@@ -21,7 +21,7 @@
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Очистка служебных хвостов и нумерации в именах всех операций с сохранением Z. | [Все функции](docs/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
 | [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.07 | Отдельная граница для каждой кривой на выбранной или автоматической плоскости. ON или TANTO с выбором сторон для замкнутых и открытых кривых. | [Все функции](docs/planar-add-curves.md) |
-| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.14 | Оси гравировки и точки D/2 для выбранной или новой PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
+| [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.15 | Оси гравировки и точки D/2 для выбранной или новой PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
 | [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1.01 | Снимок параметров операции гравировки, отчёт и JSON для диагностики. | [Все функции](docs/engraving-operation-diagnostic.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Создание однолинейного текста ГОСТ А из линий и гладких сплайнов по внешнему FON. | [Все функции](docs/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
@@ -39,11 +39,11 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Оси гравировки для PLANAR_MILL V1.14 · 24.11.2026
+### Последнее обновление — Оси гравировки для PLANAR_MILL V1.15 · 24.11.2026
 
-При пустом выделении выберите четыре родительские группы для новой GRAVIROVKA. В выбранной PLANAR_MILL сохраняются её настройки. Floor задайте в новой операции. [Руководство и проверки](docs/planar-mill-curves.md#изменения-последней-версии).
+Новая GRAVIROVKA создаётся за одно редактирование. Исключена финальная сверка, из-за которой возникал откат на Coolant Type (UF 9703). [Руководство](docs/planar-mill-curves.md#изменения-последней-версии).
 
-SHA-256 исходника V1.14 — `84296d240ae6beb2fea7fc50953ebc8cf614f17d1a18f645a6ada61f86711759`.
+SHA-256 исходника V1.15 — `090e802123b798471315131533cdbc89c890970cff6c7c6e0949ee6209cb0306`.
 
 ### Также опубликовано — Кривые в PLANAR V1.07 · 24.11.2026
 

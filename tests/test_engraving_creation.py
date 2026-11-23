@@ -26,7 +26,8 @@ class EngravingCreationTests(unittest.TestCase):
         preset += section(source, '    private void EngageOrRetract(', '    // Public UF operation parameters')
         preset += section(source, '    internal static void SetUfParameters(', '// BEGIN PORTABLE ENGRAVING ROUTING CORE')
         fixture = (ROOT / 'tests/fixtures/EngravingCreation.cs').read_text(encoding='utf-8')
-        fixture = fixture.replace('// JOURNAL WORKFLOW', workflow + selection)
+        commit = section(source, '    private static void CommitBoundaries(', '    private static Face[] SelectFaces(')
+        fixture = fixture.replace('// JOURNAL WORKFLOW', workflow + selection + commit)
         fixture += '\n' + parents + preset.replace('sealed class EngravingPreset', 'sealed partial class EngravingPreset')
         with tempfile.TemporaryDirectory(prefix='nx-engraving-create-') as folder:
             tmp = Path(folder)
@@ -53,17 +54,16 @@ class EngravingCreationTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('engraving creation checks passed', result.stdout)
 
-    def test_only_new_operations_receive_preset_and_saved_results_are_checked(self):
+    def test_journal_runs_the_commit_workflow_and_leaves_files_to_nx(self):
         source = JOURNAL.read_text(encoding='utf-8-sig')
-        write = section(source, '    private static string AssignAxes(', '    private static Face[] SelectFaces(')
-        self.assertIn('if (parents != null) EngravingPreset.SetUfParameters(uf, operation, unit, false)', write)
-        self.assertRegex(write, r'if \(parents != null\)\s*\{\s*EngravingPreset.Apply\(builder, unit, parents.ReferenceTool, false\)')
-        self.assertLess(write.index('builder.Commit()'), write.index('VerifyNewBoundaries('))
-        self.assertLess(write.index('VerifyNewBoundaries('), write.index('EngravingPreset.SetUfParameters(uf, operation, unit, true)'))
-        self.assertIn('finally { builder.Destroy(); }', write)
-        verify = section(source, '    private static void VerifyNewBoundaries(', '    private static bool SameMembers(')
-        self.assertIn('if (parents != null) EngravingPreset.Apply(reader, unit, parents.ReferenceTool, true)', verify)
-        self.assertIn('finally { reader.Destroy(); }', verify)
+        axes = section(source, '    private static string AssignAxes(', '    private static void CommitBoundaries(')
+        self.assertEqual(axes.count('CommitBoundaries('), 1)
+        finish = axes.split('CommitBoundaries(', 1)[1]
+        for call in ('EngravingPreset.', 'VerifyNewBoundaries(', 'AssignedCurves(', 'Boundaries('):
+            self.assertNotIn(call, finish)
+        reader = section(source, '    private static void VerifyNewBoundaries(', '    private static bool SameMembers(')
+        self.assertNotIn('EngravingPreset.', reader)
+        self.assertIn('finally { reader.Destroy(); }', reader)
         self.assertIn('GeometryRevision = "13"', source)
         for call in ('.GenerateToolPath(', '.Save(', '.SaveAs(', '.SetClearPlaneData(', '.SetClearPlaneTag(', '.CreateTool(', '.SetTagValue('):
             self.assertNotIn(call, source)

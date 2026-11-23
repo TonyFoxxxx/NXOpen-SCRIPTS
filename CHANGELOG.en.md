@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-24 — Engraving centerlines for PLANAR_MILL V1.15
+
+A new `GRAVIROVKA` receives its settings and boundaries in one edit. The journal reports the result as soon as Commit succeeds. NX controls **Coolant Type (UF 9703)**. This fixes the V1.14 rollback when NX kept the coolant setting as inherited or default. [Guide](docs/en/planar-mill-curves.md#latest-release).
+
+V1.15 source SHA-256 is `090e802123b798471315131533cdbc89c890970cff6c7c6e0949ee6209cb0306`.
+
 ## 2026-11-24 — Engraving centerlines for PLANAR_MILL V1.14
 
 The journal accepts one selected PLANAR_MILL or creates an operation from `mill_planar / PLANAR_MILL` after confirmation of its four CAM parents. The reference profile uses 350 mm/min, 7000 rpm and common MCS clearance. Select Floor inside the operation. If the named tool is unavailable, choose an existing tool. Mixed selections stop before editing. A failed edit rolls back the operation, curves and boundaries together. [Guide](docs/en/planar-mill-curves.md#latest-release).

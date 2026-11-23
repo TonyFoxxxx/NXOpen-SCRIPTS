@@ -4,9 +4,11 @@
 
 ## Latest release
 
-**V1.14 · 2026-11-24** adds engraving operation creation. A selected PLANAR_MILL keeps its cutting settings. Starting with an empty selection opens a choice of program, method, existing tool and MCS for a new `GRAVIROVKA`. Canceling either selection leaves the part untouched. A failed edit rolls back the new operation with its curves and boundaries.
+**V1.15 · 2026-11-24**
 
-V1.14 source SHA-256 is `84296d240ae6beb2fea7fc50953ebc8cf614f17d1a18f645a6ada61f86711759`.
+A new `GRAVIROVKA` receives its settings and boundaries in one edit. The journal reports the result as soon as Commit succeeds. NX controls **Coolant Type (UF 9703)**. This fixes the V1.14 rollback when NX kept the coolant setting as inherited or default.
+
+V1.15 source SHA-256 is `090e802123b798471315131533cdbc89c890970cff6c7c6e0949ee6209cb0306`.
 
 Source and working filename remain [NX_PlanarMill_Select_Curves.cs](../../scripts/NX_PlanarMill_Select_Curves.cs). Existing buttons need no change. The updater entry is now **«Оси гравировки для PLANAR_MILL»**. No Windows font or original text is required.
 
@@ -55,7 +57,9 @@ For assembly components, the CAM part must be both the work part and the display
 
 ## Boundaries and reruns
 
-Each chain is added as a separate **NXOpen BoundarySetPlanarMill**. Closed chains and dot circles explicitly use **Boundary Type = Closed**; open chains use **Open**. Set the type before and after appending curves. **Tool Position = On**, **Stock = 0**. New boundaries and members have **Custom Tolerance** disabled and inherit the operation tolerance. Individual members retain the operation tolerance. The boundary tolerance pair for a newly created operation is set and checked separately. Member settings are read back through a fresh builder after Commit. After Commit the type must exactly match the geometry: Open for an open chain, Closed for a ring or D/2 circle. Either Closed-to-Open or Open-to-Closed mismatch triggers rollback. Source curve membership and tool position are also verified; reject added closing members. Existing local boundaries are retained and their count is reported. For a preselected operation the journal preserves cutter compensation, depths, feeds, tool and smoothing. Use **Cut Pattern = Profile**. Different curve and cutting-level heights can also look offset in a perspective view.
+Each chain is a separate **NXOpen BoundarySetPlanarMill**. Loops and dot circles use **Closed**, open strokes use **Open**. The journal sets the type before and after appending curves. It sets **Tool Position = On** and **Stock = 0** and turns off **Custom Tolerance** for new boundaries and members so they inherit the operation tolerance. The new operation gets its local boundary tolerance pair and a single Commit.
+
+When appending to a **preselected operation**, the journal reopens the builder to check the previous and added boundaries, their member curves and the Open/Closed types. A changed type or an extra closing member triggers rollback. The result shows the number of existing boundaries retained. The selected operation keeps its tool, feeds, depths, compensation and smoothing. Use **Cut Pattern = Profile**. A height difference between the curves and the cut level can look like an offset in perspective.
 
 **When upgrading from V1.01–V1.12, recreate any retained previous axes:** undo that run or remove its curves from the operation boundaries and model. Previous results are not automatically replaced; the journal reports that they use the earlier algorithm.
 
@@ -93,4 +97,4 @@ For V1.12, all 1104 variants of 23 faces from the previously supplied STEP model
 
 An additional local sweep of 456 outlines from four fonts produced 387 results and 69 rejections by existing terminal-setback checks. All three previous routing failures in that set were resolved with no new rejections. This does not establish universal font support. Font files and their outlines are not distributed.
 
-The V1.14 source compiled against NXOpen 2412 API assemblies with .NET Framework 4.8 and restricted Windows .NET 10 references. Background tests exercise selection, tool substitution, metric/inch settings, saved-value checks and rollback after partial creation. The centerline algorithm and curve stamps match V1.13. Interactive Designcenter 2606 execution and native CAM results require verification in NX.
+The V1.15 source compiled against NXOpen 2412 with .NET Framework 4.8 and restricted Windows .NET 10 references. Background tests reproduced the V1.14 coolant rollback. A simulated NX commit that normalizes operation settings now succeeds with one builder and one Commit. Both a pre-existing coolant value and an inherited coolant setting are covered. Interactive V1.15 execution in Designcenter 2606 is pending.

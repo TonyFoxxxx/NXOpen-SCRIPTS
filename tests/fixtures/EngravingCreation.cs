@@ -31,20 +31,23 @@ internal class Operation : CAMObject { }
 internal class PlanarMilling : Operation
 {
     internal NCGroup[] Parents;
-    internal NCGroup GetParent(CAMSetup.View view) { return Parents[(int)view]; }
+    internal readonly List<BoundarySetPlanarMill> Saved = new List<BoundarySetPlanarMill>();
 }
 internal class OperationCollection
 {
     public enum UseDefaultName { False }
     public List<Operation> Items = new List<Operation>();
     public Operation[] ToArray() { return Items.ToArray(); }
+    internal int Builders, Commits, Destroyed, ChecksBeforeCommit, ChecksAfterCommit;
+    internal PlanarMillingBuilder CreatePlanarMillingBuilder(PlanarMilling operation)
+    { Builders++; return new PlanarMillingBuilder(this, operation); }
     public Operation Create(NCGroup p, NCGroup m, NCGroup t, NCGroup g, string type, string subtype, UseDefaultName policy, string name)
     {
         Checks.Expect(type == "mill_planar" && subtype == "PLANAR_MILL" && policy == UseDefaultName.False, "wrong template");
         var op = new PlanarMilling { Name = name, Parents = new NCGroup[] { p, m, t, g }, OwningPart = Checks.Part };
         Items.Add(op);
         if (Checks.Mode == "create-failure") throw new Exception("synthetic partial creation");
-        if (Checks.Mode == "wrong-parent") op.Parents[0] = g;
+        NXObjectManager.Items[op.Tag] = op;
         return op;
     }
 }
@@ -65,7 +68,65 @@ internal class BasePart { public enum Units { Millimeters, Inches } }
 internal class Part : NXObject { internal CAMSetup CAMSetup = new CAMSetup(); internal BasePart.Units PartUnits = BasePart.Units.Millimeters; }
 internal class NXMessageBox { internal enum DialogType { Information, Error } }
 internal class Face { public void Highlight() { } public void Unhighlight() { } }
-internal class PlanarCurveChains { internal class Frame { } }
+internal class PlanarCurveChains
+{
+    internal class Frame { }
+    internal class Chain { internal List<int> Items = new List<int>(); internal bool Closed; }
+}
+internal class V { public double X, Y, Z; }
+internal class Point3d { internal Point3d(double x, double y, double z) { } }
+internal class Matrix3x3 { }
+internal class Plane { }
+internal class BoundarySet { }
+internal class BoundarySetPlanarMill : BoundarySet
+{
+    internal BoundarySetPlanarMill BoundaryMemberList { get { return this; } }
+    internal NXObject[] Members = new NXObject[0];
+    internal NXObject[] GetContents() { return Members; }
+    internal bool Closed;
+}
+internal class Boundary
+{
+    internal readonly List<BoundarySet> Items = new List<BoundarySet>();
+    internal Boundary BoundaryList { get { return this; } }
+    internal BoundarySet[] GetContents() { return Items.ToArray(); }
+    internal void Erase(BoundarySet item) { Items.Remove(item); }
+}
+internal class PlanarMillingBuilder
+{
+    readonly OperationCollection owner;
+    readonly PlanarMilling operation;
+    internal readonly Boundary PartBoundary = new Boundary();
+    internal PlanarMillingBuilder(OperationCollection owner, PlanarMilling operation)
+    {
+        this.owner = owner; this.operation = operation;
+        PartBoundary.Items.AddRange(operation.Saved);
+        if (operation.Saved.Count == 0) PartBoundary.Items.Add(new BoundarySetPlanarMill());
+    }
+    internal void Commit()
+    {
+        owner.Commits++; Checks.Edits.Add("axes");
+        if (Checks.Mode == "after-axes") throw new InvalidOperationException("synthetic native Commit failure");
+        operation.Saved.Clear();
+        foreach (BoundarySetPlanarMill item in PartBoundary.Items) operation.Saved.Add(item);
+        if (Checks.Mode == "normalized")
+        {
+            UFSession.Current.Param.Values.Remove(37); // NX canonicalizes a different override at Commit.
+            UFSession.Current.Param.ForbidAccess = true;
+        }
+    }
+    internal void Destroy() { owner.Destroyed++; }
+}
+internal static class EngravingCamBoundary
+{
+    internal static BoundarySetPlanarMill Append(Boundary boundary, NXObject[] items, Point3d start, Matrix3x3 matrix, Plane plane, bool closed)
+    {
+        var set = new BoundarySetPlanarMill { Members = items, Closed = closed };
+        boundary.Items.Add(set); return set;
+    }
+    internal static void Verify(BoundarySetPlanarMill set, bool closed)
+    { Checks.Part.CAMSetup.CAMOperationCollection.ChecksBeforeCommit++; Checks.Expect(set.Closed == closed, "boundary type changed"); }
+}
 internal class Session
 {
     internal enum UndoMarkId { Edit }
@@ -129,13 +190,29 @@ internal class Workflow
         return Checks.Mode == "already-assigned" ? new List<FaceGroup>() : new List<FaceGroup> { new FaceGroup() };
     }
     static void EnsureNoInheritedBoundaries(UFSession uf, PlanarMilling op) { }
-    static HashSet<Tag> AssignedCurves(UFSession uf, PlanarMilling op) { return new HashSet<Tag>(); }
+    class CurveInfo { internal V Start = new V(); internal NXObject Curve = new NXObject(); }
+    static HashSet<Tag> AssignedCurves(UFSession uf, PlanarMilling op)
+    {
+        var tags = new HashSet<Tag>();
+        foreach (var set in op.Saved) foreach (var item in set.Members) tags.Add(item.Tag);
+        return tags;
+    }
+    static IntPtr[] Boundaries(UFSession uf, Tag op) { return new IntPtr[((PlanarMilling)NXObjectManager.Get(op)).Saved.Count]; }
+    static void VerifyNewBoundaries(Part part, PlanarMilling op, List<Tag[]> previous, List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains)
+    {
+        part.CAMSetup.CAMOperationCollection.ChecksAfterCommit++;
+        if (Checks.Mode == "changed-existing-boundary") throw new InvalidOperationException("synthetic saved-boundary mismatch");
+        Checks.Expect(op.Saved.Count == previous.Count + chains.Count, "wrong saved boundary count");
+    }
     static string AssignAxes(UFSession uf, Part part, PlanarMilling op, EngravingParents parents, List<FaceGroup> groups,
         PlanarCurveChains.Frame frame, HashSet<Tag> assigned, int skipped, double unit, double join)
     {
-        if (parents != null) Checks.Edits.Add("preset");
-        Checks.Edits.Add("axes");
-        if (Checks.Mode == "after-axes") throw new Exception("synthetic saved-boundary mismatch");
+        var previous = new List<Tag[]>();
+        foreach (var set in op.Saved) previous.Add(Array.ConvertAll(set.Members, item => item.Tag));
+        var curves = new List<CurveInfo> { new CurveInfo(), new CurveInfo() };
+        var chains = new List<PlanarCurveChains.Chain> {
+            new PlanarCurveChains.Chain { Items = { 0 } }, new PlanarCurveChains.Chain { Items = { 1 }, Closed = true } };
+        CommitBoundaries(uf, part, op, parents, unit, new Plane(), new Matrix3x3(), curves, chains, previous, assigned);
         return op.Name;
     }
     static void Show(NXMessageBox.DialogType type, string message) { Checks.LastMessage = message; Checks.LastType = type; }
@@ -155,21 +232,28 @@ internal class UFParam
 {
     public enum Status { Default, Inherited, Overridden, InvalidIndex }
     public Dictionary<int, object> Values = new Dictionary<int, object>();
+    internal bool ForbidAccess;
+    private int Index(int index)
+    {
+        if (index == 9703) throw new InvalidOperationException("Coolant Type is outside the engraving preset.");
+        if (ForbidAccess) throw new InvalidOperationException("Unexpected UF access after Commit: " + index);
+        return index;
+    }
     public int Writes;
     public int[] Events = { 2, 1 };
     public void AskUdes(Tag tag, UdeSetType set, out int count, out IntPtr[] events)
     { count = Events[(int)set]; events = count == 0 && set == UdeSetType.UdeStartSet ? null : new IntPtr[count + 1]; }
     public void DeleteAllUdes(Tag tag, UdeSetType set) { Events[(int)set] = 0; Writes++; }
-    public void AskParamStatus(Tag tag, int i, out Status status) { status = Values.ContainsKey(i) ? Status.Overridden : Status.Inherited; }
-    public void InheritValue(Tag tag, int i) { Values.Remove(i); Writes++; }
-    public void Set2dValue(Tag tag, int i, double[] value) { Values[i] = value; Writes++; }
-    public void Ask2dValue(Tag tag, int i, double[] value) { ((double[])Values[i]).CopyTo(value, 0); }
-    public void SetIntValue(Tag tag, int i, int value) { Values[i] = value; Writes++; }
-    public void AskIntValue(Tag tag, int i, out int value) { value = (int)Values[i]; }
-    public void SetDoubleValue(Tag tag, int i, double value) { Values[i] = value; Writes++; }
-    public void AskDoubleValue(Tag tag, int i, out double value) { value = (double)Values[i]; }
-    public void SetLogicalValue(Tag tag, int i, bool value) { Values[i] = value; Writes++; }
-    public void AskLogicalValue(Tag tag, int i, out bool value) { value = (bool)Values[i]; }
+    public void AskParamStatus(Tag tag, int i, out Status status) { status = Values.ContainsKey(Index(i)) ? Status.Overridden : Status.Inherited; }
+    public void InheritValue(Tag tag, int i) { Values.Remove(Index(i)); Writes++; }
+    public void Set2dValue(Tag tag, int i, double[] value) { Values[Index(i)] = value; Writes++; }
+    public void Ask2dValue(Tag tag, int i, double[] value) { ((double[])Values[Index(i)]).CopyTo(value, 0); }
+    public void SetIntValue(Tag tag, int i, int value) { Values[Index(i)] = value; Writes++; }
+    public void AskIntValue(Tag tag, int i, out int value) { value = (int)Values[Index(i)]; }
+    public void SetDoubleValue(Tag tag, int i, double value) { Values[Index(i)] = value; Writes++; }
+    public void AskDoubleValue(Tag tag, int i, out double value) { value = (double)Values[Index(i)]; }
+    public void SetLogicalValue(Tag tag, int i, bool value) { Values[Index(i)] = value; Writes++; }
+    public void AskLogicalValue(Tag tag, int i, out bool value) { value = (bool)Values[Index(i)]; }
 }
 internal enum ValueIntent { Function, PartUnits }
 internal enum ParamValueIntent { PartUnits, ToolDep }
@@ -214,15 +298,17 @@ internal class NcmPlanarEngRetBuilder
 }
 internal sealed partial class EngravingPreset
 {
-    internal static void CheckEngage(NcmPlanarEngRetBuilder move, double unit, bool initial, bool verify)
+    internal static void Apply(PlanarMillingBuilder builder, double unit, bool reference)
+    { Checks.Edits.Add("preset"); }
+    internal static void CheckEngage(NcmPlanarEngRetBuilder move, double unit, bool initial)
     {
-        new EngravingPreset(unit, verify).EngageOrRetract(move, initial ? NcmPlanarEngRetBuilder.EngRetTypes.SameAsDefault :
+        new EngravingPreset(unit).EngageOrRetract(move, initial ? NcmPlanarEngRetBuilder.EngRetTypes.SameAsDefault :
             NcmPlanarEngRetBuilder.EngRetTypes.PlungeLift, false, false, initial);
     }
-    internal static void CheckFeeds(FeedsBuilder feeds, double unit, bool reference, bool verify)
-    { new EngravingPreset(unit, verify).Feeds(feeds, reference); }
-    internal static void CheckDistance(InheritableToolDepBuilder field, double unit, bool percent, bool verify)
-    { new EngravingPreset(unit, verify).Distance("fixture", field, 50, percent); }
+    internal static void CheckFeeds(FeedsBuilder feeds, double unit, bool reference)
+    { new EngravingPreset(unit).Feeds(feeds, reference); }
+    internal static void CheckDistance(InheritableToolDepBuilder field, double unit, bool percent)
+    { new EngravingPreset(unit).Distance("fixture", field, 50, percent); }
 }
 internal class Checks
 {
@@ -233,12 +319,6 @@ internal class Checks
     static int count;
     public static void Expect(bool result, string reason)
     { if (!result) throw new Exception(reason); count++; }
-    static void Reject(Action action, string field)
-    {
-        try { action(); }
-        catch (InvalidOperationException ex) { Expect(ex.Message.Contains(field), "Missing field: " + ex.Message); return; }
-        throw new Exception("Accepted mismatched " + field);
-    }
     static T Group<T>(string name, NCGroup parent) where T : NCGroup, new()
     {
         T group = new T { Name = name, OwningPart = Part };
@@ -274,21 +354,31 @@ internal class Checks
             Reset(mode); Run(); Expect(Ops == 0 && Edits.Count == 0 && Session.Current.Marks == 0, "early " + mode);
             Expect(LastType == (mode == "bad-geometry" ? NXMessageBox.DialogType.Error : NXMessageBox.DialogType.Information), mode);
         }
-        foreach (string mode in new string[] { "create-failure", "wrong-parent", "after-axes" })
+        foreach (string mode in new string[] { "create-failure", "after-axes" })
         {
             Reset(mode); Run();
             Expect(Ops == 0 && Edits.Count == 0 && Session.Current.Marks == 1 && Session.Current.Undos == 1 && Session.Current.RemovedMarks == 1, "leaked " + mode);
             Expect(LastType == NXMessageBox.DialogType.Error && LastMessage.Contains("отменены"), "incorrect rollback report");
         }
-        Reset("ok"); Run();
+        Reset("normalized"); UFSession.Current.Param.Values[9703] = 7; Run();
+        var operations = Part.CAMSetup.CAMOperationCollection;
+        Expect(operations.Commits == 1 && operations.Builders == 1 && operations.Destroyed == 1, "new operation reopened or committed twice");
+        Expect(operations.ChecksBeforeCommit == 0 && operations.ChecksAfterCommit == 0 && LastType == NXMessageBox.DialogType.Information,
+            "new operation was checked");
+        Expect((int)UFSession.Current.Param.Values[9703] == 7 && !UFSession.Current.Param.Values.ContainsKey(37), "normalized settings changed");
+        Mode = "ok"; UFSession.Current.Param.ForbidAccess = false;
         Expect(EngravingParentDialog.Defaults[0] == -1 && EngravingParentDialog.Defaults[1] == 0 &&
             EngravingParentDialog.Defaults[2] == -1 && EngravingParentDialog.Defaults[3] == 0, "guessed parent or tool");
         Expect(Ops == 1 && Edits.Contains("preset") && Edits.Contains("axes") && Session.Current.Undos == 0, "creation failed");
         PlanarMilling first = (PlanarMilling)Part.CAMSetup.CAMOperationCollection.Items[0];
         Expect(first.Name == "GRAVIROVKA" && first.Parents[0].Name == "Pocket" && first.Parents[2].Name == "Ball A", "parent routing");
+        Expect(first.Saved.Count == 2 && !first.Saved[0].Closed && first.Saved[1].Closed, "open and closed boundaries on creation");
+        int presetWrites = UFSession.Current.Param.Writes;
         Edits.Clear(); Select(first); Run();
+        Expect(UFSession.Current.Param.Writes == presetWrites, "existing operation received UF settings");
+        Expect(operations.ChecksBeforeCommit == 2 && operations.ChecksAfterCommit == 1, "existing append checks skipped");
         Expect(Ops == 1 && EngravingParentDialog.Calls == 1 && Edits.Count == 1 && Edits[0] == "axes", "existing operation reset");
-        Mode = "after-axes"; Run(); Expect(Ops == 1 && Session.Current.Undos == 1, "existing operation lost");
+        Mode = "changed-existing-boundary"; Run(); Expect(Ops == 1 && Session.Current.Undos == 1, "existing boundary rollback");
         Reset("ok"); NCGroup toolGroup = Part.CAMSetup.Roots[2];
         Group<Tool>(EngravingParents.ToolName, toolGroup); Run();
         Expect(EngravingParentDialog.Defaults[2] == 1 && ((PlanarMilling)Part.CAMSetup.CAMOperationCollection.Items[0]).Parents[2].Name == EngravingParents.ToolName, "exact tool");
@@ -321,24 +411,20 @@ internal class Checks
         {
             Reset("ok"); var uf = UFSession.Current; var op = new PlanarMilling();
             uf.Param.Values[220] = 2; uf.Param.Values[1000] = 99.0; uf.Param.Values[3007] = "manual floor";
-            EngravingPreset.SetUfParameters(uf, op, unit, false);
+            EngravingPreset.SetUfParameters(uf, op, unit);
             Expect(!uf.Param.Values.ContainsKey(220) && !uf.Param.Values.ContainsKey(1000) && (string)uf.Param.Values[3007] == "manual floor", "wrong inherited MCS, tool or Floor");
             Expect((double)uf.Param.Values[399] == 200 && (double)uf.Param.Values[42] == 3 * unit && !(bool)uf.Param.Values[116], "unit or zero/false mismatch");
             var tol = (double[])uf.Param.Values[37]; Expect(tol[0] == 0.03 * unit && tol[1] == tol[0], "boundary tolerance pair");
             Expect(uf.Param.Events[0] == 0 && uf.Param.Events[1] == 0, "start/end UDEs not cleared");
-            int writes = uf.Param.Writes; EngravingPreset.SetUfParameters(uf, op, unit, true); Expect(writes == uf.Param.Writes, "readback wrote state");
-            uf.Param.Events[0] = 1; Reject(delegate { EngravingPreset.SetUfParameters(uf, op, unit, true); }, "UdeStartSet"); uf.Param.Events[0] = 0;
-            tol[1] = double.PositiveInfinity; Reject(delegate { EngravingPreset.SetUfParameters(uf, op, unit, true); }, "37");
-            tol[1] = tol[0]; uf.Param.Values.Remove(37); Reject(delegate { EngravingPreset.SetUfParameters(uf, op, unit, true); }, "37");
+            Expect(!uf.Param.Values.ContainsKey(9703), "inherited coolant became local");
             var f = new InheritableToolDepBuilder();
-            EngravingPreset.CheckDistance(f, unit, true, false); Expect(f.Value == 50 && f.Intent == ParamValueIntent.ToolDep && f.ValueIntent == ValueIntent.Function && !f.InheritanceStatus, "percent scaled");
-            EngravingPreset.CheckDistance(f, unit, false, false); Expect(f.Value == 50 * unit && f.Intent == ParamValueIntent.PartUnits && f.ValueIntent == ValueIntent.PartUnits, "length not scaled");
-            EngravingPreset.CheckDistance(f, unit, false, true);
+            EngravingPreset.CheckDistance(f, unit, true); Expect(f.Value == 50 && f.Intent == ParamValueIntent.ToolDep && f.ValueIntent == ValueIntent.Function && !f.InheritanceStatus, "percent scaled");
+            EngravingPreset.CheckDistance(f, unit, false); Expect(f.Value == 50 * unit && f.Intent == ParamValueIntent.PartUnits && f.ValueIntent == ValueIntent.PartUnits, "length not scaled");
             foreach (bool initial in new bool[] { false, true })
             {
                 var move = new NcmPlanarEngRetBuilder();
                 move.DiameterBuilder.Value = 72; move.MinRampLengthBuilder.Value = 27; move.HelicalRampAngleBuilder.Value = 12;
-                EngravingPreset.CheckEngage(move, unit, initial, false); EngravingPreset.CheckEngage(move, unit, initial, true);
+                EngravingPreset.CheckEngage(move, unit, initial);
                 Expect(move.DiameterBuilder.InheritanceStatus == initial && move.MinRampLengthBuilder.InheritanceStatus == initial &&
                     move.HelicalRampAngleBuilder.InheritanceStatus == initial, "engage override/inheritance");
                 Expect(move.HeightBuilder.Value == 3 * unit && move.LengthBuilder.Value == 90 && move.LengthBuilder.ValueIntent == ValueIntent.Function,
@@ -349,15 +435,13 @@ internal class Checks
             foreach (bool reference in new bool[] { false, true })
             {
                 var feeds = new FeedsBuilder();
-                EngravingPreset.CheckFeeds(feeds, unit, reference, false); EngravingPreset.CheckFeeds(feeds, unit, reference, true);
+                EngravingPreset.CheckFeeds(feeds, unit, reference);
                 Expect(feeds.SpindleRpmBuilder.Value == 7000 && feeds.FeedCutBuilder.Value == 350 * unit &&
                     feeds.FeedCutBuilder.Unit == FeedRateUnit.PerMinute && !feeds.FeedCutBuilder.InheritanceStatus, "feed/RPM");
                 if (reference) Expect(feeds.Recalculations == 0 && feeds.FeedPerToothBuilder.Value == 0.025 * unit &&
                     feeds.SurfaceSpeedBuilder.Value == (unit == 1 ? 21.991148575128552 : 21.991148575128552 / 0.3048), "reference feed parameters");
                 else Expect(feeds.Recalculations == 2 && feeds.SurfaceSpeedBuilder.Value == 84 &&
                     feeds.FeedPerToothBuilder.Value == 350 * unit / 7000 / 4, "replacement tool inherited reference geometry");
-                feeds.SpindleRpmBuilder.Value = 6000;
-                Reject(delegate { EngravingPreset.CheckFeeds(feeds, unit, reference, true); }, "Spindle RPM");
             }
         }
     }

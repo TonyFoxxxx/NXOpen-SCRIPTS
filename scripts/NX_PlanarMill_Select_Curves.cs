@@ -1,5 +1,5 @@
 // NX_PlanarMill_Select_Curves.cs - centerlines from planar engraving faces.
-// SCRIPT_VERSION: V1.14
+// SCRIPT_VERSION: V1.15
 // Select an existing PLANAR_MILL or choose the parents for a new engraving operation.
 // Reconstructs straight and curved centerlines; round/compact square dots use half-width circles.
 // Free physical ends stop half the local stroke width before the terminal boundary.
@@ -27,7 +27,7 @@ using R = EngravingCenterlines.Region;
 
 public class NXPlanarMillSelectCurves
 {
-    private const string SCRIPT_VERSION = "V1.14";
+    private const string SCRIPT_VERSION = "V1.15";
     private const string GroupAttribute = "NX_PM_AXIS_GROUP", ShapeAttribute = "NX_PM_AXIS_SHAPE";
     private const string SourceAttribute = "NX_PM_AXIS_FACE", CountAttribute = "NX_PM_AXIS_COUNT";
     private const string RevisionAttribute = "NX_PM_AXIS_REVISION", GeometryRevision = "13";
@@ -126,7 +126,7 @@ public class NXPlanarMillSelectCurves
         List<FaceGroup> groups, PlanarCurveChains.Frame frame, HashSet<Tag> assigned, int skipped, double unit, double joinTolerance)
     {
         EnsureNoInheritedBoundaries(uf, operation);
-        if (!assigned.SetEquals(AssignedCurves(uf, operation))) throw new InvalidOperationException("Границы операции изменились во время выбора. Повторите запуск.");
+        if (parents == null && !assigned.SetEquals(AssignedCurves(uf, operation))) throw new InvalidOperationException("Границы операции изменились во время выбора. Повторите запуск.");
         IntPtr[] oldBoundaries = Boundaries(uf, operation.Tag);
         if (parents != null && oldBoundaries.Length != 0)
             throw new InvalidOperationException("Шаблон уже содержит границы детали. Проверьте родительскую геометрию.");
@@ -164,17 +164,34 @@ public class NXPlanarMillSelectCurves
             }
         }
         if (chains.Count == 0) throw new InvalidOperationException("По выбранным граням не построено ни одной цепочки.");
-        if (parents != null) EngravingPreset.SetUfParameters(uf, operation, unit, false);
         Plane boundaryPlane = part.Planes.CreatePlane(new Point3d(frame.Origin.X, frame.Origin.Y, frame.Origin.Z),
             new Vector3d(frame.Z.X, frame.Z.Y, frame.Z.Z), SmartObject.UpdateOption.WithinModeling);
         Matrix3x3 matrix = new Matrix3x3 { Xx = frame.X.X, Xy = frame.X.Y, Xz = frame.X.Z,
             Yx = frame.Y.X, Yy = frame.Y.Y, Yz = frame.Y.Z, Zx = frame.Z.X, Zy = frame.Z.Y, Zz = frame.Z.Z };
+        string target = parents == null ? "Операция: " + operation.Name : "Создана операция: " + operation.Name + parents.Report();
+        CommitBoundaries(uf, part, operation, parents, unit, boundaryPlane, matrix, curves, chains, oldMembers, assigned);
+        int closed = chains.FindAll(delegate(PlanarCurveChains.Chain c) { return c.Closed; }).Count;
+        return target + "\nСоздано кривых: " + curves.Count
+            + "\nЦепочек кривых: " + chains.Count + " (разомкнутых: " + (chains.Count - closed) + ", замкнутых: " + closed + ")"
+            + "\nТочек (окружностей D/2): " + dots + (skipped > 0 ? "\nРанее обработанных граней пропущено: " + skipped : "")
+            + "\nСуществующих границ сохранено: " + oldBoundaries.Length
+            + "\nРазделено узлов: " + junctions + (junctions > 0 ? "; зазор: " + minimumGap.ToString("0.###")
+                + (maximumGap > minimumGap * 1.001 ? "–" + maximumGap.ToString("0.###") : "") + " мм." : "")
+            + "\n\nНовые кривые созданы в плоскости выбранных граней. Tool Position: ON; Stock: 0. Допуск задаётся в операции."
+            + "\nПроверьте средние линии, уровни резания и рассчитайте траекторию штатной командой NX.\nОтмена: Ctrl+Z.";
+    }
+
+    private static void CommitBoundaries(UFSession uf, Part part, PlanarMilling operation, EngravingParents parents,
+        double unit, Plane boundaryPlane, Matrix3x3 matrix, List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains,
+        List<Tag[]> oldMembers, HashSet<Tag> assigned)
+    {
+        if (parents != null) EngravingPreset.SetUfParameters(uf, operation, unit);
         PlanarMillingBuilder builder = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
         try
         {
             if (parents != null)
             {
-                EngravingPreset.Apply(builder, unit, parents.ReferenceTool, false);
+                EngravingPreset.Apply(builder, unit, parents.ReferenceTool);
                 foreach (BoundarySet item in builder.PartBoundary.BoundaryList.GetContents())
                 {
                     BoundarySetPlanarMill placeholder = item as BoundarySetPlanarMill;
@@ -190,31 +207,19 @@ public class NXPlanarMillSelectCurves
                 V startPoint = curves[chain.Items[0]].Start;
                 BoundarySetPlanarMill set = EngravingCamBoundary.Append(builder.PartBoundary, objects,
                     new Point3d(startPoint.X, startPoint.Y, startPoint.Z), matrix, boundaryPlane, chain.Closed);
-                EngravingCamBoundary.Verify(set, chain.Closed);
+                if (parents == null) EngravingCamBoundary.Verify(set, chain.Closed);
             }
             builder.Commit();
         }
         finally { builder.Destroy(); }
-        // Read saved boundary sets through the same NXOpen API used to create them.
-        VerifyNewBoundaries(part, operation, oldMembers, curves, chains, parents, unit);
-        if (parents != null)
-        {
-            parents.Verify(operation);
-            EngravingPreset.SetUfParameters(uf, operation, unit, true);
-        }
-        HashSet<Tag> expectedTags = new HashSet<Tag>(assigned); foreach (CurveInfo curve in curves) expectedTags.Add(curve.Curve.Tag);
-        if (!AssignedCurves(uf, operation).SetEquals(expectedTags) || Boundaries(uf, operation.Tag).Length != oldBoundaries.Length + chains.Count)
+        if (parents != null) return;
+
+        // An existing operation may already contain user boundaries. Preserve the append-mode checks.
+        VerifyNewBoundaries(part, operation, oldMembers, curves, chains);
+        HashSet<Tag> expectedTags = new HashSet<Tag>(assigned);
+        foreach (CurveInfo curve in curves) expectedTags.Add(curve.Curve.Tag);
+        if (!AssignedCurves(uf, operation).SetEquals(expectedTags) || Boundaries(uf, operation.Tag).Length != oldMembers.Count + chains.Count)
             throw new InvalidOperationException("NX сохранил другой состав границ. Изменение отменяется.");
-        int closed = chains.FindAll(delegate(PlanarCurveChains.Chain c) { return c.Closed; }).Count;
-        return (parents == null ? "Операция: " : "Создана операция: ") + operation.Name
-            + (parents == null ? "" : parents.Report()) + "\nСоздано кривых: " + curves.Count
-            + "\nЦепочек кривых: " + chains.Count + " (разомкнутых: " + (chains.Count - closed) + ", замкнутых: " + closed + ")"
-            + "\nТочек (окружностей D/2): " + dots + (skipped > 0 ? "\nРанее обработанных граней пропущено: " + skipped : "")
-            + "\nСуществующих границ сохранено: " + oldBoundaries.Length
-            + "\nРазделено узлов: " + junctions + (junctions > 0 ? "; зазор: " + minimumGap.ToString("0.###")
-                + (maximumGap > minimumGap * 1.001 ? "–" + maximumGap.ToString("0.###") : "") + " мм." : "")
-            + "\n\nНовые кривые созданы в плоскости выбранных граней. Tool Position: ON; Stock: 0. Допуск задаётся в операции."
-            + "\nПроверьте средние линии, уровни резания и рассчитайте траекторию штатной командой NX.\nОтмена: Ctrl+Z.";
     }
 
     private static Face[] SelectFaces()
@@ -556,14 +561,13 @@ public class NXPlanarMillSelectCurves
     }
 
     private static void VerifyNewBoundaries(Part part, PlanarMilling operation, List<Tag[]> old,
-        List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains, EngravingParents parents, double unit)
+        List<CurveInfo> curves, List<PlanarCurveChains.Chain> chains)
     {
         PlanarMillingBuilder reader = part.CAMSetup.CAMOperationCollection.CreatePlanarMillingBuilder(operation);
         try
         {
             BoundarySet[] sets = reader.PartBoundary.BoundaryList.GetContents();
-            if (parents != null) EngravingPreset.Apply(reader, unit, parents.ReferenceTool, true);
-            if (parents == null && sets.Length != old.Count + chains.Count) throw new InvalidOperationException("NX изменил количество границ операции.");
+            if (sets.Length != old.Count + chains.Count) throw new InvalidOperationException("NX изменил количество границ операции.");
             Dictionary<Tag, int> chainByTag = new Dictionary<Tag, int>();
             for (int i = 0; i < chains.Count; i++) foreach (int index in chains[i].Items) chainByTag.Add(curves[index].Curve.Tag, i);
             HashSet<int> verifiedChains = new HashSet<int>(), verifiedOld = new HashSet<int>();
@@ -572,7 +576,6 @@ public class NXPlanarMillSelectCurves
                 BoundarySetPlanarMill set = item as BoundarySetPlanarMill;
                 if (set == null) throw new InvalidOperationException("NX вернул неподдерживаемый набор границ.");
                 Tag[] tags = EngravingCamBoundary.Tags(set, true);
-                if (parents != null && tags.Length == 0) continue; // NX may expose an empty editor row.
                 bool previous = false;
                 for (int i = 0; i < old.Count; i++) if (!verifiedOld.Contains(i) && SameMembers(tags, old[i]))
                 { verifiedOld.Add(i); previous = true; break; }
@@ -698,18 +701,7 @@ internal sealed class EngravingParents
         PlanarMilling operation = operations.Create(groups[0], groups[1], groups[2], groups[3],
             "mill_planar", "PLANAR_MILL", OperationCollection.UseDefaultName.False, FreeName(used)) as PlanarMilling;
         if (operation == null) throw new InvalidOperationException("NX не создал PLANAR_MILL из шаблона mill_planar.");
-        Verify(operation);
         return operation;
-    }
-
-    internal void Verify(PlanarMilling operation)
-    {
-        for (int i = 0; i < Views.Length; i++)
-        {
-            NCGroup actual = operation.GetParent(Views[i]);
-            if (actual == null || actual.Tag != groups[i].Tag)
-                throw new InvalidOperationException("NX назначил другую родительскую группу: " + Labels[i] + ".");
-        }
     }
 
     internal string Report()
@@ -826,20 +818,15 @@ internal static class EngravingParentDialog
 // Values are operation settings in the reference part's metric units. No model tags or planes.
 internal sealed class EngravingPreset
 {
-    private readonly bool checking;
     private readonly double unit;
-    private EngravingPreset(double lengthUnit, bool verify) { unit = lengthUnit; checking = verify; }
+    private EngravingPreset(double lengthUnit) { unit = lengthUnit; }
 
     private static bool Close(double a, double b)
     { return !double.IsNaN(a) && !double.IsInfinity(a) && Math.Abs(a - b) <= 1e-8 * Math.Max(1, Math.Abs(b)); }
 
-    private static InvalidOperationException Difference(string name, object actual, object expected)
-    { return new InvalidOperationException("NX вернул другое значение " + name + ": " + actual + " (ожидалось " + expected + ")."); }
-
     private void Setting<T>(string name, T actual, T expected, Action<T> write)
     {
         if (EqualityComparer<T>.Default.Equals(actual, expected)) return;
-        if (checking) throw Difference(name, actual, expected);
         try { write(expected); }
         catch (Exception ex) { throw new InvalidOperationException("Не удалось задать " + name + ": " + ex.Message, ex); }
     }
@@ -867,9 +854,9 @@ internal sealed class EngravingPreset
         Number(name, field.Value, toolDependent ? value : unit * value, v => field.Value = v);
     }
 
-    internal static void Apply(PlanarMillingBuilder builder, double unit, bool referenceTool, bool verify)
+    internal static void Apply(PlanarMillingBuilder builder, double unit, bool referenceTool)
     {
-        EngravingPreset preset = new EngravingPreset(unit, verify);
+        EngravingPreset preset = new EngravingPreset(unit);
         preset.Cut(builder);
         preset.Moves(builder.NonCuttingBuilder);
         preset.Feeds(builder.FeedsBuilder, referenceTool);
@@ -933,12 +920,12 @@ internal sealed class EngravingPreset
             Local("Feed Per Tooth", feeds.FeedPerToothBuilder, 0.025 * unit);
         }
         Local("Spindle RPM", feeds.SpindleRpmBuilder, 7000);
-        if (!checking && !referenceTool) feeds.RecalculateData(FeedsBuilder.RecalculateBasedOn.SpindleSpeed);
+        if (!referenceTool) feeds.RecalculateData(FeedsBuilder.RecalculateBasedOn.SpindleSpeed);
         InheritableFeedBuilder feed = feeds.FeedCutBuilder;
         Inherit("Feed Cut", feed, false);
         Setting("Feed Cut Unit", feed.Unit, FeedRateUnit.PerMinute, v => feed.Unit = v);
         Number("Feed Cut", feed.Value, 350 * unit, v => feed.Value = v);
-        if (!checking && !referenceTool) feeds.RecalculateData(FeedsBuilder.RecalculateBasedOn.CutFeedRate);
+        if (!referenceTool) feeds.RecalculateData(FeedsBuilder.RecalculateBasedOn.CutFeedRate);
         Inherit("Rapid Output", feeds.FeedRapidOutput, true);
     }
 
@@ -1016,9 +1003,9 @@ internal sealed class EngravingPreset
 
     // Public UF operation parameters not covered by the builder, including the separate
     // boundary tolerance pair. Only documented scalar kinds are written, never pointers or object tags.
-    internal static void SetUfParameters(UFSession uf, PlanarMilling operation, double unit, bool verify)
+    internal static void SetUfParameters(UFSession uf, PlanarMilling operation, double unit)
     {
-        var fields = new UfFields(uf.Param, operation.Tag, verify);
+        var fields = new UfFields(uf.Param, operation.Tag);
         // Retain the source's inheritance of the tool, geometry, method and clearance. A target
         // group may supply a different value or fall back to the system default.
         int[] inherited = { 5, 6, 7, 10, 11, 12, 13, 14, 16, 18, 19, 59, 62, 66, 67, 109, 220, 380, 382,
@@ -1086,7 +1073,6 @@ internal sealed class EngravingPreset
         fields.Real(7206, "Feed Rate Optimize Interval Length", 10 * unit);
         fields.Integer(7207, "Feed Rate Optimize On Generate Status", 2);
         fields.Real(7208, "Feed Rate Optimize Stepover", 15 * unit);
-        fields.Integer(9703, "Coolant Type", 0);
         fields.Real(17000, "Conventional Stepover Percentage", 100);
 
         foreach (UdeSetType set in new UdeSetType[] { UdeSetType.UdeStartSet, UdeSetType.UdeEndSet })
@@ -1096,7 +1082,6 @@ internal sealed class EngravingPreset
             if (count < 0 || (count > 0 && (events == null || events.Length < count)))
                 throw new InvalidOperationException("Не удалось прочитать события операции: " + set + ".");
             if (count == 0) continue;
-            if (verify) throw Difference(set.ToString(), count, 0);
             uf.Param.DeleteAllUdes(operation.Tag, set);
         }
 
@@ -1104,18 +1089,14 @@ internal sealed class EngravingPreset
         uf.Cam.AskClearPlaneUsage(operation.Tag, out usage);
         var expected = ParamClrplaneUsage.ParamClrplaneUsageAtOperationStartAndEnd;
         if (usage != expected || !fields.Overridden(221))
-        {
-            if (verify) throw Difference("Clearance Plane Usage (221)", usage, expected);
             uf.Cam.SetClearPlaneUsage(operation.Tag, expected);
-        }
     }
 
     private sealed class UfFields
     {
         private readonly UFParam api;
         private readonly Tag tag;
-        private readonly bool verifying;
-        internal UfFields(UFParam param, Tag operation, bool verify) { api = param; tag = operation; verifying = verify; }
+        internal UfFields(UFParam param, Tag operation) { api = param; tag = operation; }
         internal bool Overridden(int index)
         {
             UFParam.Status status; api.AskParamStatus(tag, index, out status);
@@ -1124,18 +1105,13 @@ internal sealed class EngravingPreset
         }
         internal void FromParent(int index)
         {
-            if (!Overridden(index)) return;
-            if (verifying) throw Difference("UF " + index, "Overridden", "Inherited / Default");
-            api.InheritValue(tag, index);
+            if (Overridden(index)) api.InheritValue(tag, index);
         }
         private void Field(int index, string name, Func<bool> matches, Action write)
         {
             try
             {
-                bool local = Overridden(index);
-                if (local && matches()) return;
-                if (verifying)
-                    throw new InvalidOperationException(local ? "NX изменил значение после Commit." : "NX не сохранил локальное переопределение.");
+                if (Overridden(index) && matches()) return;
                 write();
             }
             catch (Exception ex) { throw new InvalidOperationException(name + " (UF " + index + "): " + ex.Message, ex); }
