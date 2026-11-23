@@ -161,12 +161,14 @@ namespace NXOpen.UF
         }
     }
 }
+#if !COMPILE_FULL_PLANAR_JOURNAL
 public static class PlanarCurveWindows
 {
     public static PlanarCurveOptions AskOptions(IntPtr owner,string title,string operation) { return Model.Options; }
     public static void ShowReport(IntPtr owner,string title,string headline,string report,int severity)
     { Model.Report=report; Model.Severity=severity; }
 }
+#endif
 public class Record
 {
     public Tag[] Tags; public UFCambnd.BoundaryData Definition; public UFCambnd.AppData Settings;
@@ -229,6 +231,7 @@ public static class Model
     }
     public static void Run(){NXPlanarAddCurves.Main(new string[0]);}
 }
+#if !COMPILE_FULL_PLANAR_JOURNAL
 public static class PlanarChecks
 {
     static int checks;
@@ -302,6 +305,16 @@ public static class PlanarChecks
             && b.Side==BoundarySet.ToolSideTypes.OutsideOrRight && b.Members[0].tool_position==CamToolPosition.CamToolPositionTanto,"each boundary is Closed/TANTO/Outside");
         Check(Model.Report.Contains("Open: 0; Closed: 36"),"verified closed count");
         Check(Model.Report.Contains("код типа 2 для границ: 36"),"grouped native code diagnostic");
+        var saved = SeparatePlanarBoundary.Read(Model.Uf.Cambnd, Model.Op.Tag);
+        saved.Boundaries[0].Definition.boundary_type = (CamBoundaryType)17;
+        var expected = new Dictionary<Tag, bool>();
+        foreach (Tag tag in saved.Sources) expected.Add(tag, true);
+        var counts = new System.Text.StringBuilder();
+        SeparatePlanarBoundary.VerifySaved(new SeparatePlanarBoundary.Saved(), saved, expected, true, null, counts);
+        string summary = counts.ToString();
+        int twos = summary.IndexOf("код типа 2 для границ: 35.", StringComparison.Ordinal);
+        int seventeen = summary.IndexOf("код типа 17 для границ: 1.", StringComparison.Ordinal);
+        Check(twos >= 0 && seventeen > twos, "unknown codes are counted and listed in numeric order");
         Model.Reset(); Select36(); Model.UfReadType=2; Model.WrongClosure=true;
         Model.Options.Tanto=true; Model.Options.ClosedOutside=true; Model.Run(); Success();
         Check(Model.Commits==1 && Model.Report.Contains("Open: 27; Closed: 9"),"correct and reopen mixed boundaries with the same UF code");
@@ -351,3 +364,4 @@ public static class PlanarChecks
         return 0;
     }
 }
+#endif

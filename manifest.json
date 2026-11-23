@@ -72,9 +72,9 @@
       "id": "NX_Planar_Add_Curves",
       "name": "Кривые в PLANAR_MILL / PROFILE",
       "file": "NX_Planar_Add_Curves.cs",
-      "version": "V1.04",
+      "version": "V1.05",
       "path": "scripts/NX_Planar_Add_Curves.cs",
-      "sha256": "1acbe1759548153655a468e13b838a80bb9e84449912f04cc10425821db40503",
+      "sha256": "eecef9a67c984b4f6b053ac61a2017988b20de3509af9e03d33aab79d31e9058",
       "description": "Каждая кривая отдельной границей в PLANAR_MILL / PLANAR_PROFILE. В TANTO стороны открытых и замкнутых кривых выбираются независимо."
     },
     {

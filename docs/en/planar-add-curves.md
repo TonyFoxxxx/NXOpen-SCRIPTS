@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.04 · 2026-11-23** — Fixed a rollback after NX had saved all selected curves. When the CAM API returns boundary type code `2`, the journal now reopens the operation editor and verifies Open or Closed for each saved source curve.
+**V1.05 · 2026-11-23** — Fixed the journal compilation error on line 425 in Designcenter 2606. The journal now counts and sorts the boundary type codes using the collections available to the NX journal compiler.
 
 File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater name: **«Кривые в PLANAR_MILL / PROFILE»**. This is a separate script for existing curves; [engraving centerline construction](planar-mill-curves.md) remains a separate tool.
 
@@ -50,6 +50,6 @@ The result window is resizable. **«Копировать всё»** copies the e
 - The operation must belong to the CAM work part. Component curves, body edges, faces and bodies are not selected.
 - If the operation inherits nonempty Part Boundaries from parent geometry, first define local boundaries in NX. The script does not change the parent geometry.
 - No new curves, toolpath generation or automatic part saving. No files, folders, logs, temporary files or disk settings are created.
-- Compiled with the Designcenter 2606 C# compiler and NXOpen on .NET 10. Offline tests cover 36 closed curves with UF code 2 in TANTO/Outside, mixed open and closed curves with the same code, all four side combinations, ON, and rollback when the saved geometry cannot be confirmed. A live CAM part has yet to be tested.
+- V1.05 compiled with the Designcenter 2606 C# compiler and NXOpen on .NET 10 using restricted assembly references. With the same references, V1.04 reproduces both errors on line 425. Offline tests cover 36 closed curves with UF code 2 in TANTO/Outside, mixed open and closed curves with the same code, all four side combinations, ON, and rollback when the saved geometry cannot be confirmed. A live CAM part has yet to be tested.
 
 [Download script](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Planar_Add_Curves.cs) · [Catalog](../../README.en.md) · [Changelog](../../CHANGELOG.en.md)

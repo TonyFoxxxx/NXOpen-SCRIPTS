@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-23 — Curves for PLANAR V1.05
+
+Fixed the journal compilation error on line 425 in Designcenter 2606. The journal now counts and sorts the boundary type codes using the collections available to the NX journal compiler. [Guide](docs/en/planar-add-curves.md#latest-release).
+
+A regression test compiles the complete journal with a restricted set of .NET assemblies. Reports continue to list each unknown type code and its count in numeric order.
+
 ## 2026-11-23 — Curves for PLANAR V1.04
 
 Fixed a rollback after NX had saved all selected curves. When the CAM API returns boundary type code `2`, the journal now reopens the operation editor and verifies Open or Closed for each saved source curve. [Guide](docs/en/planar-add-curves.md#latest-release).

@@ -1,5 +1,5 @@
 // NX_Planar_Add_Curves.cs - separate curve boundaries for PLANAR_MILL / PLANAR_PROFILE.
-// SCRIPT_VERSION: V1.04
+// SCRIPT_VERSION: V1.05
 // Select one planar operation, choose ON / TANTO, then select existing work-part curves.
 // Each new curve becomes one Part Boundary; geometrically closed curves remain Closed.
 // Existing assignments are skipped. No chaining, new curves, files or automatic toolpath generation.
@@ -18,7 +18,7 @@ using CamOperation = NXOpen.CAM.Operation;
 
 public class NXPlanarAddCurves
 {
-    private const string SCRIPT_VERSION = "V1.04";
+    private const string SCRIPT_VERSION = "V1.05";
     private static readonly string Title = "Кривые в PLANAR — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
 
@@ -422,7 +422,7 @@ public static class SeparatePlanarBoundary
         }
         HashSet<Tag> found = new HashSet<Tag>();
         List<string> problems = new List<string>();
-        SortedDictionary<int, int> unknownCodes = new SortedDictionary<int, int>();
+        Dictionary<int, int> unknownCodes = new Dictionary<int, int>();
         for (int i = 0; i < actual.Boundaries.Count; i++)
         {
             Entry b = actual.Boundaries[i];
@@ -463,8 +463,13 @@ public static class SeparatePlanarBoundary
                     problems.Add("Кривая [" + tag + "]: в CAM есть индивидуальный припуск или допуск.");
             }
         }
-        foreach (KeyValuePair<int, int> item in unknownCodes)
-            report.AppendLine("CAM вернул код типа " + item.Key + " для границ: " + item.Value + ". Тип Open/Closed проверяется в редакторе NX.");
+        if (report != null && unknownCodes.Count > 0)
+        {
+            List<int> codes = new List<int>(unknownCodes.Keys);
+            codes.Sort();
+            foreach (int code in codes)
+                report.AppendLine("CAM вернул код типа " + code + " для границ: " + unknownCodes[code] + ". Тип Open/Closed проверяется в редакторе NX.");
+        }
         int lost = 0; foreach (int count in old.Values) lost += count;
         if (lost > 0) problems.Add("Не найдены прежние границы с исходными параметрами: " + lost + ".");
         List<Tag> missing = new List<Tag>();

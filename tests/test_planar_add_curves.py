@@ -18,6 +18,13 @@ def invoke(command, *, timeout=25, env=None):
 
 
 class SeparatePlanarBoundaries(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('pwsh'), 'PowerShell Core with Roslyn unavailable')
+    def test_full_journal_compiles_with_restricted_runtime_references(self):
+        fixtures = ROOT / 'tests/fixtures'
+        result = invoke([shutil.which('pwsh'), '-NoProfile', '-NonInteractive', '-File',
+                         str(fixtures / 'CompilePlanarJournal.ps1'), str(SOURCE), str(fixtures / 'SeparatePlanarBoundary.cs')])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     @unittest.skipUnless(CSC.is_file(), 'Windows .NET Framework compiler unavailable')
     def test_native_side_checkboxes_with_base_runtime_only(self):
         source = SOURCE.read_text(encoding='utf-8')
