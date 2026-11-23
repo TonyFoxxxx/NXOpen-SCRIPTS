@@ -22,7 +22,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
 | [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.05 | One Part Boundary per curve in PLANAR_MILL / PLANAR_PROFILE. ON or TANTO with independent sides for closed and open curves. | [All features](docs/en/planar-add-curves.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.13 | Centerlines from engraving faces and D/2 circles for dots, assigned to PLANAR_MILL. | [Full guide](docs/en/planar-mill-curves.md) |
-| [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1 | Engraving-operation settings snapshot with a text report and JSON export. | [All features](docs/en/engraving-operation-diagnostic.md) |
+| [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1.01 | Engraving-operation settings snapshot with a text report and JSON export. | [All features](docs/en/engraving-operation-diagnostic.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Create single-stroke GOST A text from lines and smooth splines using an external FON. | [All features](docs/en/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Number program folders in tree order using an XLSX register. | [All features](docs/en/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Fill tool descriptions with diameter and T, H, D numbers. | [All features](docs/en/tool-description.md) |
@@ -39,13 +39,15 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Curves for PLANAR V1.05 · 2026-11-23
+### Latest update — Engraving operation diagnostic V1.01 · 2026-11-23
+
+The diagnostic now records custom points, clearance and lower-limit planes, boundary inheritance and UDE order. A failed read identifies the affected field in the JSON. [Guide](docs/en/engraving-operation-diagnostic.md#latest-release).
+
+V1.01 source SHA-256 is `27edbd5b40c68ec73b3525f443966e2afa83bfc42ef5d0331cf6c51a031f03b8`.
+
+### Also released — Curves for PLANAR V1.05 · 2026-11-23
 
 Fixed the journal compilation error on line 425 in Designcenter 2606. The journal now counts and sorts the boundary type codes using the collections available to the NX journal compiler. [Guide](docs/en/planar-add-curves.md#latest-release).
-
-### Also released — Engraving operation diagnostic V1 · 2026-11-23
-
-A separate journal reads the selected PLANAR_MILL / PLANAR_PROFILE, inheritance, groups, tool, geometry and available editor properties. Save JSON writes to a chosen location; Copy all copies the complete report. The main engraving script does not yet create operations automatically. [Guide](docs/en/engraving-operation-diagnostic.md).
 
 ### Also released — Setup sheets V2.72 · 2026-11-19
 

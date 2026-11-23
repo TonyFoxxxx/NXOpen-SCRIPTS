@@ -1,5 +1,5 @@
 // NX_Engraving_Operation_Diagnostic.cs - read the selected planar engraving operation.
-// SCRIPT_VERSION: V1
+// SCRIPT_VERSION: V1.01
 // Select one configured PLANAR_MILL / PLANAR_PROFILE in the Operation Navigator.
 // Reports available UF parameters, inheritance, builder settings, groups, geometry and UDEs.
 // No Commit, regeneration or part save. One JSON file only on Save JSON; no automatic output.
@@ -19,7 +19,7 @@ using CamOperation = NXOpen.CAM.Operation;
 
 public class NXEngravingOperationDiagnostic
 {
-    private const string SCRIPT_VERSION = "V1";
+    private const string SCRIPT_VERSION = "V1.01";
     private static readonly string Title = "Диагностика операции гравировки — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
 
@@ -39,16 +39,9 @@ public class NXEngravingOperationDiagnostic
             int count; Tag[] selected;
             uf.UiOnt.AskSelectedNodes(out count, out selected);
             EngravingParamReader.Count(count, selected);
-            HashSet<Tag> seen = new HashSet<Tag>();
-            List<CamOperation> operations = new List<CamOperation>();
-            foreach (Tag tag in selected ?? new Tag[0])
-            {
-                CamOperation candidate = NXObjectManager.Get(tag) as CamOperation;
-                if (candidate != null && seen.Add(tag)) operations.Add(candidate);
-            }
-            if (operations.Count != 1 || !(operations[0] is PlanarMilling))
+            PlanarMilling operation = count == 1 ? NXObjectManager.Get(selected[0]) as PlanarMilling : null;
+            if (operation == null)
                 throw new InvalidOperationException("Закройте окно редактирования операции. Выделите одну настроенную PLANAR_MILL или PLANAR_PROFILE в Operation Navigator и повторите запуск.");
-            PlanarMilling operation = (PlanarMilling)operations[0];
             if (operation.IsOccurrence || operation.OwningPart == null || operation.OwningPart.Tag != part.Tag)
                 throw new InvalidOperationException("Операция должна принадлежать рабочей CAM-детали.");
 
@@ -92,10 +85,13 @@ public class NXEngravingOperationDiagnostic
             string after = null;
             report.Try("Итоговый контрольный снимок", delegate { after = snapshot.Identity(part, operation); });
             report.Section("Контроль после чтения");
-            report.Line("IsModified до: " + modified + "; после: " + part.IsModified);
+            bool modifiedAfter = part.IsModified;
+            report.Line("IsModified до: " + modified + "; после: " + modifiedAfter);
+            report.Record("verification", "modified_before", modified, "modified_after", modifiedAfter,
+                "same_boundary_and_parent_state", before == null || after == null ? (object)null : before == after);
             if (before == null || after == null)
                 report.Gap("Контроль состояния", "Один из контрольных снимков недоступен. Неизменность состава не проверена.");
-            else if (before != after || modified != part.IsModified)
+            else if (before != after || modified != modifiedAfter)
                 report.Gap("Контроль состояния", "Изменился состав объектов/родителей/границ или флаг IsModified. Полная неизменность не подтверждена; автоматического отката нет.");
             else report.Line("Совпали: набор операций, родители выбранной операции, состав и считанные данные Part Boundaries, флаг IsModified.");
             report.Line("Commit, генерация траектории и сохранение проекта не вызывались. Полное побайтовое сравнение PRT не выполнялось.");
@@ -150,8 +146,21 @@ public sealed class EngravingSnapshot
         }
         Point point = obj as Point;
         if (point != null) return label + " Coordinates=" + Tree.Value(point.Coordinates);
+        Direction direction = obj as Direction;
+        if (direction != null) return label + " Origin=" + Tree.Value(direction.Origin) + " Vector=" + Tree.Value(direction.Vector);
         Plane plane = obj as Plane;
-        if (plane != null) return label + " Origin=" + Tree.Value(plane.Origin) + " Normal=" + Tree.Value(plane.Normal);
+        if (plane != null)
+        {
+            label += " Origin=" + Tree.Value(plane.Origin) + " Normal=" + Tree.Value(plane.Normal);
+            report.Try("Plane[" + plane.Tag + "].Method", delegate { label += " Method=" + plane.Method; });
+            report.Try("Plane[" + plane.Tag + "].OffsetFlip", delegate { label += " OffsetFlip=" + plane.OffsetFlip; });
+            return label;
+        }
+        if (obj is Face || obj is Edge || obj is Body || obj is Curve)
+        {
+            report.Try(label + ".JournalIdentifier", delegate { label += " JournalIdentifier=" + EngravingTree.Text(obj.JournalIdentifier); });
+            return label;
+        }
         ScCollector collector = obj as ScCollector;
         if (collector != null) return label + " Objects=" + Tree.Value(collector.GetObjects());
         return label;
@@ -195,10 +204,13 @@ public sealed class EngravingSnapshot
         return groups;
     }
 
+    // BEGIN ENGRAVING DIAGNOSTIC CAM SNAPSHOT
     public void Parameters(CAMObject obj, bool includeCatalog)
     {
         report.Section("UF PARAM: " + Reference(obj));
-        SortedSet<int> required = new SortedSet<int>(), candidates = new SortedSet<int>();
+        string partUnits = null;
+        report.Try("Единицы детали для UF " + obj.Tag, delegate { partUnits = obj.OwningPart.PartUnits.ToString(); });
+        HashSet<int> required = new HashSet<int>(), candidates = new HashSet<int>();
         report.Try("Список required " + obj.Tag, delegate {
             int count; int[] ids; uf.Param.AskRequiredParams(obj.Tag, out count, out ids);
             EngravingParamReader.Count(count, ids);
@@ -219,7 +231,9 @@ public sealed class EngravingSnapshot
             candidates.Add(105); candidates.Add(106);
         }
         int valid = 0, invalid = 0, unregistered = 0;
-        foreach (int id in candidates)
+        List<int> indices = new List<int>(candidates);
+        indices.Sort();
+        foreach (int id in indices)
         {
             UFParam.IndexAttribute attr;
             try
@@ -243,10 +257,11 @@ public sealed class EngravingSnapshot
                 }
                 valid++;
                 string prefix = "[" + index + "] " + data.name + " | " + data.type + " | " + status;
-                report.Line(prefix);
+                string units = EngravingParamReader.Units(data.type, partUnits);
+                report.Line(units == null ? prefix : prefix + " | " + units);
                 Dictionary<string, object> record = report.Record("parameter", "owner_tag", (uint)obj.Tag,
                     "owner_name", obj.Name, "index", index, "name", data.name, "data_type", data.type.ToString(),
-                    "data_type_id", (int)data.type, "status", status.ToString(), "value_available", false, "source_available", false);
+                    "data_type_id", (int)data.type, "units", units, "status", status.ToString(), "value_available", false, "source_available", false);
                 report.Try(prefix + " / source", delegate {
                     Tag definer; uf.Param.AskParamDefiner(obj.Tag, index, out definer);
                     report.Line("  source = " + TagReference(definer));
@@ -266,16 +281,18 @@ public sealed class EngravingSnapshot
     public void Geometry(CamOperation operation)
     {
         report.Section("Геометрия, источники и сохранённые границы UF");
+        ReadPointsAndPlanes(operation.Tag);
         foreach (CamGeomType kind in Enum.GetValues(typeof(CamGeomType)))
         {
             CamGeomType current = kind;
             report.Try("Геометрия " + kind, delegate {
                 Tag provider; uf.Camgeom.AskGeomProvider(operation.Tag, current, out provider);
                 report.Line(current + " provider = " + TagReference(provider));
-                report.Record("geometry_provider", "geometry_type", current.ToString(), "owner_tag", (uint)operation.Tag, "provider_tag", (uint)provider);
+                Dictionary<string, object> entry = report.Record("geometry_provider", "geometry_type", current.ToString(),
+                    "owner_tag", (uint)operation.Tag, "provider_tag", (uint)provider);
                 if (provider == Tag.Null) { report.Line("  геометрия не назначена"); return; }
                 int count; IntPtr[] items; uf.Camgeom.AskItems(provider, current, out count, out items);
-                EngravingParamReader.Count(count, items); report.Line("  items = " + count);
+                EngravingParamReader.Count(count, items); report.Line("  items = " + count); entry["item_count"] = count;
                 if (items != null) for (int i = 0; i < items.Length; i++)
                 {
                     IntPtr item = items[i]; string path = current + ".Item[" + i + "]";
@@ -290,12 +307,75 @@ public sealed class EngravingSnapshot
         foreach (CamGeomType kind in new CamGeomType[] { CamGeomType.CamPart, CamGeomType.CamBlank, CamGeomType.CamCheck, CamGeomType.CamTrim })
         {
             CamGeomType current = kind;
-            report.Try("Boundaries " + kind, delegate {
+            report.Try("Локальные границы " + kind, delegate { DumpBoundaries(operation.Tag, current, Tree, report); });
+            report.Try("Унаследованные границы " + kind, delegate {
+                bool inherited; uf.Cambnd.IsInherited(operation.Tag, current, out inherited);
+                Tree.Read("Operation.Boundaries." + current + ".Inherited", inherited);
+                if (!inherited) return;
                 Tag provider; uf.Camgeom.AskGeomProvider(operation.Tag, current, out provider);
-                DumpBoundaries(operation.Tag, current, Tree, report);
                 if (provider != Tag.Null && provider != operation.Tag) DumpBoundaries(provider, current, Tree, report);
+                else report.Gap("Operation.Boundaries." + current, "NX подтвердил наследование, но не вернул отдельного поставщика границ.");
             });
         }
+    }
+
+    private void ReadPointsAndPlanes(Tag operationTag)
+    {
+        foreach (UFCamgeom.CustomPointType pointType in Enum.GetValues(typeof(UFCamgeom.CustomPointType)))
+        {
+            UFCamgeom.CustomPointType kindOfPoint = pointType;
+            string pointPath = "Operation.CustomPoints." + pointType;
+            report.Try(pointPath, delegate {
+                int count; UFCamgeom.CustomPoint[] points;
+                uf.Camgeom.AskCustomPoints(operationTag, kindOfPoint, out count, out points);
+                EngravingParamReader.Count(count, points);
+                Tree.Read(pointPath, points ?? new UFCamgeom.CustomPoint[0]);
+            });
+        }
+        report.Try("Operation.ClearancePlane.Status", delegate {
+            ParamClrplaneStatus status;
+            uf.Cam.AskClearPlaneStatus(operationTag, out status);
+            Tree.Read("Operation.ClearancePlane.Status", status);
+            if (status == ParamClrplaneStatus.ParamClrplaneDefineAndActive || status == ParamClrplaneStatus.ParamClrplaneDefineAndInactive)
+            {
+                ReadPlaneData("Operation.ClearancePlane", delegate(double[] origin, double[] normal) {
+                    uf.Cam.AskClearPlaneData(operationTag, origin, normal);
+                });
+            }
+            else if (status != ParamClrplaneStatus.ParamClrplaneUndefined)
+                report.Gap("Operation.ClearancePlane.Status", "Неизвестный статус плоскости: " + status);
+        });
+        report.Try("Operation.ClearancePlane.Usage", delegate {
+            ParamClrplaneUsage usage; uf.Cam.AskClearPlaneUsage(operationTag, out usage);
+            Tree.Read("Operation.ClearancePlane.Usage", usage);
+        });
+        report.Try("Operation.LowerLimitPlane.Status", delegate {
+            ParamLwplaneStatus status;
+            uf.Cam.AskLowerLimitPlaneStatus(operationTag, out status);
+            Tree.Read("Operation.LowerLimitPlane.Status", status);
+            if (status == ParamLwplaneStatus.ParamLwplaneStatusDefinedAndActive || status == ParamLwplaneStatus.ParamLwplaneStatusDefinedAndInactive)
+            {
+                ReadPlaneData("Operation.LowerLimitPlane", delegate(double[] origin, double[] normal) {
+                    uf.Cam.AskLowerLimitPlaneData(operationTag, origin, normal);
+                });
+            }
+            else if (status != ParamLwplaneStatus.ParamLwplaneStatusUndefined)
+                report.Gap("Operation.LowerLimitPlane.Status", "Неизвестный статус плоскости: " + status);
+        });
+        report.Try("Operation.LowerLimitPlane.Usage", delegate {
+            ParamLwplaneUsage usage; uf.Cam.AskLowerLimitPlaneUsage(operationTag, out usage);
+            Tree.Read("Operation.LowerLimitPlane.Usage", usage);
+        });
+    }
+
+    private void ReadPlaneData(string path, Action<double[], double[]> read)
+    {
+        report.Try(path + ".Data", delegate {
+            double[] origin = new double[3], normal = new double[3];
+            read(origin, normal);
+            Tree.Read(path + ".Origin", origin);
+            Tree.Read(path + ".Normal", normal);
+        });
     }
 
     private void DumpBoundaries(Tag owner, CamGeomType kind, EngravingTree tree, EngravingReport output)
@@ -303,23 +383,39 @@ public sealed class EngravingSnapshot
         int count; IntPtr[] boundaries; uf.Cambnd.AskBoundaries(owner, kind, out count, out boundaries);
         EngravingParamReader.Count(count, boundaries);
         output.Line("Boundaries " + kind + " owner=" + owner + " count=" + count);
+        output.Record("boundaries", "owner_tag", (uint)owner, "geometry_type", kind.ToString(), "count", count);
         if (boundaries == null) return;
         for (int i = 0; i < boundaries.Length; i++)
         {
             string path = "Boundary.Owner[" + owner + "]." + kind + "[" + i + "]";
-            UFCambnd.BoundaryData definition; UFCambnd.AppData data;
-            uf.Cambnd.AskBoundaryData(boundaries[i], out definition); uf.Cambnd.AskBoundaryAppData(boundaries[i], out data);
-            tree.Read(path + ".Definition", definition); tree.Read(path + ".Settings", data);
-            int memberCount; IntPtr[] members; uf.Cambnd.AskBoundaryItems(boundaries[i], out memberCount, out members);
-            EngravingParamReader.Count(memberCount, members); output.Line(path + ".Members = " + memberCount);
-            if (members == null) continue;
-            for (int j = 0; j < members.Length; j++)
-            {
-                Tag entity; uf.Cambnd.AskItemEntity(members[j], out entity); uf.Cambnd.AskItemAppData(members[j], out data);
-                output.Line(path + ".Member[" + j + "] = Tag " + entity);
-                output.Record("boundary_member", "path", path, "member", j, "tag", (uint)entity);
-                tree.Read(path + ".Member[" + j + "].Settings", data);
-            }
+            IntPtr boundary = boundaries[i];
+            output.Try(path + ".Definition", delegate {
+                UFCambnd.BoundaryData definition; uf.Cambnd.AskBoundaryData(boundary, out definition);
+                tree.Read(path + ".Definition", definition);
+            });
+            output.Try(path + ".Settings", delegate {
+                UFCambnd.AppData data; uf.Cambnd.AskBoundaryAppData(boundary, out data);
+                tree.Read(path + ".Settings", data);
+            });
+            output.Try(path + ".Members", delegate {
+                int memberCount; IntPtr[] members; uf.Cambnd.AskBoundaryItems(boundary, out memberCount, out members);
+                EngravingParamReader.Count(memberCount, members);
+                tree.Read(path + ".MemberCount", memberCount);
+                for (int j = 0; j < memberCount; j++)
+                {
+                    string memberPath = path + ".Member[" + j + "]";
+                    IntPtr member = members[j]; int index = j;
+                    output.Try(memberPath + ".Entity", delegate {
+                        Tag entity; uf.Cambnd.AskItemEntity(member, out entity);
+                        output.Line(memberPath + " = Tag " + entity);
+                        output.Record("boundary_member", "path", path, "member", index, "tag", (uint)entity);
+                    });
+                    output.Try(memberPath + ".Settings", delegate {
+                        UFCambnd.AppData data; uf.Cambnd.AskItemAppData(member, out data);
+                        tree.Read(memberPath + ".Settings", data);
+                    });
+                }
+            });
         }
     }
 
@@ -332,42 +428,53 @@ public sealed class EngravingSnapshot
             report.Try(kind.ToString(), delegate {
                 int count; IntPtr[] events; uf.Param.AskUdes(owner, current, out count, out events);
                 EngravingParamReader.Count(count, events); report.Line(current + " count=" + count);
-                if (events == null) return;
-                int eventIndex = -1;
-                foreach (IntPtr item in events)
+                report.Record("ude_set", "owner_tag", (uint)owner, "set", current.ToString(), "count", count);
+                for (int i = 0; i < count; i++)
                 {
-                    eventIndex++;
-                    string name; uf.Ude.AskName(item, out name); report.Line("UDE " + EngravingTree.Text(name));
-                    int n; string[] names; uf.Ude.AskParams(item, out n, out names); EngravingParamReader.Count(n, names);
-                    if (names == null) continue;
-                    foreach (string key in names)
-                    {
-                        string parameter = key; IntPtr ev = item;
-                        report.Try("UDE " + name + "/" + key, delegate {
-                            UFUde.ParamType type; UFUde.ParamToggle toggle; bool optional = false;
-                            uf.Ude.AskParamType(ev, parameter, out type); uf.Ude.IsParamOptional(ev, parameter, ref optional);
-                            string state = "required";
-                            if (optional) { uf.Ude.AskParamToggle(ev, parameter, out toggle); state = toggle.ToString(); }
-                            object value;
-                            switch ((int)type)
-                            {
-                                case 0: int i; uf.Ude.AskInteger(ev, parameter, out i); value = i; break;
-                                case 1: double d; uf.Ude.AskDouble(ev, parameter, out d); value = d; break;
-                                case 2: case 4: string s; uf.Ude.AskString(ev, parameter, out s); value = s; break;
-                                case 3: bool b; uf.Ude.AskBoolean(ev, parameter, out b); value = b; break;
-                                case 5: Tag p; uf.Ude.AskPoint(ev, parameter, out p); value = p; break;
-                                case 6: Tag v; uf.Ude.AskVector(ev, parameter, out v); value = v; break;
-                                default: throw new NotSupportedException("Unsupported UDE type: " + type);
-                            }
-                            report.Line("  " + key + " | " + type + " | " + state + " = " + Tree.Value(value));
-                            report.Record("ude_parameter", "owner_tag", (uint)owner, "set", current.ToString(), "event_index", eventIndex, "ude", name,
-                                "parameter", key, "data_type", type.ToString(), "state", state, "value", Tree.Encode(value));
-                        });
-                    }
+                    int eventIndex = i; IntPtr item = events[i];
+                    string path = current + "[" + i + "]";
+                    report.Try(path, delegate { ReadEvent(owner, current, eventIndex, item, path); });
                 }
             });
         }
     }
+
+    private void ReadEvent(Tag owner, UdeSetType set, int index, IntPtr ev, string path)
+    {
+        string name; uf.Ude.AskName(ev, out name); report.Line(path + " UDE " + EngravingTree.Text(name));
+        Dictionary<string, object> entry = report.Record("ude", "owner_tag", (uint)owner, "set", set.ToString(), "order", index, "name", name);
+        int count; string[] names; uf.Ude.AskParams(ev, out count, out names); EngravingParamReader.Count(count, names);
+        entry["parameter_count"] = count;
+        foreach (string key in names ?? new string[0])
+        {
+            string parameter = key;
+            report.Try(path + "." + parameter, delegate {
+                Dictionary<string, object> field = report.Record("ude_parameter", "owner_tag", (uint)owner, "set", set.ToString(),
+                    "event_index", index, "ude", name, "parameter", parameter, "value_available", false);
+                UFUde.ParamType type; UFUde.ParamToggle toggle; bool optional = false;
+                uf.Ude.AskParamType(ev, parameter, out type); field["data_type"] = type.ToString();
+                uf.Ude.IsParamOptional(ev, parameter, ref optional);
+                string state = "required";
+                if (optional) { uf.Ude.AskParamToggle(ev, parameter, out toggle); state = toggle.ToString(); }
+                field["state"] = state;
+                object value;
+                switch (type)
+                {
+                    case UFUde.ParamType.ParamTypeInt: int i; uf.Ude.AskInteger(ev, parameter, out i); value = i; break;
+                    case UFUde.ParamType.ParamTypeDouble: double d; uf.Ude.AskDouble(ev, parameter, out d); value = d; break;
+                    case UFUde.ParamType.ParamTypeString: case UFUde.ParamType.ParamTypeOption: string s; uf.Ude.AskString(ev, parameter, out s); value = s; break;
+                    case UFUde.ParamType.ParamTypeBoolean: bool b; uf.Ude.AskBoolean(ev, parameter, out b); value = b; break;
+                    case UFUde.ParamType.ParamTypePoint: Tag p; uf.Ude.AskPoint(ev, parameter, out p); value = p; break;
+                    case UFUde.ParamType.ParamTypeVector: Tag v; uf.Ude.AskVector(ev, parameter, out v); value = v; break;
+                    default: throw new NotSupportedException("Unsupported UDE type: " + type);
+                }
+                report.Line("  " + key + " | " + type + " | " + state + " = " + Tree.Value(value));
+                field["value"] = Tree.Encode(value); field["value_available"] = true;
+            });
+        }
+    }
+
+    // END ENGRAVING DIAGNOSTIC CAM SNAPSHOT
 
     public string Identity(Part part, CamOperation operation)
     {
@@ -382,7 +489,7 @@ public sealed class EngravingSnapshot
         }
         EngravingTree tree = new EngravingTree(check, delegate(object o) { return o is Tag ? o.ToString() : null; });
         DumpBoundaries(operation.Tag, CamGeomType.CamPart, tree, check);
-        if (check.Incomplete != 0) throw new InvalidOperationException("Не удалось прочитать исходный состав границ для проверки.");
+        if (check.Incomplete != 0) throw new InvalidOperationException("Не удалось проверить состав границ: " + check.FirstProblem);
         return check.ToString();
     }
 }
@@ -390,6 +497,15 @@ public sealed class EngravingSnapshot
 // BEGIN ENGRAVING DIAGNOSTIC PARAM READER
 public static class EngravingParamReader
 {
+    public static string Units(UFParam.Type type, string partUnits)
+    {
+        switch (type)
+        {
+            case UFParam.Type.TypeDoubleLength: case UFParam.Type.Type2dLength:
+            case UFParam.Type.Type3dLength: case UFParam.Type.TypeVlaLength: return partUnits;
+            default: return null;
+        }
+    }
     public static void Count(int count, Array values)
     {
         if (count < 0 || (values == null ? count != 0 : values.Length != count))
@@ -426,6 +542,7 @@ public sealed class EngravingReport
     private readonly List<object> records = new List<object>();
     private readonly List<object> problems = new List<object>();
     public int Incomplete { get; private set; }
+    public string FirstProblem { get; private set; }
     public EngravingReport(string title) { this.title = title; Line(title); }
     public void Line(string value) { text.Append(value).Append("\r\n"); }
     public void Section(string title) { Line(""); Line("=== " + title + " ==="); }
@@ -437,6 +554,7 @@ public sealed class EngravingReport
     }
     public void Gap(string path, string detail)
     {
+        if (Incomplete == 0) FirstProblem = path + ": " + detail;
         Incomplete++; Line("[UNAVAILABLE] " + path + ": " + detail);
         problems.Add(new Dictionary<string, object> { { "path", path }, { "detail", detail } });
     }
@@ -444,10 +562,15 @@ public sealed class EngravingReport
     {
         while (error is TargetInvocationException && error.InnerException != null) error = error.InnerException;
         Gap(path, error.GetType().FullName + ": " + error.Message);
+        Dictionary<string, object> entry = Record("error", "path", path, "exception_type", error.GetType().FullName,
+            "message", error.Message, "stack", error.ToString());
         PropertyInfo code = error.GetType().GetProperty("ErrorCode");
-        if (code != null) { try { Line("NX/API code: " + code.GetValue(error, null)); } catch { Line("NX/API code: unavailable"); } }
+        if (code != null && code.PropertyType == typeof(int))
+        {
+            try { entry["error_code"] = (int)code.GetValue(error, null); Line("NX/API code: " + entry["error_code"]); }
+            catch (Exception readError) { Line("NX/API code: " + readError.Message); }
+        }
         Line(error.ToString());
-        Record("error", "path", path, "exception_type", error.GetType().FullName, "message", error.Message, "stack", error.ToString());
     }
     public void Try(string path, Action action) { try { action(); } catch (Exception e) { Error(path, e); } }
     public void Finish()
@@ -455,7 +578,7 @@ public sealed class EngravingReport
         Section("Итог");
         Line(Incomplete == 0 ? "Доступные разделы считаны без ошибок." : "Отчёт частичный. Недоступных чтений / неподдерживаемых разделов: " + Incomplete + ". Их места обозначены UNAVAILABLE / UNSUPPORTED.");
         Line("Это отчёт для разработки, а не файл шаблона. Внутренние данные, не раскрытые API, не выгружаются.");
-        Line("Нажмите «Сохранить JSON» и передайте файл в чат, либо используйте «Копировать всё». Автоматической отправки нет.");
+        Line("«Сохранить JSON» записывает снимок в выбранный файл. «Копировать всё» копирует полный текст отчёта.");
     }
     public override string ToString() { return text.ToString(); }
     public string ToJson()
@@ -480,13 +603,9 @@ public sealed class EngravingTree
     public object Encode(object value)
     {
         if (value == null) return null;
+        if (value is IntPtr || value is UIntPtr) throw new NotSupportedException("[UNSUPPORTED] Native pointer: " + value.GetType().FullName);
         string r = reference(value);
-        if (r != null)
-        {
-            Dictionary<string, object> item = new Dictionary<string, object> { { "reference", r }, { "type", value.GetType().FullName } };
-            if (value.GetType().IsEnum) item["id"] = Convert.ToUInt64(value, CultureInfo.InvariantCulture);
-            return item;
-        }
+        if (r != null) return EncodeReference(value, r);
         Type type = value.GetType();
         if (type.IsEnum) return new Dictionary<string, object> { { "type", type.FullName }, { "name", value.ToString() }, { "value", Convert.ToInt64(value, CultureInfo.InvariantCulture) } };
         if (type.IsPrimitive || value is string || value is decimal) return value;
@@ -496,15 +615,22 @@ public sealed class EngravingTree
         if (type.IsValueType) foreach (FieldInfo f in type.GetFields(BindingFlags.Public | BindingFlags.Instance)) fields[f.Name] = Encode(f.GetValue(value));
         return fields;
     }
+    private static object EncodeReference(object value, string label)
+    {
+        Dictionary<string, object> item = new Dictionary<string, object> { { "reference", label }, { "type", value.GetType().FullName } };
+        if (value.GetType().IsEnum) item["id"] = Convert.ToUInt64(value, CultureInfo.InvariantCulture);
+        return item;
+    }
     public string Value(object value)
     {
         if (value == null) return "null";
+        if (value is IntPtr || value is UIntPtr) return "[UNSUPPORTED: native pointer]";
         string r = reference(value); if (r != null) return r;
         Type type = value.GetType();
         if (value is string) return Text((string)value);
         if (type.IsEnum) return value + " (" + Convert.ToInt64(value, CultureInfo.InvariantCulture) + ")";
-        if (value is double) return ((double)value).ToString("R", CultureInfo.InvariantCulture);
-        if (value is float) return ((float)value).ToString("R", CultureInfo.InvariantCulture);
+        if (value is double) return ((double)value).ToString("G17", CultureInfo.InvariantCulture);
+        if (value is float) return ((float)value).ToString("G9", CultureInfo.InvariantCulture);
         if (type.IsPrimitive || value is decimal) return Convert.ToString(value, CultureInfo.InvariantCulture);
         Array array = value as Array;
         if (array != null)
@@ -528,7 +654,11 @@ public sealed class EngravingTree
         Type type = value.GetType();
         string r = reference(value);
         if (r != null || type.IsPrimitive || type.IsEnum || value is string || value is decimal || type.IsValueType)
-        { report.Line(path + " = " + (r ?? Value(value))); report.Record("setting", "path", path, "value", Encode(value)); return; }
+        {
+            report.Line(path + " = " + (r ?? Value(value)));
+            report.Record("setting", "path", path, "value", r == null ? Encode(value) : EncodeReference(value, r));
+            return;
+        }
         if (++nodes > 20000 || depth > 16) { report.Gap(path, "Traversal limit reached; remaining data is not treated as empty."); return; }
         string earlier;
         if (visited.TryGetValue(value, out earlier)) { report.Line(path + " -> " + earlier); report.Record("alias", "path", path, "target", earlier); return; }
@@ -539,6 +669,18 @@ public sealed class EngravingTree
             report.Line(path + ".Count = " + array.Length);
             report.Record("list", "path", path, "count", array.Length);
             for (int i = 0; i < array.Length; i++) { int index = i; report.Try(path + "[" + i + "]", delegate { Walk(path + "[" + index + "]", array.GetValue(index), depth + 1); }); }
+            return;
+        }
+        // These NX selection wrappers carry the chosen objects outside the CAM namespace.
+        if (type.Namespace == "NXOpen" && type.Name.StartsWith("Select", StringComparison.Ordinal))
+        {
+            MethodInfo getArray = type.GetMethod("GetArray", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+            PropertyInfo selected = type.GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+            if (getArray != null && getArray.ReturnType.IsArray)
+                report.Try(path + ".Items", delegate { Walk(path + ".Items", getArray.Invoke(value, null), depth + 1); });
+            else if (selected != null && selected.GetGetMethod() != null && selected.GetIndexParameters().Length == 0)
+                report.Try(path + ".Value", delegate { Walk(path + ".Value", selected.GetValue(value, null), depth + 1); });
+            else report.Gap(path, "Недоступен состав выбранных объектов " + type.FullName);
             return;
         }
         if (type.Namespace != "NXOpen.CAM") { report.Gap(path, "Unexpanded type " + type.FullName); return; }
@@ -555,7 +697,7 @@ public sealed class EngravingTree
             PropertyInfo item = property;
             report.Try(child, delegate { Walk(child, item.GetValue(value, null), depth + 1); });
         }
-        // Only this documented list accessor is invoked by reflection. Never enumerate arbitrary Get/Ask methods.
+        // Lists expose their entries through GetContents rather than a scalar property.
         if (type.Name.EndsWith("List", StringComparison.Ordinal))
         {
             MethodInfo contents = type.GetMethod("GetContents", Type.EmptyTypes);
@@ -588,6 +730,66 @@ public sealed class EngravingTree
 // BEGIN ENGRAVING DIAGNOSTIC JSON
 public static class EngravingJson
 {
+    // Keep the previous contents in memory while replacing a report. The dialog creates one file.
+    public static void WriteFile(string path, string json)
+    {
+        if (!String.Equals(System.IO.Path.GetExtension(path), ".json", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Выберите имя файла с расширением .json.");
+
+        byte[] bytes = new UTF8Encoding(false, true).GetBytes(json);
+        bool created = false;
+        FileStream output;
+        try
+        {
+            output = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+            created = true;
+        }
+        catch (IOException)
+        {
+            if (!File.Exists(path)) throw;
+            output = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        }
+        try
+        {
+            using (output) ReplaceContents(output, bytes);
+        }
+        catch (Exception writeError)
+        {
+            if (created)
+            {
+                try { File.Delete(path); }
+                catch (Exception cleanup) { throw new AggregateException("Ошибка записи и удаления нового JSON.", writeError, cleanup); }
+            }
+            throw;
+        }
+    }
+
+    internal static void ReplaceContents(FileStream output, byte[] bytes)
+    {
+        using (MemoryStream previous = new MemoryStream())
+        {
+            output.CopyTo(previous);
+            try
+            {
+                output.Position = 0;
+                output.Write(bytes, 0, bytes.Length);
+                output.SetLength(bytes.Length);
+                output.Flush(true);
+            }
+            catch (Exception writeError)
+            {
+                try
+                {
+                    output.Position = 0;
+                    previous.WriteTo(output);
+                    output.SetLength(previous.Length);
+                    output.Flush(true);
+                }
+                catch (Exception restoreError) { throw new AggregateException("Ошибка записи и восстановления JSON.", writeError, restoreError); }
+                throw;
+            }
+        }
+    }
     public static string Write(object value) { StringBuilder b = new StringBuilder(); WriteValue(b, value, 0); return b.Append('\n').ToString(); }
     private static void Quoted(StringBuilder b, string value)
     {
@@ -628,8 +830,8 @@ public static class EngravingJson
             foreach (object item in list) { if (!first) b.Append(','); b.Append('\n').Append(' ', (depth + 1) * 2); WriteValue(b, item, depth + 1); first = false; }
             if (!first) b.Append('\n').Append(' ', depth * 2); b.Append(']'); return;
         }
-        if (value is double) { b.Append(((double)value).ToString("R", CultureInfo.InvariantCulture)); return; }
-        if (value is float) { b.Append(((float)value).ToString("R", CultureInfo.InvariantCulture)); return; }
+        if (value is double) { b.Append(((double)value).ToString("G17", CultureInfo.InvariantCulture)); return; }
+        if (value is float) { b.Append(((float)value).ToString("G9", CultureInfo.InvariantCulture)); return; }
         if (value is byte || value is sbyte || value is short || value is ushort || value is int || value is uint || value is long || value is ulong || value is decimal)
         { b.Append(Convert.ToString(value, CultureInfo.InvariantCulture)); return; }
         throw new NotSupportedException("Unsupported JSON value: " + value.GetType().FullName);
@@ -677,7 +879,7 @@ public static class EngravingReportWindow
                 {
                     window = hwnd;
                     IntPtr normal = Native.SendMessageW(window, 0x31, IntPtr.Zero, IntPtr.Zero);
-                    Add("STATIC", 100, "Сохраните JSON и прикрепите файл к сообщению в чате.", 0x80u, normal);
+                    Add("STATIC", 100, "Для выгрузки снимка нажмите «Сохранить JSON».", 0x80u, normal);
                     uint dpi = Native.GetDpiForWindow(window);
                     font = Native.CreateFontW(-(int)Math.Round(10 * (dpi > 0 ? dpi : 96) / 72.0), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Consolas");
                     Add("EDIT", 101, "", 0x00b108c4u, font == IntPtr.Zero ? normal : font);
@@ -710,9 +912,7 @@ public static class EngravingReportWindow
                             string path = ChooseFile(window, title);
                             if (path != null)
                             {
-                                if (!String.Equals(System.IO.Path.GetExtension(path), ".json", StringComparison.OrdinalIgnoreCase))
-                                    throw new ArgumentException("Выберите имя файла с расширением .json.");
-                                File.WriteAllText(path, json, new UTF8Encoding(false));
+                                EngravingJson.WriteFile(path, json);
                                 Native.SetWindowTextW(Item(100), "JSON сохранён: " + path);
                             }
                         }
@@ -750,15 +950,17 @@ public static class EngravingReportWindow
         Native.OpenFileName dialog = new Native.OpenFileName();
         dialog.Size = Marshal.SizeOf(typeof(Native.OpenFileName)); dialog.Owner = owner;
         dialog.Filter = "JSON (*.json)\0*.json\0\0"; dialog.FilterIndex = 1;
-        string name = "NX_Engraving_Diagnostic_" + DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + ".json";
-        dialog.File = Marshal.AllocHGlobal(32768 * 2);
         dialog.MaxFile = 32768; dialog.Title = title + " — Сохранить JSON";
         dialog.DefaultExt = "json"; dialog.Flags = 0x0008080au; // Explorer, path exists, overwrite prompt, no cwd change.
+        // OPENFILENAMEW.lpstrFile is a caller-owned writable UTF-16 buffer on both NX runtimes.
+        dialog.File = Marshal.AllocHGlobal(checked(dialog.MaxFile * sizeof(char)));
         try
         {
-            byte[] initial = Encoding.Unicode.GetBytes(name + "\0"); Marshal.Copy(initial, 0, dialog.File, initial.Length);
+            string initial = "NX_Engraving_Diagnostic_" + DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + ".json\0";
+            Marshal.Copy(initial.ToCharArray(), 0, dialog.File, initial.Length);
             if (Native.GetSaveFileNameW(ref dialog)) return Marshal.PtrToStringUni(dialog.File);
-            int error = Native.CommDlgExtendedError(); if (error != 0) throw new InvalidOperationException("Save dialog error: " + error);
+            int error = Native.CommDlgExtendedError();
+            if (error != 0) throw new InvalidOperationException("Save dialog error: " + error);
             return null;
         }
         finally { Marshal.FreeHGlobal(dialog.File); }

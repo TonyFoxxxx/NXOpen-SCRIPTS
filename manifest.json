@@ -90,9 +90,9 @@
       "id": "NX_Engraving_Operation_Diagnostic",
       "name": "Диагностика операции гравировки",
       "file": "NX_Engraving_Operation_Diagnostic.cs",
-      "version": "V1",
+      "version": "V1.01",
       "path": "scripts/NX_Engraving_Operation_Diagnostic.cs",
-      "sha256": "b1725f40c5a4c51c838db8701a954e2dc5522cac7bb888a1c8b2cb61278a1cf3",
+      "sha256": "27edbd5b40c68ec73b3525f443966e2afa83bfc42ef5d0331cf6c51a031f03b8",
       "description": "Параметры выбранной PLANAR_MILL / PLANAR_PROFILE, наследование, инструмент и геометрия; отчёт и JSON по запросу."
     },
     {

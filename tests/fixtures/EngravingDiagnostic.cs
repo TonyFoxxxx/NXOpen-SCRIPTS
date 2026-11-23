@@ -11,19 +11,27 @@ using NXOpen.UF;
 namespace NXOpen
 {
     public enum Tag : uint { Null=0, Sample=0xf0000001 }
+    public class SelectObject { public object Value { get { return ""; } } }
+    public class SelectNXObjectList
+    {
+        public Tag[] GetArray() { return new Tag[] { Tag.Null, Tag.Sample }; }
+        public void Clear() { throw new Exception("unexpected selection edit"); }
+    }
 }
 namespace NXOpen.UF
 {
     public class UFParam
     {
+        public struct IndexAttribute { public string name; public Type type; }
+        public enum Status { InvalidIndex, Default, Inherited, Overridden }
         public enum Type { TypeLogical,TypeChar,TypeShort,TypeInt,TypePointer,TypeFloat,TypeDouble,TypeByte,TypeDate,TypeTag,TypeString,Type2d,Type3d,TypeVlaReal,TypeVlaInt,TypeVlaTag,TypeDoubleLength,Type2dLength,Type3dLength,TypeVlaLength,TypeVlaString,TypeObject,TypeVlaLengthComposite,TypeVlaFloat,TypeLast }
         public int Calls, Mode;
-        private void Read(Tag tag,int index) { if(tag!=Tag.Sample||index!=105)throw new Exception("wrong target");Calls++;if(Mode==3)throw new InvalidOperationException("API read failed"); }
-        public void AskLogicalValue(Tag t,int i,out bool v){Read(t,i);v=true;}
+        private void Read(Tag tag,int index) { if(tag!=Tag.Sample||index<103||index>106)throw new Exception("wrong target");Calls++;if(Mode==3)throw new InvalidOperationException("API read failed"); }
+        public void AskLogicalValue(Tag t,int i,out bool v){Read(t,i);v=i!=104;}
         public void AskIntValue(Tag t,int i,out int v){Read(t,i);v=-123;}
-        public void AskDoubleValue(Tag t,int i,out double v){Read(t,i);v=0.00123456789012345;}
+        public void AskDoubleValue(Tag t,int i,out double v){Read(t,i);v=i==103?0.0:0.00123456789012345;}
         public void AskTagValue(Tag t,int i,out Tag v){Read(t,i);v=Tag.Sample;}
-        public void AskStrValue(Tag t,int i,out string v){Read(t,i);v="гравировка";}
+        public void AskStrValue(Tag t,int i,out string v){Read(t,i);v=i==106?"":"гравировка";}
         public void Ask2dValue(Tag t,int i,double[] v){Read(t,i);v[0]=1.2;v[1]=2.3;}
         public void Ask3dValue(Tag t,int i,double[] v){Read(t,i);v[0]=1.2;v[1]=2.3;v[2]=3.4;}
         public void AskDoubleVla(Tag t,int i,out int n,out double[] v){Read(t,i);n=Mode==1?3:Mode==2?0:2;v=Mode==2?null:new double[]{0.1,0.2};}
@@ -53,6 +61,8 @@ namespace NXOpen.CAM
         public Choice Mode {get{return Choice.Closed;}}
         public bool Enabled {get{return false;}}
         public string Empty {get{return null;}}
+        public NXOpen.SelectObject Selected {get{return new NXOpen.SelectObject();}}
+        public NXOpen.SelectNXObjectList SelectedList {get{return new NXOpen.SelectNXObjectList();}}
         public string Escaped {get{return "К\"\\\r\n\t\u0000\ud83d\ude00";}}
         public Child First {get;set;}
         public Child Second {get;set;}
@@ -71,12 +81,16 @@ public static class DiagnosticChecks
     private static int checks;
     private static void Check(bool ok,string text){checks++;if(!ok)throw new Exception(text);}
     private static void Reject(Action action){bool failed=false;try{action();}catch{failed=true;}Check(failed,"expected rejection");}
-    public static int Main() { return ManagedTestHost.Run(RunChecks); }
-    private static int RunChecks()
+    public static int Main(string[] args) { return ManagedTestHost.Run(delegate { return RunChecks(args[0]); }); }
+    private static int RunChecks(string folder)
     {
         Console.OutputEncoding=new UTF8Encoding(false);
         CultureInfo.CurrentCulture=CultureInfo.GetCultureInfo("ru-RU");
         UFParam api=new UFParam();
+        foreach (UFParam.Type type in new[] { UFParam.Type.TypeDoubleLength, UFParam.Type.Type2dLength,
+                UFParam.Type.Type3dLength, UFParam.Type.TypeVlaLength })
+            Check(EngravingParamReader.Units(type, "Inches") == "Inches", "loss of length units");
+        Check(EngravingParamReader.Units(UFParam.Type.TypeDouble, "Millimeters") == null, "units guessed for a scalar");
         Check((bool)EngravingParamReader.Read(api,Tag.Sample,105,UFParam.Type.TypeLogical),"bool");
         Check((int)EngravingParamReader.Read(api,Tag.Sample,105,UFParam.Type.TypeInt)==-123,"integer");
         foreach(UFParam.Type t in new[]{UFParam.Type.TypeDouble,UFParam.Type.TypeDoubleLength})Check((double)EngravingParamReader.Read(api,Tag.Sample,105,t)==0.00123456789012345,"double precision");
@@ -123,10 +137,58 @@ public static class DiagnosticChecks
         Check(Marshal.OffsetOf(dialog,"File").ToInt32()==(IntPtr.Size==8?48:28),"OPENFILENAME file buffer offset");
         object dialogData=Activator.CreateInstance(dialog);IntPtr memory=Marshal.AllocHGlobal(dialogSize);
         try{Marshal.StructureToPtr(dialogData,memory,false);Marshal.DestroyStructure(memory,dialog);checks++;}finally{Marshal.FreeHGlobal(memory);}
-        report.Record("sample","number",0.00123456789012345,"large_tag",(uint)Tag.Sample,"nan",Double.NaN,"infinity",Double.PositiveInfinity);
+        report.Record("sample","number",0.00123456789012345,"adjacent_to_one",BitConverter.Int64BitsToDouble(0x3ff0000000000001L),
+            "large_tag",(uint)Tag.Sample,"nan",Double.NaN,"infinity",Double.PositiveInfinity);
         report.Record("parameter","index",105,"value",new string('Ж',120000));
+        GeometryFixture.Read(report, false);
+        var faults = new EngravingReport("Synthetic API failures");
+        GeometryFixture.Read(faults, true);
+        faults.Finish();
+        File.WriteAllText(Path.Combine(folder, "geometry-faults.json"), faults.ToJson(), new UTF8Encoding(false));
         report.Finish();
-        Console.Error.WriteLine(checks+" diagnostic checks passed");Console.Write(report.ToJson());
+        string json = report.ToJson();
+        CheckFileSave(folder, json);
+        Console.Error.WriteLine(checks+" diagnostic checks passed");Console.Write(json);
         return 0;
+    }
+
+    private static void CheckFileSave(string folder, string json)
+    {
+        string dir = Directory.CreateDirectory(Path.Combine(folder, "exports")).FullName;
+        string output = Path.Combine(dir, "Гравировка.JSON");
+        string project = Path.Combine(dir, "template.prt");
+        File.WriteAllText(project, "keep", new UTF8Encoding(false));
+        Reject(delegate { EngravingJson.WriteFile(project, json); });
+        EngravingJson.WriteFile(output, json + new string(' ', 300));
+        EngravingJson.WriteFile(output, json);
+        using (FileStream held = new FileStream(output, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            Reject(delegate { EngravingJson.WriteFile(output, "locked"); });
+        Reject(delegate { EngravingJson.WriteFile(output, new string((char)0xd800, 1)); });
+        Check(File.ReadAllText(output) == json, "lock/encoding failure changed the report");
+        using (FileStream file = new PartialWrite(output, 1))
+            Reject(delegate { EngravingJson.ReplaceContents(file, new byte[30]); });
+        Check(File.ReadAllText(output) == json, "partial write was not restored");
+        using (FileStream file = new PartialWrite(output, 2))
+        {
+            bool both = false;
+            try { EngravingJson.ReplaceContents(file, new byte[30]); }
+            catch (AggregateException error) { both = error.InnerExceptions.Count == 2; }
+            Check(both, "restore error hid the original write failure");
+        }
+        EngravingJson.WriteFile(output, json);
+    }
+
+    private sealed class PartialWrite : FileStream
+    {
+        private int failures;
+        internal PartialWrite(string path, int failures) : base(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)
+        { this.failures = failures; }
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            if (failures == 0) { base.Write(buffer, offset, count); return; }
+            failures--;
+            base.Write(buffer, offset, Math.Min(2, count));
+            throw new IOException("Injected partial write");
+        }
     }
 }

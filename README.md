@@ -22,7 +22,7 @@
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
 | [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.05 | Отдельная граница для каждой кривой в PLANAR_MILL / PLANAR_PROFILE. ON либо TANTO с отдельным выбором сторон для замкнутых и открытых кривых. | [Все функции](docs/planar-add-curves.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.13 | Средние линии по граням гравировки и окружности D/2 для точек; назначение в PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
-| [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1 | Снимок параметров операции гравировки, отчёт и JSON для диагностики. | [Все функции](docs/engraving-operation-diagnostic.md) |
+| [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1.01 | Снимок параметров операции гравировки, отчёт и JSON для диагностики. | [Все функции](docs/engraving-operation-diagnostic.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Создание однолинейного текста ГОСТ А из линий и гладких сплайнов по внешнему FON. | [Все функции](docs/gost-smooth-text.md) |
 | [NX_Number_Program_Folders.cs](scripts/NX_Number_Program_Folders.cs) | V1.05 | Нумерация папок программ по порядку дерева с учётом XLSX-реестра. | [Все функции](docs/number-program-folders.md) |
 | [NX_Tool_D_To_Description.cs](scripts/NX_Tool_D_To_Description.cs) | V1.06 | Заполнение описаний инструментов диаметром и номерами T, H, D. | [Все функции](docs/tool-description.md) |
@@ -39,13 +39,15 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Кривые в PLANAR V1.05 · 23.11.2026
+### Последнее обновление — Диагностика операции гравировки V1.01 · 23.11.2026
+
+Журнал записывает точки предварительного сверления и начала резания, плоскости безопасности и нижнего предела, наследование границ и порядок UDE. При ошибке чтения в JSON указано, какое поле недоступно и почему. [Руководство](docs/engraving-operation-diagnostic.md#изменения-последней-версии).
+
+SHA-256 исходника V1.01 — `27edbd5b40c68ec73b3525f443966e2afa83bfc42ef5d0331cf6c51a031f03b8`.
+
+### Также опубликовано — Кривые в PLANAR V1.05 · 23.11.2026
 
 Исправлена ошибка компиляции журнала на строке 425 в Designcenter 2606. Для подсчёта и сортировки кодов типов границ теперь используются коллекции, доступные компилятору журналов NX. [Руководство](docs/planar-add-curves.md#изменения-последней-версии).
-
-### Также опубликовано — Диагностика операции гравировки V1 · 23.11.2026
-
-Отдельный журнал собирает параметры выбранной PLANAR_MILL / PLANAR_PROFILE, наследование, группы, инструмент, геометрию и доступные свойства редактора. Кнопка «Сохранить JSON» создаёт файл в выбранной папке; «Копировать всё» копирует полный отчёт. Основной скрипт гравировки пока не создаёт операции автоматически. [Руководство](docs/engraving-operation-diagnostic.md).
 
 ### Также опубликовано — Карта наладки V2.72 · 19.11.2026
 
