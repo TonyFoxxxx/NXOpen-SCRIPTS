@@ -72,9 +72,9 @@
       "id": "NX_Planar_Add_Curves",
       "name": "Кривые в PLANAR_MILL / PROFILE",
       "file": "NX_Planar_Add_Curves.cs",
-      "version": "V1.06",
+      "version": "V1.07",
       "path": "scripts/NX_Planar_Add_Curves.cs",
-      "sha256": "52b0fdba56e715792bdb28ffeab70c46d71dd0da27b0ccae745080529533c2c2",
+      "sha256": "693368e2e520a59398cc610acd367b200efaf2aa9fdeed3d3bb5d5e41e1e61dc",
       "description": "По одной границе на кривую в PLANAR_MILL / PLANAR_PROFILE. Общая плоскость по грани или Datum Plane, режим ON или TANTO с выбором сторон."
     },
     {

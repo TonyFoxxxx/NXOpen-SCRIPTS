@@ -1,5 +1,5 @@
 // NX_Planar_Add_Curves.cs - separate curve boundaries for PLANAR_MILL / PLANAR_PROFILE.
-// SCRIPT_VERSION: V1.06
+// SCRIPT_VERSION: V1.07
 // Select one planar operation, choose ON / TANTO and a boundary plane, then pick existing curves.
 // Each new curve becomes one Part Boundary; geometrically closed curves remain Closed.
 // Existing assignments are skipped. No chaining, new curves, files or automatic toolpath generation.
@@ -18,7 +18,7 @@ using CamOperation = NXOpen.CAM.Operation;
 
 public class NXPlanarAddCurves
 {
-    private const string SCRIPT_VERSION = "V1.06";
+    private const string SCRIPT_VERSION = "V1.07";
     private static readonly string Title = "Кривые в PLANAR — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
 
@@ -231,7 +231,7 @@ public class NXPlanarAddCurves
         TaggedObject picked;
         Point3d cursor;
         Selection.Response answer = UI.GetUI().SelectionManager.SelectTaggedObject(
-            "Укажите плоскую грань или базовую плоскость для новых границ", Title + " — Плоскость границ",
+            PlanarCurveOptions.PlanePickPrompt, "Выберите плоскость в модели — " + Title,
             Selection.SelectionScope.AnyInAssembly, Selection.SelectionAction.ClearAndEnableSpecific,
             false, false, mask, out picked, out cursor);
         if (answer == Selection.Response.Cancel || answer == Selection.Response.Back) return null;
@@ -249,7 +249,7 @@ public class NXPlanarAddCurves
             new Selection.MaskTriple(UFConstants.UF_conic_type, 0, 0),
             new Selection.MaskTriple(UFConstants.UF_spline_type, 0, 0) };
         Selection.Response answer = UI.GetUI().SelectionManager.SelectTaggedObjects(
-            "Выберите кривые: каждая будет добавлена отдельной границей", Title,
+            "Выберите кривые рабочей детали и нажмите OK.", "Выберите кривые в модели — " + Title,
             Selection.SelectionScope.WorkPart, Selection.SelectionAction.ClearAndEnableSpecific,
             false, false, mask, out objects);
         if (answer == Selection.Response.Cancel || answer == Selection.Response.Back || objects == null || objects.Length == 0)
@@ -702,6 +702,7 @@ public static class SeparatePlanarBoundary
 // BEGIN PLANAR CURVE WINDOWS
 public sealed class PlanarCurveOptions
 {
+    internal const string PlanePickPrompt = "Щёлкните в модели по плоской грани или базовой плоскости (Datum Plane).";
     public bool SelectPlane = true;
     public bool Tanto, ClosedOutside, OpenRight;
     public bool UsesOutsideOrRight(bool closed) { return Tanto && (closed ? ClosedOutside : OpenRight); }
@@ -910,7 +911,7 @@ public static class PlanarCurveWindows
         {
             Options.SelectPlane = enabled;
             Native.SendMessageW(Item(PlaneChoice), BmSetCheck, new IntPtr(enabled ? 1 : 0), IntPtr.Zero);
-            Native.SetWindowTextW(Item(Note), enabled ? "Плоская грань или базовая плоскость для всех новых границ."
+            Native.SetWindowTextW(Item(Note), enabled ? PlanarCurveOptions.PlanePickPrompt
                 : "NX определит плоскость каждой новой границы автоматически.");
             Native.SetWindowTextW(Item(OK), enabled ? "Выбрать плоскость  →" : "Выбрать кривые  →");
         }

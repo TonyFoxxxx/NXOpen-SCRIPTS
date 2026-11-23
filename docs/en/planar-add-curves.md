@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.06 · 2026-11-24** — Pick one planar face or Datum Plane before selecting curves. All new Part Boundaries use that plane. Clear the plane checkbox to let NX choose a plane for each boundary.
+**V1.07 · 2026-11-24** — The NX selection dialogs now start with “Выберите плоскость в модели” (Select a plane in the model) and “Выберите кривые в модели” (Select curves in the model). The action stays at the front of a narrow window.
 
 File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater name: **«Кривые в PLANAR_MILL / PROFILE»**. This is a separate script for existing curves; [engraving centerline construction](planar-mill-curves.md) remains a separate tool.
 
@@ -14,8 +14,8 @@ File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater 
 2. Close the operation editor and select one operation in **Operation Navigator**. Its name can be arbitrary.
 3. Run `NX_Planar_Add_Curves.cs` using **Tools → Journal → Play** or a custom button.
 4. Choose **ON** (default) or **TANTO**. For TANTO, check one side in each group. When the selection contains only one curve type, only that group applies. Switching back to ON disables both groups.
-5. With **«Выбрать плоскость границ»** checked (default), click **«Выбрать плоскость →»** and pick a planar face or a Datum Plane in NX. To use automatic planes, clear the checkbox and click **«Выбрать кривые →»**.
-6. Select work-part curves and confirm. Each previously unassigned curve gets its own new **Part Boundary**. Review the report and generate the toolpath in NX.
+5. With **«Выбрать плоскость границ»** checked (default), click **«Выбрать плоскость →»**. When the title reads **«Выберите плоскость в модели»**, click a planar face or a Datum Plane in the graphics window. You can leave **Name** blank. For automatic planes, clear the checkbox in the starting dialog.
+6. When the title reads **«Выберите кривые в модели»**, select work-part curves and click **OK**. Each previously unassigned curve gets its own **Part Boundary**. Review the report and generate the toolpath in NX.
 
 | Position | Closed curves | Open curves |
 | --- | --- | --- |
@@ -50,6 +50,6 @@ The result window is resizable. **«Копировать всё»** copies the e
 - The CAM operation and selected curves must belong to the work part. A planar face or Datum Plane can also be selected on a positioned assembly component.
 - If the operation inherits nonempty Part Boundaries from parent geometry, first define local boundaries in NX. The script does not change the parent geometry.
 - No new curves, toolpath generation or automatic part saving. No files, folders, logs, temporary files or disk settings are created.
-- V1.06 compiled against the Designcenter 2606 NXOpen assemblies. Offline tests cover a translated and inclined plane on 36 curves, a Datum Plane with a reversed normal, the Automatic option, all four TANTO combinations, cancellation, preservation of old boundaries and rollback if NX does not retain the plane. The new selection still needs verification on a live CAM part.
+- V1.07 compiled against the Designcenter 2606 NXOpen assemblies. Offline tests check the selection titles and prompts. They also cover a translated and inclined plane on 36 curves, a Datum Plane with a reversed normal, the Automatic option, all four TANTO combinations, cancellation, preservation of old boundaries and rollback if NX does not retain the plane. The new selection still needs verification on a live CAM part.
 
 [Download script](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Planar_Add_Curves.cs) · [Catalog](../../README.en.md) · [Changelog](../../CHANGELOG.en.md)

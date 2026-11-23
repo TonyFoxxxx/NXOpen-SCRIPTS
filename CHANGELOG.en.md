@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-24 — Curves for PLANAR V1.07
+
+The NX selection dialogs now start with “Выберите плоскость в модели” (Select a plane in the model) and “Выберите кривые в модели” (Select curves in the model). The action stays at the front of a narrow window. [Guide](docs/en/planar-add-curves.md#latest-release).
+
+For the plane, click a planar face or a Datum Plane in the graphics window. The Name field can be left blank.
+
 ## 2026-11-24 — Curves for PLANAR V1.06
 
 Pick one planar face or Datum Plane before selecting curves. All new Part Boundaries use that plane. Clear the plane checkbox to let NX choose a plane for each boundary. [Guide](docs/en/planar-add-curves.md#latest-release).

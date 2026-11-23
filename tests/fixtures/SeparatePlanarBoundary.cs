@@ -74,6 +74,9 @@ namespace NXOpen
         public Response SelectTaggedObject(string prompt,string title,SelectionScope scope,SelectionAction action,
             bool features,bool highlight,MaskTriple[] mask,out TaggedObject picked,out Point3d cursor)
         {
+            if(!title.StartsWith("Выберите плоскость в модели",StringComparison.Ordinal) ||
+                !prompt.Contains("плоской грани") || !prompt.Contains("базовой плоскости"))
+                throw new Exception("The plane picker needs the action first in its caption and both selectable objects in the prompt");
             if(scope!=SelectionScope.AnyInAssembly || features || highlight || mask.Length!=2 ||
                mask[0].Type!=UFConstants.UF_solid_type || mask[0].SolidBodySubtype!=UFConstants.UF_UI_SEL_FEATURE_PLANAR_FACE ||
                mask[1].Type!=UFConstants.UF_datum_plane_type) throw new Exception("Invalid plane selection filter");
@@ -81,7 +84,11 @@ namespace NXOpen
         }
         public Response SelectTaggedObjects(string prompt,string title,SelectionScope scope,SelectionAction action,
             bool features,bool highlight,MaskTriple[] mask,out TaggedObject[] objects)
-        { Model.Picks+="C"; objects=Model.Selection.ToArray(); return Model.CurveResponse; }
+        {
+            if(!title.StartsWith("Выберите кривые в модели",StringComparison.Ordinal))
+                throw new Exception("The curve picker must identify the next action at the start of its caption");
+            Model.Picks+="C"; objects=Model.Selection.ToArray(); return Model.CurveResponse;
+        }
     }
     public class UI { public Selection SelectionManager=new Selection(); public static UI GetUI() { return new UI(); } }
 }

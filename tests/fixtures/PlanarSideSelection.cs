@@ -7,7 +7,7 @@ using System.Threading;
 internal static class PlanarSideSelection
 {
     private const int Continue = 1, Cancel = 2, On = 110, Tanto = 111;
-    private const int Inside = 121, Outside = 122, Left = 124, Right = 125, PlaneChoice = 128;
+    private const int Inside = 121, Outside = 122, Left = 124, Right = 125, PlaneHint = 127, PlaneChoice = 128;
     private const uint BmGetCheck = 0xf0, BmClick = 0xf5;
     private static readonly IntPtr Zero = IntPtr.Zero;
     private static IntPtr desktop;
@@ -33,6 +33,10 @@ internal static class PlanarSideSelection
         var caption=new System.Text.StringBuilder(80);
         GetWindowText(GetDlgItem(w,Continue),caption,caption.Capacity);
         Check(caption.ToString().Contains(enabled?"плоскость":"кривые"),"continue indicates next selection");
+        GetWindowText(GetDlgItem(w,PlaneHint),caption,caption.Capacity);
+        string hint=caption.ToString();
+        Check(enabled ? hint.Contains("Щёлкните в модели") && hint.Contains("плоской грани") && hint.Contains("базовой плоскости")
+            : hint.Contains("автоматически"), "visible instruction matches the next action");
     }
     private static void CheckPair(IntPtr w, int first, int second, bool useSecond)
     {
