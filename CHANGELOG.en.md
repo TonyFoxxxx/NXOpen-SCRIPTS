@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-24 — Curves for PLANAR V1.09
+
+The rounded start dialog remembers confirmed settings. Select **Part Boundaries**, **Blank Boundaries**, or both. With both checked, pick the part curves first and the blank curves second. One Undo step covers both sets. [Guide](docs/en/planar-add-curves.md#latest-release).
+
+V1.09 source SHA-256 is `34bfd81c0f8065032c0a6440fed4d2b8804e959f69b7e65472c3530ad89dbb8a`.
+
 ## 2026-11-24 — Engraving centerlines for PLANAR_MILL V1.18
 
 An NX interrupt during startup now opens a Windows **Retry / Cancel** dialog. Retry acknowledges the interrupt and reads the work part once more. Cancel ends the journal before any CAM edit. [Guide](docs/en/planar-mill-curves.md#latest-release).

@@ -21,12 +21,22 @@ namespace NXOpen
         public Vector3d(double x,double y,double z) { X=x; Y=y; Z=z; }
     }
     public class PlaneTypes { public enum MethodType { Fixed, Distance, Angle, Bisector } }
-    public class Expression { public string RightHandSide; }
+    public class Expression
+    {
+        public enum UnitsOption { Base }
+        public string RightHandSide;
+        public double GetValueUsingUnits(UnitsOption units) { return Double.Parse(RightHandSide,System.Globalization.CultureInfo.InvariantCulture); }
+    }
     public class SmartObject { public enum UpdateOption { AfterModeling } }
     public class Plane : NXObject
     {
         public Point3d Origin; public Vector3d Normal; public bool Temporary;
         public PlaneTypes.MethodType Method; public Expression Expression; public bool OffsetFlip;
+        private NXObject[] references;
+        public void SetMethod(PlaneTypes.MethodType method) {Method=method;Temporary=true;}
+        public NXObject[] GetGeometry() {return references??new NXObject[]{new NXObject()};}
+        public void SetGeometry(NXObject[] objects) {references=objects;}
+        public void SetExpression(string value) {Expression=new Expression{RightHandSide=value};}
         public void Evaluate()
         {
             if(!Temporary) return;
@@ -36,7 +46,7 @@ namespace NXOpen
             double length=Math.Sqrt(Normal.X*Normal.X+Normal.Y*Normal.Y+Normal.Z*Normal.Z);
             if(Method==PlaneTypes.MethodType.Distance && length>0)
             {
-                double shift=Model.Distance*(OffsetFlip?-1:1)/length;
+                double shift=Expression.GetValueUsingUnits(Expression.UnitsOption.Base)*(OffsetFlip?-1:1)/length;
                 Origin=new Point3d(Origin.X+Normal.X*shift,Origin.Y+Normal.Y*shift,Origin.Z+Normal.Z*shift);
             }
         }
@@ -53,7 +63,8 @@ namespace NXOpen
     public class Curve : NXObject { public bool Closed; public double GetLength() { return 10.0; } }
     public class Line : Curve {} public class Arc : Curve {} public class Spline : Curve {} public class Ellipse : Curve {}
     public class NXException : Exception { public int ErrorCode; }
-    public class Part : NXObject { public CAMSetup CAMSetup = new CAMSetup(); public PlaneCollection Planes=new PlaneCollection(); }
+    public class BasePart : NXObject { public enum Units { Millimeters, Inches }; public Units PartUnits; }
+    public class Part : BasePart { public CAMSetup CAMSetup = new CAMSetup(); public PlaneCollection Planes=new PlaneCollection(); }
     public class PartList { public Part Work; }
     public class ListingWindow { public void Open() {} public void WriteLine(string line) { throw new Exception(line); } }
     public class Session
@@ -95,9 +106,12 @@ namespace NXOpen
         public Response SelectTaggedObjects(string prompt,string title,SelectionScope scope,SelectionAction action,
             bool features,bool highlight,MaskTriple[] mask,out TaggedObject[] objects)
         {
-            if(Model.PreviewActive || !title.StartsWith("Выберите кривые в модели",StringComparison.Ordinal))
-                throw new Exception("The curve picker must identify the next action at the start of its caption");
-            Model.Picks+="C"; objects=Model.Selection.ToArray(); return Model.CurveResponse;
+            bool blank=title.StartsWith("Выберите кривые заготовки",StringComparison.Ordinal);
+            if(Model.PreviewActive || (!blank && !title.StartsWith("Выберите кривые детали",StringComparison.Ordinal))
+                || !prompt.Contains(blank?"Blank Boundaries":"Part Boundaries")) throw new Exception("Missing destination in curve picker");
+            Model.Picks+=blank?"B":"C";
+            objects=(blank?Model.BlankSelection:Model.Selection).ToArray();
+            return blank?Model.BlankResponse:Model.CurveResponse;
         }
     }
     public class UI
@@ -108,14 +122,17 @@ namespace NXOpen
 }
 namespace NXOpen.BlockStyler
 {
-    public class UIBlock { public string Label; }
+    public class UIBlock { public string Label; public bool Enable; }
     public class SpecifyPlane : UIBlock
     {
         public string LabelString, StepStatusAsString, BalloonTooltipText; public bool ShowShortcuts;
+        private TaggedObject[] selection;
+        public void SetSelectedObjects(TaggedObject[] objs) {selection=objs;}
         public TaggedObject[] GetSelectedObjects()
         {
             if(!Model.DialogOpen) throw new Exception("Read plane outside the dialog");
             if(Model.MissingPlane) return new TaggedObject[0];
+            if(selection!=null) return selection;
             return new TaggedObject[] {new Plane { Temporary=true, Method=Model.Method, OffsetFlip=Model.OffsetFlip,
                 Expression=Model.Method==PlaneTypes.MethodType.Distance ? new Expression {RightHandSide=Model.Distance.ToString(System.Globalization.CultureInfo.InvariantCulture)} : null }};
         }
@@ -132,15 +149,16 @@ namespace NXOpen.BlockStyler
     public class SnapBlockDialog : BlockDialog, IDisposable
     {
         public CompositeBlock TopBlock=new CompositeBlock();
-        private Action init; private Func<int> ok; private string title;
+        private Action init; private Func<int> ok; private Func<UIBlock,int> update; private string title;
         public SnapBlockDialog(string title) { this.title=title; }
         public void AddItem(string type,string id)
         {
-            if(type!="Specify Plane" && type!="Label") throw new Exception("Expected native NX block type");
+            if(type!="Specify Plane" && type!="Label" && type!="Button") throw new Exception("Expected native NX block type");
             TopBlock.Blocks.Add(id,type=="Specify Plane"?(UIBlock)new SpecifyPlane():new UIBlock());
         }
         public void AddInitializeHandler(Action callback) {init=callback;}
         public void AddOkHandler(Func<int> callback) {ok=callback;}
+        public void AddUpdateHandler(Func<UIBlock,int> callback) {update=callback;}
         public DialogResponse LaunchInDialogMode(DialogMode mode)
         {
             if(mode!=DialogMode.Edit || !Model.PreviewActive) throw new Exception("Unscoped constructor or repeating Apply mode");
@@ -152,6 +170,13 @@ namespace NXOpen.BlockStyler
             Model.PlaneBuilds++; Model.PlaneBuilt=true;
             if(Model.PlaneResponse==Selection.Response.Back) return DialogResponse.Back;
             if(Model.PlaneResponse==Selection.Response.Cancel) return DialogResponse.Cancel;
+            if(Model.RepeatClicks>0)
+            {
+                UIBlock repeat=TopBlock.FindBlock("repeatOffset");
+                update(plane);
+                if(!repeat.Enable) throw new Exception("Repeat requires an explicit new reference");
+                for(int n=0;n<Model.RepeatClicks;n++) update(repeat);
+            }
             if(ok()!=0) throw new Exception("OK callback failed");
             return DialogResponse.Ok;
         }
@@ -169,7 +194,7 @@ namespace NXOpen.CAM
 {
     public class CAMSetup { public enum View { Geometry } public Collection CAMOperationCollection=new Collection(); }
     public class NCGroup : NXObject { public NCGroup GetParent() { return null; } }
-    public class Operation : NXObject { public NCGroup GetParent(CAMSetup.View view) { return null; } }
+    public class Operation : NXObject { public NCGroup GetParent(CAMSetup.View view) { return Model.Parent; } }
     public class PlanarMilling : Operation {}
     public class Collection { public PlanarMillingBuilder CreatePlanarMillingBuilder(PlanarMilling op) { return new PlanarMillingBuilder(); } }
     public class BoundaryMemberSet { public NXObject Geometry; }
@@ -189,24 +214,33 @@ namespace NXOpen.CAM
     public class BoundaryPlanarMill { public RowList BoundaryList=new RowList(); }
     public class PlanarMillingBuilder
     {
-        public BoundaryPlanarMill PartBoundary=new BoundaryPlanarMill();
+        public BoundaryPlanarMill PartBoundary=new BoundaryPlanarMill(), BlankBoundary=new BoundaryPlanarMill();
         public PlanarMillingBuilder()
         {
-            foreach(Record record in Model.Records)
+            Fill(PartBoundary,Model.Records);
+            if (Model.NoBlankEditor) BlankBoundary=null;
+            else Fill(BlankBoundary,Model.BlankRecords);
+        }
+        private static void Fill(BoundaryPlanarMill collection,List<Record> records)
+        {
+            foreach(Record record in records)
                 if(Model.OmitEditorTag==Tag.Null || Array.IndexOf(record.Tags,Model.OmitEditorTag)<0)
-                    PartBoundary.BoundaryList.Add(record.Editor());
-            if(Model.Records.Count==0 || Model.KeepPlaceholder)
+                    collection.BoundaryList.Add(record.Editor());
+            if(records.Count==0 || Model.KeepPlaceholder)
             {
                 var blank=new BoundarySetPlanarMill();
                 if(Model.NullPlaceholderMember) blank.BoundaryMemberList.Add(new BoundaryMemberSetPlanarMill());
-                PartBoundary.BoundaryList.Add(blank);
+                collection.BoundaryList.Add(blank);
             }
         }
         public void Commit()
         {
             Model.Commits++;
-            foreach(BoundarySetPlanarMill row in PartBoundary.BoundaryList)
-                if(row.Saved!=null) row.Saved.Apply(row);
+            foreach(BoundaryPlanarMill collection in new[]{PartBoundary,BlankBoundary})
+                if(collection!=null)
+                    foreach(BoundarySetPlanarMill row in collection.BoundaryList)
+                        if(row.Saved!=null) row.Saved.Apply(row);
+            if(Model.TouchOtherOnCommit && Model.BlankRecords.Count>0) Model.BlankRecords[0].Offset+=1;
             if(Model.DropOnCommit) Model.Records.RemoveAt(Model.Records.Count-1);
         }
         public void Destroy() {}
@@ -214,7 +248,7 @@ namespace NXOpen.CAM
 }
 namespace NXOpen.UF
 {
-    public enum CamGeomType { CamPart }
+    public enum CamGeomType { CamPart, CamBlank }
     public enum CamBoundaryType { CamBoundaryTypeClosed, CamBoundaryTypeOpen }
     public enum CamMaterialSide { CamMaterialSideUndefined, CamMaterialSideInLeft, CamMaterialSideOutRight }
     public enum CamToolPosition { CamToolPositionUndefined, CamToolPositionOn, CamToolPositionTanto }
@@ -256,49 +290,57 @@ namespace NXOpen.UF
             public double stock,feedrate_value,blank_distance; public double[] tolerances; public CamToolPosition tool_position; }
         public struct BoundaryData { public CamBoundaryType boundary_type; public int plane_type,ignore_holes,ignore_islands,ignore_chamfers;
             public double[] origin,matrix; public CamMaterialSide material_side; public AppData[] app_data; }
-        public void IsInherited(Tag operation,CamGeomType type,out bool inherited) { inherited=Model.Inherited; }
+        private Record Boundary(int handle)
+        { return (handle<0?Model.BlankRecords:Model.Records)[Math.Abs(handle)-1]; }
+        private Record Member(int handle)
+        { return Boundary(handle/1000); }
+        public void IsInherited(Tag operation,CamGeomType type,out bool inherited)
+        { inherited=type==CamGeomType.CamBlank?Model.BlankInherited:Model.Inherited; }
         public void AskBoundaries(Tag operation,CamGeomType type,out int count,out IntPtr[] boundaries)
         {
-            count=Model.Records.Count; boundaries=count==0 && !Model.KeepPlaceholder ? null : new IntPtr[Math.Max(count,1)];
-            for(int i=0;i<count;i++) boundaries[i]=new IntPtr(i+1);
+            bool blank=type==CamGeomType.CamBlank;
+            count=operation==Model.Op.Tag?(blank?Model.BlankRecords:Model.Records).Count:(blank?Model.ParentBlankCount:Model.ParentPartCount);
+            boundaries=count==0 && !Model.KeepPlaceholder?null:new IntPtr[Math.Max(count,1)];
+            for(int i=0;i<count;i++) boundaries[i]=new IntPtr((blank?-1:1)*(i+1));
         }
         public void AskBoundaryData(IntPtr b,out BoundaryData data)
         {
-            data=Model.Records[b.ToInt32()-1].Definition;
-            // An out-of-enum UF readback is independent of the persisted shape displayed by the editor.
+            data=Boundary(b.ToInt32()).Definition;
             if(Model.UfReadType.HasValue) data.boundary_type=(CamBoundaryType)Model.UfReadType.Value;
         }
-        public void AskBoundaryAppData(IntPtr b,out AppData data) { data=Model.Records[b.ToInt32()-1].Settings; }
+        public void AskBoundaryAppData(IntPtr b,out AppData data) { data=Boundary(b.ToInt32()).Settings; }
         public void AskBoundaryItems(IntPtr b,out int count,out IntPtr[] items)
         {
-            count=Model.Records[b.ToInt32()-1].Tags.Length; items=new IntPtr[count];
-            for(int i=0;i<count;i++) items[i]=new IntPtr(b.ToInt32()*1000+i);
+            int handle=b.ToInt32();count=Boundary(handle).Tags.Length; items=new IntPtr[count];
+            for(int i=0;i<count;i++) items[i]=new IntPtr(handle*1000+Math.Sign(handle)*i);
         }
         public void AskItemEntity(IntPtr item,out Tag tag)
-        { int k=item.ToInt32(); tag=Model.Records[k/1000-1].Tags[k%1000]; }
+        { int k=item.ToInt32(); tag=Member(k).Tags[Math.Abs(k)%1000]; }
         public void AskItemAppData(IntPtr item,out AppData data)
-        { int k=item.ToInt32(); data=Model.Records[k/1000-1].Members[k%1000]; }
+        { int k=item.ToInt32(); data=Member(k).Members[Math.Abs(k)%1000]; }
         public void AppendBndFromCurve(Tag operation,CamGeomType type,int count,Tag[] curves,ref BoundaryData definition,AppData[] members)
         {
-            if(operation!=Model.Op.Tag || type!=CamGeomType.CamPart || count!=1 || curves.Length!=1 || members.Length!=1 ||
+            bool blank=type==CamGeomType.CamBlank;
+            List<Record> records=blank?Model.BlankRecords:Model.Records;
+            if(operation!=Model.Op.Tag || count!=1 || curves.Length!=1 || members.Length!=1 ||
                definition.app_data!=null || definition.plane_type!=(Model.Options.SelectPlane?0:1) || definition.origin.Length!=3 || definition.matrix.Length!=9 ||
                members[0].tolerances.Length!=2 || members[0].has_tool_position!=1) throw new Exception("Invalid UF append contract");
-            Model.Calls++; Model.Inherited=false;
+            Model.Calls++; if(blank) Model.BlankInherited=false; else Model.Inherited=false;
             if(Model.FailAt==Model.Calls) throw new InvalidOperationException("Injected append failure");
             if(Model.DropTag==curves[0]) return;
             var r=new Record {Tags=(Tag[])curves.Clone(), Definition=definition, Members=(AppData[])members.Clone(),
                 Position=members[0].tool_position==CamToolPosition.CamToolPositionTanto ? BoundarySet.ToolPositionTypes.Contact : BoundarySet.ToolPositionTypes.On,
                 Side=definition.material_side==CamMaterialSide.CamMaterialSideOutRight ? BoundarySet.ToolSideTypes.OutsideOrRight : BoundarySet.ToolSideTypes.InsideOrLeft};
             if(Model.WrongEditorDefaults) { r.Side=BoundarySet.ToolSideTypes.InsideOrLeft; r.Position=BoundarySet.ToolPositionTypes.Contact; }
-            Model.Records.Add(r);
-            if(Model.SubstituteTag==curves[0]) r.Tags[0]=Model.Records[0].Tags[0];
-            if(Model.CorruptOld && Model.Calls==1) Model.Records[0].Settings.stock+=1;
+            records.Add(r);
+            if(Model.SubstituteTag==curves[0]) r.Tags[0]=records[0].Tags[0];
+            if(Model.CorruptOld && Model.Calls==1) records[0].Settings.stock+=1;
             if(Model.MergeAt==Model.Calls) {
-                Record earlier=Model.Records[Model.Records.Count-2];
+                Record earlier=records[records.Count-2];
                 earlier.Tags=new[]{earlier.Tags[0],curves[0]}; earlier.Members=new[]{earlier.Members[0],members[0]};
-                Model.Records.RemoveAt(Model.Records.Count-1);
+                records.RemoveAt(records.Count-1);
             }
-            if(Model.DuplicateTag==curves[0]) Model.Records.Add(r.Copy());
+            if(Model.DuplicateTag==curves[0]) records.Add(r.Copy());
             if(Model.WrongClosure) r.Definition.boundary_type=CamBoundaryType.CamBoundaryTypeClosed;
             if(definition.plane_type==0 && Model.AdjustInitialPlane!=null) Model.AdjustInitialPlane(r);
         }
@@ -380,14 +422,20 @@ public static class Model
     public static Action<Record> AdjustInitialPlane; public static bool IgnorePlaneEdits;
     public static int? UfReadType, EditorReadType;
     public static Tag OmitEditorTag;
-    public static Tag DropTag,DuplicateTag,SubstituteTag; static List<Record> undo; static bool undoInherited;
-    public static void SaveUndo(){ undo=Records.ConvertAll(r=>r.Copy()); undoInherited=Inherited; }
-    public static void RestoreUndo(){ Records=undo.ConvertAll(r=>r.Copy()); Inherited=undoInherited; }
+    public static Tag DropTag,DuplicateTag,SubstituteTag; static List<Record> undo,undoBlank; static bool undoInherited,undoBlankInherited;
+    public static List<Record> BlankRecords; public static List<TaggedObject> BlankSelection;
+    public static bool BlankInherited,TouchOtherOnCommit,NoBlankEditor; public static Selection.Response BlankResponse;
+    public static int RepeatClicks;
+    public static NCGroup Parent; public static int ParentPartCount,ParentBlankCount;
+    public static void SaveUndo(){ undo=Records.ConvertAll(r=>r.Copy()); undoInherited=Inherited; undoBlank=BlankRecords.ConvertAll(r=>r.Copy()); undoBlankInherited=BlankInherited; }
+    public static void RestoreUndo(){ Records=undo.ConvertAll(r=>r.Copy()); Inherited=undoInherited; BlankRecords=undoBlank.ConvertAll(r=>r.Copy()); BlankInherited=undoBlankInherited; }
     public static void Reset()
     {
         Session=new Session(); Uf=new UFSession(); Session.Parts.Work=new Part {Tag=(Tag)10};
         Op=new PlanarMilling {Tag=(Tag)9000, OwningPart=Session.Parts.Work, Name="PLANAR_TEST"};
         Curves=new Dictionary<Tag,Curve>(); Selection=new List<TaggedObject>(); Records=new List<Record>();
+        BlankSelection=new List<TaggedObject>();BlankRecords=new List<Record>(); Parent=null;ParentPartCount=ParentBlankCount=0;
+        BlankInherited=TouchOtherOnCommit=NoBlankEditor=false;BlankResponse=NXOpen.Selection.Response.OK;RepeatClicks=0;
         Options=new PlanarCurveOptions { SelectPlane=false }; Report=""; Severity=-1; Marks=Undos=Commits=Calls=FailAt=MergeAt=0;
         Method=PlaneTypes.MethodType.Fixed; Distance=0;
         OffsetFlip=MissingPlane=DialogOpen=PreviewActive=PlaneBuilt=false;
@@ -469,6 +517,65 @@ public static class PlanarChecks
         Check(Model.Report.Contains("Замкнутых границ со стороной "+(outside?"Outside — снаружи":"Inside — внутри")+": 9"),"closed report");
         Check(Model.Report.Contains("Открытых границ со стороной "+(right?"Right — справа":"Left — слева")+": 27"),"open report");
     }
+    static void RememberedDistance()
+    {
+        Model.Reset(); Model.Options.SelectPlane=true; Model.Options.Blank=true;
+        Model.Distance=25.4; Model.OffsetFlip=true;Model.Method=PlaneTypes.MethodType.Distance;
+        Model.BlankSelection.Add(Model.AddCurve(701,true));Model.Run();Success();
+        Check(Model.Options.LastMethod=="Distance" && Model.Options.OffsetMm.HasValue && Math.Abs(Model.Options.OffsetMm.Value+25.4)<1e-9,
+            "remember evaluated signed distance after plane confirmation");
+        Model.Session.Parts.Work.PartUnits=BasePart.Units.Inches;
+        Model.ReferencePoint=new Point3d(10,20,30);Model.ReferenceNormal=new Vector3d(0,0,1);
+        Model.OffsetFlip=false; Model.Distance=9; Model.RepeatClicks=2;
+        Model.BlankSelection.Add(Model.AddCurve(702,false));Model.Run();Success();
+        Check(Math.Abs(Model.Records[1].Definition.origin[2]-29)<1e-9 && Math.Abs(Model.BlankRecords[1].Definition.origin[2]-29)<1e-9,
+            "repeat on new support in inches, replace current distance, never double the offset");
+        Model.Method=PlaneTypes.MethodType.Bisector;Model.RepeatClicks=0;Model.BlankSelection.Add(Model.AddCurve(703,true));Model.Run();Success();
+        Check(Model.Options.LastMethod=="Bisector" && !Model.Options.OffsetMm.HasValue && Model.Records[2].Definition.origin[2]==30,
+            "a different native construction wins and clears the distance preset");
+    }
+
+    static void BothTargets()
+    {
+        Model.Reset(); Model.Options.Part=false; Model.Options.Blank=true; Model.Options.SelectPlane=true;
+        Model.BlankSelection.Add(Model.AddCurve(201,true)); Model.BlankSelection.Add(Model.BlankSelection[0]);
+        Model.Parent=new NCGroup {Tag=(Tag)800}; Model.ParentPartCount=1; Model.Inherited=true;
+        Model.Run(); Success();
+        Check(Model.Picks=="PB" && Model.Marks==1 && Model.Calls==1 && Model.Records.Count==0 && Model.Inherited
+            && Model.BlankRecords.Count==1,"blank-only, independent of inherited part");
+        Model.Parent=null;Model.Inherited=false;Model.Options.Part=true;Model.Options.Tanto=true;Model.Options.OpenRight=true;
+        Model.BlankSelection.Add(Model.AddCurve(202,false)); Model.Run(); Success();
+        Check(Model.Picks=="PBPCB" && Model.Records.Count==2 && Model.BlankRecords.Count==2 && Model.Calls==4 && Model.Marks==2,
+            "one curve may belong to both; duplicates are per target; common plane requested once per run");
+        Check(Model.BlankRecords[0].Position==BoundarySet.ToolPositionTypes.On && Model.Records[0].Position==BoundarySet.ToolPositionTypes.Contact
+            && Model.BlankRecords[1].Side==BoundarySet.ToolSideTypes.OutsideOrRight,"separate settings and shared TANTO mode");
+        Model.Run();Check(Model.Severity==1 && Model.Calls==4 && Model.Marks==2,"both selections already assigned");
+        Model.Session.UndoToMark(new Session.UndoMarkId(),null);
+        Check(Model.Records.Count==0 && Model.BlankRecords.Count==1,"undo restores both stores at once");
+
+        foreach(Selection.Response cancel in new[]{Selection.Response.Cancel,Selection.Response.Back})
+        {
+            Model.Reset();Model.Options.Blank=true;Model.Options.SelectPlane=true;Model.AddCurve(301,true);Model.BlankResponse=cancel;Model.Run();
+            Check(Model.Picks=="PCB" && Model.Marks==0 && Model.Calls==0 && Model.PlaneBuilds==Model.PlaneDisposals,
+                "cancelling blank leaves part and plane untouched");
+        }
+        Model.Reset();Model.Options.Blank=true;Model.BlankSelection.Add(Model.AddCurve(351,true));
+        Model.FailAt=2;Model.Inherited=true;Model.BlankInherited=true;Model.Run();RolledBack();
+        Check(Model.Records.Count==0 && Model.BlankRecords.Count==0 && Model.Inherited && Model.BlankInherited && Model.Report.Contains("Blank Boundaries"),
+            "second target failure restores both stores and inheritance");
+        Model.Reset();Model.Options.Part=false;Model.Options.Blank=true;Model.BlankSelection.Add(Model.AddCurve(450,false));Model.Run();Success();
+        Model.BlankRecords[0].CustomOffset=true; Model.BlankRecords[0].Offset=3;
+        Model.Options.Blank=false;Model.Options.Part=true;Model.TouchOtherOnCommit=true;Model.WrongEditorDefaults=true;
+        Model.Run();RolledBack();Check(Model.BlankRecords[0].Offset==3 && Model.Records.Count==0,"detect collateral editor change in unselected store");
+        Model.Reset(); Model.Parent=new NCGroup {Tag=(Tag)810};Model.ParentBlankCount=2;Model.BlankInherited=true;
+        Model.Options.Blank=true;Model.BlankSelection.Add(Model.AddCurve(223,true));Model.Run();
+        Check(Model.Severity==2 && Model.Marks==0 && Model.Calls==0 && Model.Report.Contains("Blank Boundaries"),"protect populated inherited blank");
+        Model.Reset(); Model.NoBlankEditor=true;Model.AddCurve(225,true);Model.Run();Success();
+        Check(Model.Calls==1 && Model.Records.Count==1,"part-only operation with no blank editor");
+        Model.Options.Part=false;Model.Options.Blank=true;Model.BlankSelection.Add(Model.AddCurve(226,false));Model.Run();
+        Check(Model.Severity==2 && Model.Marks==1 && Model.Calls==1 && Model.Report.Contains("не предоставляет Blank Boundaries"),"missing requested editor identified before CAM mutation");
+    }
+
     static void PlaneSelection()
     {
         Model.Reset(); Select36(); Model.Options.SelectPlane=true;
@@ -557,12 +664,12 @@ public static class PlanarChecks
             && b.Side==BoundarySet.ToolSideTypes.OutsideOrRight && b.Members[0].tool_position==CamToolPosition.CamToolPositionTanto,"each boundary is Closed/TANTO/Outside");
         Check(Model.Report.Contains("Open: 0; Closed: 36"),"verified closed count");
         Check(Model.Report.Contains("код типа 2 для границ: 36"),"grouped native code diagnostic");
-        var saved = SeparatePlanarBoundary.Read(Model.Uf.Cambnd, Model.Op.Tag);
+        var saved = SeparatePlanarBoundary.Read(Model.Uf.Cambnd, Model.Op.Tag, CamGeomType.CamPart);
         saved.Boundaries[0].Definition.boundary_type = (CamBoundaryType)17;
         var expected = new Dictionary<Tag, bool>();
         foreach (Tag tag in saved.Sources) expected.Add(tag, true);
         var counts = new System.Text.StringBuilder();
-        SeparatePlanarBoundary.VerifySaved(new SeparatePlanarBoundary.Saved(), saved, expected, true, null, counts);
+        SeparatePlanarBoundary.VerifySaved(new SeparatePlanarBoundary.Saved(), saved, expected, true, null, counts, "Part Boundaries");
         string summary = counts.ToString();
         int twos = summary.IndexOf("код типа 2 для границ: 35.", StringComparison.Ordinal);
         int seventeen = summary.IndexOf("код типа 17 для границ: 1.", StringComparison.Ordinal);
@@ -588,6 +695,8 @@ public static class PlanarChecks
         Check(Model.Records.Count==0 && Model.Report.Contains("Нет тегов [136]"),"missing editor evidence with equal UF count");
         Model.Reset(); Model.UfReadType=(int)CamBoundaryType.CamBoundaryTypeOpen; Model.AddCurve(401,true); Model.Run(); RolledBack();
         Check(Model.Report.Contains("редактор NX подтвердил Closed, CAM вернул CamBoundaryTypeOpen"),"named native/editor conflict");
+        RememberedDistance();
+        BothTargets();
         EmptyTo36(false,true); EmptyTo36(true,false);
         foreach(bool outside in new[]{false,true}) foreach(bool right in new[]{false,true})
         {

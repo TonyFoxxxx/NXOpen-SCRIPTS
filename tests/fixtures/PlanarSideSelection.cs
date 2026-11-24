@@ -6,7 +6,8 @@ using System.Threading;
 // Exercise the actual native dialog on a desktop which is never shown to the user.
 internal static class PlanarSideSelection
 {
-    private const int Continue = 1, Cancel = 2, On = 110, Tanto = 111;
+    private const int Continue = 1, Cancel = 2, On = 110, Tanto = 111, Part = 140, Blank = 141;
+    private static string prefs;
     private const int Inside = 121, Outside = 122, Left = 124, Right = 125, PlaneHint = 127, PlaneChoice = 128;
     private const uint BmGetCheck = 0xf0, BmClick = 0xf5;
     private static readonly IntPtr Zero = IntPtr.Zero;
@@ -53,6 +54,55 @@ internal static class PlanarSideSelection
         Rect r; Check(GetWindowRect(GetDlgItem(w,id), out r), "control bounds"); return r;
     }
 
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int left,int top,int right,int bottom);
+    [DllImport("user32.dll")] private static extern int GetWindowRgn(IntPtr hwnd,IntPtr region);
+    [DllImport("gdi32.dll")] private static extern bool PtInRegion(IntPtr region,int x,int y);
+    [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr window);
+    [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr window,IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleBitmap(IntPtr dc,int w,int h);
+    [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr dc,IntPtr obj);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern int GetPixel(IntPtr dc,int x,int y);
+    [StructLayout(LayoutKind.Sequential)] private struct BitmapHeader
+    { public int Size,Width,Height;public ushort Planes,Bits;public uint Compression,ImageSize;public int X,Y,Colors,Important; }
+    [DllImport("gdi32.dll")] private static extern int GetDIBits(IntPtr dc,IntPtr bitmap,uint first,uint lines,[Out]byte[] pixels,ref BitmapHeader header,uint usage);
+    private static void VerifyAppearance(IntPtr window)
+    {
+        Rect frame; Check(GetWindowRect(window,out frame),"window bounds");
+        int width=frame.Right-frame.X,height=frame.Bottom-frame.Y;
+        IntPtr region=CreateRectRgn(0,0,0,0);
+        try{Check(GetWindowRgn(window,region)>0 && !PtInRegion(region,0,0) && PtInRegion(region,width/2,height/2),"rounded window region");}
+        finally{DeleteObject(region);}
+        IntPtr display=GetDC(window),memory=CreateCompatibleDC(display),bitmap=CreateCompatibleBitmap(display,width,height),previous=SelectObject(memory,bitmap);
+        try
+        {
+            Send(window,0x317,memory,new IntPtr(0x1e));  // WM_PRINT, background/client/children/non-client
+            foreach(int id in new[]{Part,Blank,Tanto,Outside,Left,Continue})
+            {
+                Rect b=Bounds(window,id);int x=b.X-frame.X,y=b.Y-frame.Y;
+                int delta=Math.Max(4,(int)Math.Round(7.0*width/692));
+                Check(GetPixel(memory,x,y)!=GetPixel(memory,x+delta,y+delta),"rounded button "+id);
+            }
+            string capture=Environment.GetEnvironmentVariable("NX_PLANAR_TEST_PREVIEW");
+            if (!String.IsNullOrEmpty(capture))
+            {
+                SelectObject(memory,previous);
+                var header=new BitmapHeader{Size=40,Width=width,Height=height,Planes=1,Bits=32};
+                var bytes=new byte[width*height*4];
+                Check(GetDIBits(display,bitmap,0,(uint)height,bytes,ref header,0)==height,"read native preview");
+                using(var stream=new System.IO.BinaryWriter(System.IO.File.Create(capture)))
+                {
+                    stream.Write((ushort)0x4d42);stream.Write(54+bytes.Length);stream.Write(0);stream.Write(54);stream.Write(40);
+                    stream.Write(width);stream.Write(height);stream.Write((ushort)1);stream.Write((ushort)32);
+                    stream.Write(0);stream.Write(bytes.Length);stream.Write(0);stream.Write(0);stream.Write(0);stream.Write(0);stream.Write(bytes);
+                }
+            }
+        }
+        finally{SelectObject(memory,previous);DeleteObject(bitmap);DeleteDC(memory);ReleaseDC(window,display);}
+    }
+
     private static PlanarCurveOptions Open(string title, Action<IntPtr> action)
     {
         Exception problem = null;
@@ -76,7 +126,7 @@ internal static class PlanarSideSelection
         });
         monitor.IsBackground = true;
         monitor.Start();
-        PlanarCurveOptions options = PlanarCurveWindows.AskOptions(Zero, title, "TEST");
+        PlanarCurveOptions options = PlanarCurveWindows.AskOptions(Zero, title, "PLSK_CHIST_Z0", prefs);
         Check(monitor.Join(5000), "options dialog deadline");
         if (problem!=null) throw problem;
         return options;
@@ -93,13 +143,15 @@ internal static class PlanarSideSelection
         }
         foreach (bool outside in new[]{false,true}) foreach (bool right in new[]{false,true})
         {
+            System.IO.File.Delete(prefs);
             PlanarCurveOptions options = Open("TANTO "+outside+" "+right, delegate(IntPtr w) {
                 CheckEnabled(w,false);
                 CheckPlane(w,true);
                 Check(Bounds(w,PlaneChoice).Bottom<=Bounds(w,On).Y && Bounds(w,Outside).Bottom<=Bounds(w,Continue).Y,"options fit the dialog");
                 Click(w,PlaneChoice); CheckPlane(w,false);
                 CheckPair(w,Inside,Outside,false); CheckPair(w,Left,Right,false);
-                Check(Bounds(w,Inside).Right <= Bounds(w,Left).X && Bounds(w,Inside).Bottom <= Bounds(w,Outside).Y, "separate control columns and rows");
+                Check(Bounds(w,Inside).Right <= Bounds(w,Outside).X && Bounds(w,Outside).Right <= Bounds(w,Left).X &&
+                    Bounds(w,Left).Right <= Bounds(w,Right).X, "four rounded sides in two groups");
                 Click(w,Tanto); CheckEnabled(w,true);
                 int closedId = outside ? Outside : Inside;
                 Click(w,closedId); Click(w,closedId);
@@ -115,11 +167,35 @@ internal static class PlanarSideSelection
             });
             Check(options!=null && options.Tanto && options.ClosedOutside==outside && options.OpenRight==right && options.SelectPlane==outside, "returned combination");
         }
+        System.IO.File.Delete(prefs);
         PlanarCurveOptions on = Open("ON ignores sides",delegate(IntPtr w) {
             Click(w,Tanto); Click(w,Outside); Click(w,Right); Click(w,On); Click(w,Continue);
         });
         Check(on!=null && on.SelectPlane && !on.Tanto && !on.UsesOutsideOrRight(false) && !on.UsesOutsideOrRight(true), "ON ignores side selections");
         Check(Open("Cancel",delegate(IntPtr w){Click(w,Tanto); Click(w,Right); Click(w,Cancel);})==null, "cancel");
+        System.IO.File.Delete(prefs);
+        Open("Defaults",delegate(IntPtr w){
+            CheckPair(w,Part,Blank,false);Click(w,Part);
+            Check(!IsWindowEnabled(GetDlgItem(w,Continue)),"at least one set required");
+            Send(w,0x111,new IntPtr(Continue),Zero);
+            Click(w,Blank);CheckPair(w,Part,Blank,true);Click(w,Part);Click(w,Tanto);Click(w,Outside);
+            Check(Send(GetDlgItem(w,Part),BmGetCheck,Zero,Zero).ToInt32()==1 && Send(GetDlgItem(w,Blank),BmGetCheck,Zero,Zero).ToInt32()==1,"both independent");
+            VerifyAppearance(w);
+            Click(w,Continue);
+        });
+        Open("Cancel edited options",delegate(IntPtr w){
+            CheckEnabled(w,true);CheckPair(w,Inside,Outside,true);CheckPlane(w,true);
+            Check(Send(GetDlgItem(w,Blank),BmGetCheck,Zero,Zero).ToInt32()==1,"blank restored");
+            Click(w,Blank);Click(w,PlaneChoice);Click(w,On);Click(w,Cancel);
+        });
+        var restored=Open("Reopen",delegate(IntPtr w){Click(w,Continue);});
+        Check(restored.Part && restored.Blank && restored.SelectPlane && restored.Tanto && restored.ClosedOutside && !restored.OpenRight,"cancel preserves last confirmed choices");
+        restored.LastMethod="Distance";restored.OffsetMm=-25.4;restored.Save(prefs);
+        var previous=PlanarCurveOptions.Load(prefs);
+        Check(previous.LastMethod=="Distance" && previous.OffsetMm==restored.OffsetMm,"signed plane preset survives a new journal instance");
+        System.IO.File.WriteAllText(prefs,"damaged");
+        var recovered=Open("Recover defaults",delegate(IntPtr w){Click(w,Continue);});
+        Check(recovered.Part && !recovered.Blank && !recovered.Tanto && recovered.SelectPlane,"malformed settings use defaults");
         return 0;
     }
     public static int Main()
@@ -128,6 +204,7 @@ internal static class PlanarSideSelection
     }
     private static int RunOnDesktop()
     {
+        prefs=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"planar-ui-"+Guid.NewGuid().ToString("N")+".settings");
         int status=1;
         Thread gui = new Thread((ThreadStart)delegate {
             try { status=Run(); } catch(Exception ex) { status=ManagedTestHost.Record(ex); }
@@ -136,6 +213,7 @@ internal static class PlanarSideSelection
         gui.IsBackground=true;
         gui.Start();
         if (!gui.Join(20000)) throw new TimeoutException("Private desktop test exceeded 20 seconds");
+        System.IO.File.Delete(prefs);
         return status;
     }
 }

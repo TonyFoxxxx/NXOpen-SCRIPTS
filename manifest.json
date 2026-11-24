@@ -72,10 +72,10 @@
       "id": "NX_Planar_Add_Curves",
       "name": "Кривые в PLANAR_MILL / PROFILE",
       "file": "NX_Planar_Add_Curves.cs",
-      "version": "V1.08",
+      "version": "V1.09",
       "path": "scripts/NX_Planar_Add_Curves.cs",
-      "sha256": "343ae19c854a7bf7d86d47c087bf7b823de7f9237d1d01b59c4a7b540df1e3dc",
-      "description": "По одной границе на кривую в PLANAR_MILL / PLANAR_PROFILE. Штатный конструктор Plane со смещением At Distance, ON или TANTO с выбором сторон."
+      "sha256": "34bfd81c0f8065032c0a6440fed4d2b8804e959f69b7e65472c3530ad89dbb8a",
+      "description": "Part и Blank Boundaries по отдельности или за один запуск. По одной границе на кривую, ON/TANTO, плоскость со смещением и запоминание выбора."
     },
     {
       "id": "NX_PlanarMill_Select_Curves",
