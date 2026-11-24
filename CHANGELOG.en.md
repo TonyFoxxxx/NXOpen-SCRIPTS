@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-24 — Curves for PLANAR V1.12
+
+The options dialog, palette and report headings now use DirectWrite at the monitor’s pixel resolution. Small text has more distinct strokes, and secondary labels have higher contrast in both themes. Long labels use an ellipsis. The diagnostic report uses a larger monospace font and supports text selection and copying. [Guide](docs/en/planar-add-curves.md#latest-release).
+
+Source SHA-256 for V1.12 is `28c50a902f426f5c7438c5bb6213e6aabf9ab110a9e9af456acd81efe7e1312a`.
+
 ## 2026-11-24 — Curves for PLANAR V1.11
 
 Small labels use larger type and grayscale antialiasing. The journal paints each selection button in all states, including when it is pressed or focused, to prevent the extra Windows radio dot. The start window and palette scale to the monitor DPI. Tab, the arrow keys and Space support keyboard selection. [Guide](docs/en/planar-add-curves.md#latest-release).

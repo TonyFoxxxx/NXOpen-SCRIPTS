@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.11 · 2026-11-24** — Small labels use larger type and grayscale antialiasing. The journal paints each selection button in all states, including when it is pressed or focused, to prevent the extra Windows radio dot. The start window and palette scale to the monitor DPI. Tab, the arrow keys and Space support keyboard selection.
+**V1.12 · 2026-11-24** — The options dialog, palette and report headings now use DirectWrite at the monitor’s pixel resolution. Small text has more distinct strokes, and secondary labels have higher contrast in both themes. Long labels use an ellipsis. The diagnostic report uses a larger monospace font and supports text selection and copying.
 
 File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater name: **«Кривые в PLANAR_MILL / PROFILE»**. This is a separate script for existing curves; [engraving centerline construction](planar-mill-curves.md) remains a separate tool.
 
@@ -62,6 +62,6 @@ The result window is resizable. **«Копировать всё»** copies the e
 - The CAM operation and selected curves must belong to the work part. A planar face or Datum Plane can also be selected on a positioned assembly component.
 - When a selected set inherits populated boundaries from a geometry parent, define local boundaries in NX before adding curves to that set.
 - User preferences in `%LOCALAPPDATA%\NXOpen-Scripts` are stored in `PlanarAddCurves.settings`, `PlanarAddCurves.appearance`, `Appearance.settings` for CAM options, local appearance and the shared style respectively. The operator generates the toolpath and saves the part as usual.
-- V1.11 compiles against the Designcenter 2606 journal libraries. Background tests exercise mouse press and release, keyboard selection, the native repaint requests, DPI changes and the return to the caller’s DPI context. Other tests cover the palette, saved settings, plane offsets, Part/Blank selections and rollback. CAM transactions were checked with an API fixture.
+- V1.12 compiles against the Designcenter 2606 journal libraries. Background tests cover Cyrillic stroke contrast on dark and light backgrounds, long labels, the report, button painting, and DPI changes at 96, 120 and 144 DPI. The native dialog also ran on .NET 10. CAM fixtures cover plane offsets, independent Part/Blank selections and rollback.
 
 [Download script](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Planar_Add_Curves.cs) · [Catalog](../../README.en.md) · [Changelog](../../CHANGELOG.en.md)

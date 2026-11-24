@@ -1,5 +1,5 @@
 // NX_Planar_Add_Curves.cs - separate curve boundaries for PLANAR_MILL / PLANAR_PROFILE.
-// SCRIPT_VERSION: V1.11
+// SCRIPT_VERSION: V1.12
 // Select one planar operation, choose ON / TANTO and a boundary plane, then pick existing curves.
 // One saved boundary per curve in each selected Part / Blank destination.
 // Remembers confirmed dialog settings per user. No automatic toolpath calculation or part save.
@@ -19,7 +19,7 @@ using CamOperation = NXOpen.CAM.Operation;
 
 public class NXPlanarAddCurves
 {
-    private const string SCRIPT_VERSION = "V1.11";
+    private const string SCRIPT_VERSION = "V1.12";
     private static readonly string Title = "Кривые в PLANAR — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
 
@@ -1382,71 +1382,346 @@ public static class PlanarCurveWindows
         }
     }
 
-    // Grid-fitted grayscale glyphs have neutral edges on both themes. The selected
-    // HFONT already uses the DPI of the window receiving this paint request.
-    private sealed class LabelPainter : IDisposable
+    // IDWriteTextLayout calls this standard Windows interface after shaping the text.
+    // Pixel snapping and glyph rendering share physical-pixel coordinates.
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LabelTransform
     {
-        private readonly Dictionary<IntPtr, IntPtr> fonts = new Dictionary<IntPtr, IntPtr>();
-        private readonly IntPtr[] formats = new IntPtr[3];
-        private IntPtr brush;
+        public float XX, XY, YX, YY, X, Y;
+    }
 
-        internal bool Draw(IntPtr dc, IntPtr font, string text, Native.Rect rect, int colour, uint align)
+    [ComVisible(true), Guid("EF8A8135-5CC6-45FE-8825-C5A0724EB819"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface ILabelRenderer
+    {
+        [PreserveSig]
+        int IsPixelSnappingDisabled(IntPtr context, out int disabled);
+        [PreserveSig]
+        int GetCurrentTransform(IntPtr context, out LabelTransform matrix);
+        [PreserveSig]
+        int GetPixelsPerDip(IntPtr context, out float pixelsPerDip);
+        [PreserveSig]
+        int DrawGlyphRun(IntPtr context, float x, float y, int measuring, IntPtr run, IntPtr description, IntPtr effect);
+        [PreserveSig]
+        int DrawUnderline(IntPtr context, float x, float y, IntPtr underline, IntPtr effect);
+        [PreserveSig]
+        int DrawStrikethrough(IntPtr context, float x, float y, IntPtr strike, IntPtr effect);
+        [PreserveSig]
+        int DrawInlineObject(IntPtr context, float x, float y, IntPtr item, int sideways, int rtl, IntPtr effect);
+    }
+
+    // The journal compiler has no DirectWrite wrapper. Bind the small subset of the
+    // dwrite.h COM interfaces used here, retaining native ownership explicitly.
+    [ComVisible(true), ClassInterface(ClassInterfaceType.None)]
+    public sealed class LabelPainter : ILabelRenderer, IDisposable
+    {
+        private struct LayoutKey : IEquatable<LayoutKey>
         {
-            if (String.IsNullOrEmpty(text))
-                return true;
-            IntPtr nativeFont;
-            if (!fonts.TryGetValue(font, out nativeFont))
+            internal IntPtr Font;
+            internal string Text;
+            internal int Width, Height;
+            internal uint Alignment;
+            public bool Equals(LayoutKey other)
             {
-                if (Native.GdipCreateFontFromDC(dc, out nativeFont) != 0)
-                    return false;
-                fonts.Add(font, nativeFont);
+                return Font == other.Font && Text == other.Text && Width == other.Width &&
+                    Height == other.Height && Alignment == other.Alignment;
             }
-            if (formats[align] == IntPtr.Zero)
+
+            public override bool Equals(object value)
             {
-                IntPtr format;
-                if (Native.GdipCreateStringFormat(0x1000, 0, out format) != 0) // StringFormatFlagsNoWrap
-                    return false;
-                if (Native.GdipSetStringFormatAlign(format, (int)align) != 0 ||
-                    Native.GdipSetStringFormatLineAlign(format, 1) != 0 ||
-                    Native.GdipSetStringFormatTrimming(format, 3) != 0)
+                return value is LayoutKey && Equals((LayoutKey)value);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
                 {
-                    Native.GdipDeleteStringFormat(format);
-                    return false;
+                    int hash = Font.GetHashCode() * 31 + Text.GetHashCode();
+                    return ((hash * 31 + Width) * 31 + Height) * 31 + (int)Alignment;
                 }
-                formats[align] = format;
             }
-            int argb = unchecked((int)0xff000000) | Appearance.Reverse(colour);
-            if (brush == IntPtr.Zero && Native.GdipCreateSolidFill(argb, out brush) != 0)
-                return false;
-            IntPtr graphics;
-            if (Native.GdipCreateFromHDC(dc, out graphics) != 0)
-                return false;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Trimming
+        {
+            internal int Granularity, Delimiter, Count;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct LogFont
+        {
+            internal int Height, Width, Escapement, Orientation, Weight;
+            internal byte Italic, Underline, Strike, Charset, OutputPrecision, ClipPrecision, Quality, Pitch;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            internal string Family;
+        }
+
+        [DllImport("dwrite.dll", ExactSpelling = true)]
+        private static extern int DWriteCreateFactory(int kind, ref Guid iid, out IntPtr factory);
+        [DllImport("gdi32.dll", ExactSpelling = true)]
+        private static extern int GetObjectW(IntPtr handle, int size, out LogFont font);
+        [DllImport("gdi32.dll")]
+        private static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, uint rop);
+        [DllImport("gdi32.dll")]
+        private static extern bool GdiFlush();
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetInterface(IntPtr self, out IntPtr value);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int NewTarget(IntPtr self, IntPtr dc, uint w, uint h, out IntPtr value);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate IntPtr GetDc(IntPtr self);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int ResizeTarget(IntPtr self, uint w, uint h);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int SetScale(IntPtr self, float scale);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int NewParams(IntPtr self, float gamma, float contrast, float clearType, int geometry, int mode, out IntPtr value);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+        private delegate int NewFormat(IntPtr self, string family, IntPtr collection, int weight, int style,
+            int stretch, float size, string locale, out IntPtr value);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+        private delegate int NewLayout(IntPtr self, string text, int length, IntPtr format, float width, float height,
+            float pixelsPerDip, IntPtr transform, int useNatural, out IntPtr value);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int SetValue(IntPtr self, int value);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int NewEllipsis(IntPtr self, IntPtr format, out IntPtr sign);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int SetTrimming(IntPtr self, ref Trimming trimming, IntPtr sign);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int PaintLayout(IntPtr self, IntPtr context, IntPtr renderer, float x, float y);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int PaintRun(IntPtr self, float x, float y, int measuring, IntPtr run, IntPtr parameters, int colour, IntPtr bounds);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int PaintInline(IntPtr self, IntPtr context, IntPtr renderer, float x, float y, int sideways, int rtl, IntPtr effect);
+
+        private readonly Dictionary<IntPtr, IntPtr> formats = new Dictionary<IntPtr, IntPtr>();
+        private readonly Dictionary<LayoutKey, IntPtr> layouts = new Dictionary<LayoutKey, IntPtr>();
+        private IntPtr factory, target, parameters, renderer, memory;
+        private NewLayout createLayout;
+        private PaintLayout paintLayout;
+        private PaintRun paintRun;
+        private int bufferWidth, bufferHeight, ink;
+        private bool unavailable;
+        private const uint SrcCopy = 0x00cc0020;
+
+        private static T Method<T>(IntPtr instance, int slot)
+            where T : class
+        {
+            IntPtr address = Marshal.ReadIntPtr(Marshal.ReadIntPtr(instance), slot * IntPtr.Size);
+            return (T)(object)Marshal.GetDelegateForFunctionPointer(address, typeof(T));
+        }
+
+        private static void Release(ref IntPtr value)
+        {
+            if (value != IntPtr.Zero)
+                Marshal.Release(value);
+            value = IntPtr.Zero;
+        }
+
+        private bool Initialize(IntPtr dc)
+        {
+            if (unavailable || renderer != IntPtr.Zero)
+                return !unavailable;
+            IntPtr gdiInterop = IntPtr.Zero;
             try
             {
-                Native.FloatRect bounds = new Native.FloatRect { X = rect.Left, Y = rect.Top,
-                    Width = rect.Right - rect.Left, Height = rect.Bottom - rect.Top };
-                return Native.GdipSetPageUnit(graphics, 2) == 0 &&
-                    Native.GdipSetTextRenderingHint(graphics, 3) == 0 &&
-                    Native.GdipSetSolidFillColor(brush, argb) == 0 &&
-                    Native.GdipDrawString(graphics, text, text.Length, nativeFont, ref bounds, formats[align], brush) == 0;
+                Guid iid = new Guid("B859EE5A-D838-4B5B-A2E8-1ADC7D93DB48");
+                if (DWriteCreateFactory(0, ref iid, out factory) < 0 ||
+                    Method<GetInterface>(factory, 17)(factory, out gdiInterop) < 0 || // GetGdiInterop
+                    Method<NewTarget>(gdiInterop, 7)(gdiInterop, dc, 1, 1, out target) < 0 || // CreateBitmapRenderTarget
+                    Method<SetScale>(target, 6)(target, 1) < 0) // SetPixelsPerDip
+                    return false;
+                // Flat pixel geometry and zero ClearType level give neutral edges on
+                // RGB and BGR displays. GDI natural grid fitting keeps stems defined.
+                if (Method<NewParams>(factory, 12)(factory, 1.8f, 1.0f, 0, 0, 3, out parameters) < 0)
+                    return false;
+                createLayout = Method<NewLayout>(factory, 19); // IDWriteFactory::CreateGdiCompatibleTextLayout
+                paintRun = Method<PaintRun>(target, 3); // IDWriteBitmapRenderTarget::DrawGlyphRun
+                renderer = Marshal.GetComInterfaceForObject(this, typeof(ILabelRenderer));
+                return true;
             }
-            finally { Native.GdipDeleteGraphics(graphics); }
+            catch (DllNotFoundException)
+            {
+                return false;
+            }
+            catch (PlatformNotSupportedException)
+            {
+                return false;
+            }
+            catch (COMException)
+            {
+                return false;
+            }
+            finally
+            {
+                Release(ref gdiInterop);
+                if (renderer == IntPtr.Zero)
+                {
+                    Dispose();
+                    unavailable = true;
+                }
+            }
+        }
+
+        private bool SizeBuffer(int width, int height)
+        {
+            if (width <= bufferWidth && height <= bufferHeight)
+                return true;
+            int w = Math.Max(width, bufferWidth), h = Math.Max(height, bufferHeight);
+            if (Method<ResizeTarget>(target, 10)(target, (uint)w, (uint)h) < 0)
+                return false;
+            memory = Method<GetDc>(target, 4)(target);
+            if (memory == IntPtr.Zero)
+                return false;
+            bufferWidth = w;
+            bufferHeight = h;
+            return true;
+        }
+
+        private IntPtr Format(IntPtr font)
+        {
+            IntPtr format;
+            if (formats.TryGetValue(font, out format))
+                return format;
+            LogFont info;
+            if (GetObjectW(font, Marshal.SizeOf(typeof(LogFont)), out info) == 0)
+                return IntPtr.Zero;
+            string locale = CultureInfo.CurrentUICulture.Name;
+            if (Method<NewFormat>(factory, 15)(factory, info.Family, IntPtr.Zero, info.Weight, info.Italic == 0 ? 0 : 2,
+                5, Math.Abs(info.Height), locale.Length == 0 ? "en-US" : locale, out format) < 0)
+                return IntPtr.Zero;
+            IntPtr sign = IntPtr.Zero;
+            try
+            {
+                Trimming trim = new Trimming { Granularity = 1 }; // character granularity
+                if (Method<SetValue>(format, 4)(format, 2) < 0 || // vertical center
+                    Method<SetValue>(format, 5)(format, 1) < 0 || // single line
+                    Method<NewEllipsis>(factory, 20)(factory, format, out sign) < 0 ||
+                    Method<SetTrimming>(format, 9)(format, ref trim, sign) < 0)
+                    return IntPtr.Zero;
+                IntPtr cached = format;
+                formats.Add(font, cached);
+                format = IntPtr.Zero;
+                return cached;
+            }
+            finally
+            {
+                Release(ref sign);
+                Release(ref format);
+            }
+        }
+
+        private IntPtr Layout(LayoutKey key)
+        {
+            IntPtr layout;
+            if (layouts.TryGetValue(key, out layout))
+                return layout;
+            IntPtr format = Format(key.Font);
+            if (format == IntPtr.Zero || createLayout(factory, key.Text, key.Text.Length, format, key.Width,
+                key.Height, 1, IntPtr.Zero, 1, out layout) < 0)
+                return IntPtr.Zero;
+            int alignment = key.Alignment == 1 ? 2 : key.Alignment == 2 ? 1 : 0;
+            if (Method<SetValue>(layout, 3)(layout, alignment) < 0)
+            {
+                Release(ref layout);
+                return IntPtr.Zero;
+            }
+
+            if (layouts.Count >= 160)
+                ClearLayouts();
+            layouts.Add(key, layout);
+            if (paintLayout == null)
+                paintLayout = Method<PaintLayout>(layout, 58); // IDWriteTextLayout::Draw
+            return layout;
+        }
+
+        internal bool Draw(IntPtr dc, IntPtr font, string text, int left, int top, int w, int h, int colour, uint align)
+        {
+            if (String.IsNullOrEmpty(text) || w <= 0 || h <= 0)
+                return true;
+            if (!Initialize(dc) || !SizeBuffer(w, h))
+                return false;
+            IntPtr layout = Layout(new LayoutKey { Font = font, Text = text, Width = w, Height = h, Alignment = align });
+            if (layout == IntPtr.Zero || !BitBlt(memory, 0, 0, w, h, dc, left, top, SrcCopy))
+                return false;
+            // The bitmap target writes into the DIB also used by GDI. Synchronize the
+            // copy and render directly at device resolution before copying it back.
+            GdiFlush();
+            ink = colour;
+            return paintLayout(layout, IntPtr.Zero, renderer, 0, 0) >= 0 &&
+                BitBlt(dc, left, top, w, h, memory, 0, 0, SrcCopy);
+        }
+
+        public int IsPixelSnappingDisabled(IntPtr context, out int disabled)
+        {
+            disabled = 0;
+            return 0;
+        }
+
+        public int GetPixelsPerDip(IntPtr context, out float value)
+        {
+            value = 1;
+            return 0;
+        }
+
+        public int GetCurrentTransform(IntPtr context, out LabelTransform matrix)
+        {
+            matrix = new LabelTransform
+            {
+                XX = 1,
+                YY = 1
+            };
+            return 0;
+        }
+
+        public int DrawGlyphRun(IntPtr context, float x, float y, int measuring, IntPtr run, IntPtr description, IntPtr effect)
+        {
+            return paintRun(target, x, y, measuring, run, parameters, ink, IntPtr.Zero);
+        }
+
+        public int DrawInlineObject(IntPtr context, float x, float y, IntPtr item, int sideways, int rtl, IntPtr effect)
+        {
+            if (item == IntPtr.Zero)
+                return unchecked((int)0x80070057);
+            return Method<PaintInline>(item, 3)(item, context, renderer, x, y, sideways, rtl, effect);
+        }
+
+        // These labels have no underline or strikethrough ranges.
+        public int DrawUnderline(IntPtr context, float x, float y, IntPtr underline, IntPtr effect)
+        {
+            return 0;
+        }
+
+        public int DrawStrikethrough(IntPtr context, float x, float y, IntPtr strike, IntPtr effect)
+        {
+            return 0;
+        }
+
+        private void ClearLayouts()
+        {
+            foreach (IntPtr layout in layouts.Values)
+                Marshal.Release(layout);
+            layouts.Clear();
         }
 
         public void Dispose()
         {
-            foreach (IntPtr font in fonts.Values)
-                Native.GdipDeleteFont(font);
-            fonts.Clear();
-            for (int i = 0; i < formats.Length; i++)
-            {
-                if (formats[i] != IntPtr.Zero)
-                    Native.GdipDeleteStringFormat(formats[i]);
-                formats[i] = IntPtr.Zero;
-            }
-            if (brush != IntPtr.Zero)
-                Native.GdipDeleteBrush(brush);
-            brush = IntPtr.Zero;
+            ClearLayouts();
+            foreach (IntPtr format in formats.Values)
+                Marshal.Release(format);
+            formats.Clear();
+            Release(ref renderer);
+            Release(ref target);
+            Release(ref parameters);
+            Release(ref factory);
+            memory = IntPtr.Zero;
+            bufferWidth = 0;
+            bufferHeight = 0;
+            paintLayout = null;
+            paintRun = null;
+            createLayout = null;
         }
     }
 
@@ -1674,18 +1949,18 @@ public static class PlanarCurveWindows
                 return;
             }
 
-            IntPtr normal = Native.SendMessageW(window, 0x31, IntPtr.Zero, IntPtr.Zero);
-            Add("STATIC", Heading, headline, StaticNoPrefix, CreateFont(18, 700, "Segoe UI", normal));
-            Add("STATIC", Summary, "Результат и проверка границ", StaticNoPrefix, normal);
-            Add("EDIT", ReportEdit, "", TabStop | 0x00b008c4u, CreateFont(10, 400, "Consolas", normal));
+            scale = Math.Max(1, (int)Native.GetDpiForWindow(window)) / 96.0;
+            if (scale < .5) scale = 1;
+            SetPanelFonts();
+            buttonProc = HandleButton;
+            Add("STATIC", Heading, headline, StaticNoPrefix, fontTitle);
+            Add("STATIC", Summary, "Результат и проверка границ", StaticNoPrefix, fontBody);
+            Subclass(Heading);
+            Subclass(Summary);
+            Add("EDIT", ReportEdit, "", TabStop | 0x00b008c4u, PixelFont("Consolas", 14, 400));
             Native.SendMessageW(Item(ReportEdit), 0xc5, new IntPtr(Int32.MaxValue - 2), IntPtr.Zero);
             if (!Native.SetWindowTextW(Item(ReportEdit), report))
                 throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Не удалось показать текст отчёта.");
-            scale = Math.Max(1, (int)Native.GetDpiForWindow(window)) / 96.0;
-            if (scale < .5)
-                scale = 1;
-            SetPanelFonts();
-            buttonProc = HandleButton;
             AddChoice(Copy, "Копировать всё", TabStop);
             AddChoice(OK, "Закрыть", TabStop | 1u);
             int dark = look.Light ? 0 : 1;
@@ -1741,8 +2016,8 @@ public static class PlanarCurveWindows
             Edge = light ? Rgb(203, 211, 207) : Rgb(72, 77, 81);
             LineColor = light ? Rgb(220, 227, 222) : Rgb(58, 64, 67);
             White = light ? Rgb(32, 41, 36) : Rgb(243, 244, 243);
-            Sub = light ? Rgb(68, 83, 75) : Rgb(199, 203, 202);
-            Quiet = light ? Rgb(83, 97, 88) : Rgb(171, 180, 178);
+            Sub = light ? Rgb(60, 76, 67) : Rgb(207, 212, 210);
+            Quiet = light ? Rgb(70, 84, 75) : Rgb(187, 196, 192);
             Recess = light ? Rgb(234, 240, 236) : Rgb(38, 42, 45);
             Context = light ? Rgb(237, 241, 238) : Rgb(38, 41, 44);
             Disabled = light ? Rgb(238, 241, 239) : Rgb(42, 45, 48);
@@ -1821,9 +2096,9 @@ public static class PlanarCurveWindows
         }
         private void SetPanelFonts()
         {
-            fontTitle = PixelFont("Segoe UI Semibold", 24, 600);
-            fontHeading = PixelFont("Segoe UI Semibold", 16, 600);
-            fontStrong = PixelFont("Segoe UI Semibold", 14, 600);
+            fontTitle = PixelFont("Segoe UI", 24, 700);
+            fontHeading = PixelFont("Segoe UI", 16, 700);
+            fontStrong = PixelFont("Segoe UI", 14, 600);
             fontBody = PixelFont("Segoe UI", 14, 400);
             fontSmall = PixelFont("Segoe UI", 13, 400);
             fontMono = PixelFont("Consolas", 13, 400);
@@ -1997,7 +2272,7 @@ public static class PlanarCurveWindows
                 Bottom = Px(y + h)
             };
             Native.SelectObject(dc, font);
-            if (!labelPainter.Draw(dc, font, text, rect, color, align))
+            if (!labelPainter.Draw(dc, font, text, rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top, color, align))
             {
                 Native.SetTextColor(dc, color);
                 Native.DrawTextW(dc, text, -1, ref rect, 0x8824u | align);
@@ -2890,7 +3165,7 @@ public static class PlanarCurveWindows
                         DrawSurface(dc);
                     else if (id == -1)
                         DrawPaletteSurface(dc);
-                    else if (id == Note)
+                    else if (id == Note || id == Heading || id == Summary)
                     {
                         int old = Native.SaveDC(dc);
                         try
@@ -2901,7 +3176,9 @@ public static class PlanarCurveWindows
                             int width = (int)Math.Ceiling(note.Right / scale);
                             int height = (int)Math.Ceiling(note.Bottom / scale);
                             Box(dc, 0, 0, width + 1, height + 1, 0, Panel, Panel);
-                            TextLine(dc, WindowText(hwnd), 0, 0, width, height, fontSmall, Quiet, 0);
+                            IntPtr font = Native.SendMessageW(hwnd, 0x31, IntPtr.Zero, IntPtr.Zero);
+                            TextLine(dc, id == Heading ? headline : WindowText(hwnd), 0, 0, width, height,
+                                font, id == Heading ? ReportHeadingColour() : Quiet, 0);
                         }
                         finally { Native.RestoreDC(dc, old); }
                     }
@@ -2927,15 +3204,6 @@ public static class PlanarCurveWindows
             Native.SendMessageW(child, WmSetFont, font, IntPtr.Zero);
         }
 
-        private IntPtr CreateFont(int points, int weight, string family, IntPtr fallback)
-        {
-            int dpi = (int)Native.GetDpiForWindow(window);
-            int height = -(int)Math.Round(points * (dpi > 0 ? dpi : 96) / 72.0);
-            IntPtr font = Native.CreateFontW(height, 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5, 0, family);
-            if (font == IntPtr.Zero) return fallback;
-            fonts.Add(font);
-            return font;
-        }
 
         private bool Command(int id, int notification)
         {
@@ -3017,8 +3285,13 @@ public static class PlanarCurveWindows
                 return Brush(dc, Panel, Quiet);
             if (id == ReportEdit)
                 return Brush(dc, Tile, White);
-            int color = id != Heading ? Quiet : severity == 2 ? (look.Light ? Rgb(155, 50, 46) : Rgb(255, 159, 147)) : severity == 1 ? (look.Light ? Rgb(133, 85, 21) : Rgb(255, 209, 145)) : Strong;
-            return Brush(dc, Panel, color);
+            return Brush(dc, Panel, id == Heading ? ReportHeadingColour() : Quiet);
+        }
+        private int ReportHeadingColour()
+        {
+            if (severity == 2) return look.Light ? Rgb(155, 50, 46) : Rgb(255, 159, 147);
+            if (severity == 1) return look.Light ? Rgb(133, 85, 21) : Rgb(255, 209, 145);
+            return Strong;
         }
 
         private void Layout()
@@ -3106,7 +3379,6 @@ public static class PlanarCurveWindows
 
     private static class Native
     {
-        [StructLayout(LayoutKind.Sequential)] internal struct FloatRect { internal float X, Y, Width, Height; }
         [StructLayout(LayoutKind.Sequential)] internal struct DrawItem
         {
             internal uint Type, Id, ItemId, Action, State;
@@ -3118,16 +3390,6 @@ public static class PlanarCurveWindows
         [DllImport("user32.dll", ExactSpelling=true)] internal static extern int SetWindowLongW(IntPtr window, int index, int value);
         [DllImport("user32.dll")] internal static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
         [DllImport("user32.dll")] internal static extern bool SetDialogDpiChangeBehavior(IntPtr dialog, int mask, int values);
-        [DllImport("gdiplus.dll")] internal static extern int GdipCreateFontFromDC(IntPtr dc, out IntPtr font);
-        [DllImport("gdiplus.dll")] internal static extern int GdipDeleteFont(IntPtr font);
-        [DllImport("gdiplus.dll")] internal static extern int GdipCreateStringFormat(int flags, ushort language, out IntPtr format);
-        [DllImport("gdiplus.dll")] internal static extern int GdipSetStringFormatAlign(IntPtr format, int alignment);
-        [DllImport("gdiplus.dll")] internal static extern int GdipSetStringFormatLineAlign(IntPtr format, int alignment);
-        [DllImport("gdiplus.dll")] internal static extern int GdipSetStringFormatTrimming(IntPtr format, int trimming);
-        [DllImport("gdiplus.dll")] internal static extern int GdipDeleteStringFormat(IntPtr format);
-        [DllImport("gdiplus.dll")] internal static extern int GdipSetTextRenderingHint(IntPtr graphics, int mode);
-        [DllImport("gdiplus.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
-        internal static extern int GdipDrawString(IntPtr graphics, string text, int length, IntPtr font, ref FloatRect layout, IntPtr format, IntPtr brush);
         [StructLayout(LayoutKind.Sequential)] internal struct GraphicsStartup { internal uint Version; internal IntPtr Debug; internal int SuppressThread,SuppressCodecs; }
         [StructLayout(LayoutKind.Sequential,Pack=1)] internal struct Blend { internal byte Op,Flags,Alpha,Format; }
         [DllImport("user32.dll")] internal static extern bool UpdateLayeredWindow(IntPtr hwnd,IntPtr dstDc,ref Point dst,ref Point size,IntPtr srcDc,ref Point src,int key,ref Blend blend,uint flags);

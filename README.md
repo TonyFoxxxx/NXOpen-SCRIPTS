@@ -20,7 +20,7 @@
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Очистка служебных хвостов и нумерации в именах всех операций с сохранением Z. | [Все функции](docs/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
-| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.11 | По одной границе на кривую в Part и/или Blank, ON/TANTO, плоскость со смещением и живая палитра подсветки. | [Все функции](docs/planar-add-curves.md) |
+| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.12 | По одной границе на кривую в Part и/или Blank, ON/TANTO, плоскость со смещением и живая палитра подсветки. | [Все функции](docs/planar-add-curves.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.18 | Оси гравировки и точки D/2 для выбранной или новой PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
 | [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1.01 | Снимок параметров операции гравировки, отчёт и JSON для диагностики. | [Все функции](docs/engraving-operation-diagnostic.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Создание однолинейного текста ГОСТ А из линий и гладких сплайнов по внешнему FON. | [Все функции](docs/gost-smooth-text.md) |
@@ -39,7 +39,13 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Кривые в PLANAR V1.11 · 24.11.2026
+### Последнее обновление — Кривые в PLANAR V1.12 · 24.11.2026
+
+Стартовое окно, палитра и заголовки отчёта теперь выводят текст через DirectWrite в разрешении монитора. Штрихи мелких букв стали чётче, а поясняющие подписи контрастнее в обеих темах. [Руководство](docs/planar-add-curves.md#изменения-последней-версии).
+
+SHA-256 исходника V1.12 — `28c50a902f426f5c7438c5bb6213e6aabf9ab110a9e9af456acd81efe7e1312a`.
+
+### Также опубликовано — Кривые в PLANAR V1.11 · 24.11.2026
 
 Мелкие подписи стали крупнее, а края букв сглаживаются без цветной каймы. При нажатии и фокусе кнопки рисует сам журнал, поэтому поверх них не появляется дополнительный системный переключатель. [Руководство](docs/planar-add-curves.md#изменения-последней-версии).
 

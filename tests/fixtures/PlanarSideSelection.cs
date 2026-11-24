@@ -234,6 +234,75 @@ internal static class PlanarSideSelection
             }
         }
         Check(ink>110 && edges>40,"legible, antialiased heading in both themes");
+        if (width == 692)
+        {
+            CheckStrokeCoverage(pixels, width, 22, 122, 341, 149, .49, "section title");
+            CheckStrokeCoverage(pixels, width, 52, 248, 350, 271, .36, "plane hint");
+        }
+    }
+
+    private static void CheckStrokeCoverage(byte[] pixels, int stride, int left, int top, int right, int bottom,
+        double minimumSolidFraction, string label)
+    {
+        int background = (Pixel(pixels, stride, left, top) >> 8) & 255;
+        int[] histogram = new int[256];
+        int peak = 0;
+        for (int y = top; y < bottom; y++)
+            for (int x = left; x < right; x++)
+            {
+                int green = (Pixel(pixels, stride, x, y) >> 8) & 255;
+                int contrast = Math.Abs(green - background);
+                histogram[contrast]++;
+                peak = Math.Max(peak, contrast);
+            }
+        int visible = 0, solid = 0;
+        for (int i = 1; i <= peak; i++)
+        {
+            if (i >= .08 * peak) visible += histogram[i];
+            if (i >= .80 * peak) solid += histogram[i];
+        }
+        Check(peak > 85 && visible > 100 && solid > visible * minimumSolidFraction,
+            label + " has solid strokes at native size (" + solid + "/" + visible + ")");
+    }
+
+    private static void CheckNativeTextLayout(IntPtr window)
+    {
+        IntPtr display = GetDC(window), dc = CreateCompatibleDC(display);
+        IntPtr bitmap = CreateCompatibleBitmap(display, 340, 42), previous = SelectObject(dc, bitmap);
+        IntPtr font = Send(GetDlgItem(window, PlaneHint), 0x31, Zero, Zero);
+        const string label = "KARMANI_ЧЕРНОВАЯ_Ø18_1234567890_曲線";
+        const int left = 7, top = 5, width = 95, height = 28;
+        try
+        {
+            Check(font != Zero, "real dialog label font");
+            using (var painter = new PlanarCurveWindows.LabelPainter())
+            {
+                Check(PatBlt(dc, 0, 0, 340, 42, 0x00ff0062), "clear label background");
+                Check(painter.Draw(dc, font, label, left, top, 300, height, 0, 0), "DirectWrite draws multilingual text");
+                int[] wide = new int[23 * height];
+                for (int y = 0; y < height; y++)
+                    for (int x = 0; x < 23; x++)
+                        wide[y * 23 + x] = GetPixel(dc, left + width - 23 + x, top + y);
+                Check(PatBlt(dc, 0, 0, 340, 42, 0x00ff0062), "clear layout for trimming");
+                Check(painter.Draw(dc, font, label, left, top, width, height, 0, 0), "DirectWrite draws the ellipsis");
+                int changed = 0;
+                for (int y = 0; y < height; y++)
+                {
+                    Check(GetPixel(dc, left - 1, top + y) == 0xffffff && GetPixel(dc, left + width, top + y) == 0xffffff,
+                        "trimmed label stays inside its rectangle");
+                    for (int x = 0; x < 23; x++)
+                        if (wide[y * 23 + x] != GetPixel(dc, left + width - 23 + x, top + y)) changed++;
+                }
+                Check(changed > 10, "narrow layout replaces trailing characters with an ellipsis");
+            }
+        }
+        finally
+        {
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            ReleaseDC(window, display);
+        }
     }
 
     private static void CheckDisplayAndInput()
@@ -243,6 +312,7 @@ internal static class PlanarSideSelection
         {
             Open("PLANAR display and input", delegate(IntPtr w) {
                 Check(AreDpiAwarenessContextsEqual(GetWindowDpiAwarenessContext(w),new IntPtr(-4)), "journal window is per-monitor aware in a legacy DPI host");
+                CheckNativeTextLayout(w);
                 IntPtr tanto = GetDlgItem(w,Tanto);
                 Send(tanto,0x201,new IntPtr(1),PointAt(tanto,.6,.5));
                 Check((Send(tanto,0xf2,Zero,Zero).ToInt32() & 4)!=0,"physical mouse button is down");
@@ -508,6 +578,7 @@ internal static class PlanarSideSelection
         Open(reportTitle, delegate (IntPtr w)
         {
             Check(TextOf(GetDlgItem(w, 130)) == reportText, "complete diagnostic in the report");
+            Snapshot(w, "report");
             Check(TextOf(GetDlgItem(w, 131)) == "Копировать всё", "copy report action available");
             Check(PrimaryColour(w) == NativeColour("#FF790F"), "report uses the saved appearance");
             Click(w, Continue);
