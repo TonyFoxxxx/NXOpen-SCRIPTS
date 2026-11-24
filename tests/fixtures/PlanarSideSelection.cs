@@ -13,6 +13,12 @@ internal static class PlanarSideSelection
     private const uint BmGetCheck = 0xf0, BmClick = 0xf5;
     private static readonly IntPtr Zero = IntPtr.Zero;
     private static IntPtr desktop;
+    [DllImport("user32.dll", ExactSpelling=true)] private static extern int GetWindowLongW(IntPtr window, int index);
+    [DllImport("gdi32.dll")] private static extern bool PatBlt(IntPtr dc,int x,int y,int w,int h,uint operation);
+    [DllImport("user32.dll")] private static extern IntPtr GetThreadDpiAwarenessContext();
+    [DllImport("user32.dll")] private static extern IntPtr GetWindowDpiAwarenessContext(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool AreDpiAwarenessContextsEqual(IntPtr first, IntPtr second);
+    [DllImport("user32.dll")] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 
     [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
     private static extern IntPtr CreateDesktop(string name, IntPtr device, IntPtr mode, uint flags, uint access, IntPtr security);
@@ -168,6 +174,111 @@ internal static class PlanarSideSelection
         GetWindowText(hwnd, value, value.Capacity);
         return value.ToString();
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DrawItem
+    {
+        public uint Type, Id, ItemId, Action, State;
+        public IntPtr Window, Dc;
+        public Rect Bounds;
+        public UIntPtr Data;
+    }
+    private static void CheckPressedSurface(IntPtr parent, int id)
+    {
+        IntPtr button = GetDlgItem(parent, id);
+        Check((GetWindowLongW(button, -16) & 15) == 11, "single owner for the button surface " + id);
+        Rect bounds = Bounds(parent, id);
+        int w = bounds.Right - bounds.X, h = bounds.Bottom - bounds.Y;
+        IntPtr display = GetDC(button), memory = CreateCompatibleDC(display), bitmap = CreateCompatibleBitmap(display, w, h);
+        IntPtr previous = SelectObject(memory, bitmap), record = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(DrawItem)));
+        try
+        {
+            var draw = new DrawItem { Type=4, Id=(uint)id, Window=button, Dc=memory, Bounds=new Rect {Right=w, Bottom=h} };
+            foreach (uint action in new uint[] { 2, 4 }) // Windows requests immediate paints for press and focus.
+            {
+                Check(PatBlt(memory,0,0,w,h,0x00ff0062),"clear the test surface to white");
+                draw.Action = action;
+                draw.State = action == 2 ? 1u : 16u;
+                Marshal.StructureToPtr(draw, record, false);
+                Send(parent, 0x2b, new IntPtr(id), record);
+                int centre = id==Dark || id==Light ? h*4/5 : h/2;
+                int sample = GetPixel(memory, 8, centre);
+                Check(sample > 0 && sample != 0xffffff, "button painted behind the native radio glyph position");
+                for (int x = 5; x <= 9; x++)
+                    for (int y = centre - 3; y <= centre + 3; y++)
+                        Check(GetPixel(memory,x,y)==sample,"no extra ring or dot at left of button " + id);
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(record);
+            SelectObject(memory,previous);
+            DeleteObject(bitmap); DeleteDC(memory); ReleaseDC(button,display);
+        }
+    }
+    private static void CheckText(IntPtr window, bool light)
+    {
+        int width,height;
+        byte[] pixels = Render(window,out width,out height);
+        double scale = width / 692.0;
+        int ink = 0, edges = 0;
+        for (int y = (int)(12*scale); y < (int)(42*scale); y++)
+        {
+            for (int x = (int)(80*scale); x < (int)(325*scale); x++)
+            {
+                int c = Pixel(pixels,width,x,y);
+                int r=c&255, g=(c>>8)&255, b=(c>>16)&255;
+                Check(Math.Max(r,Math.Max(g,b))-Math.Min(r,Math.Min(g,b)) < 24, "neutral text edges in the heading");
+                if (light ? r<100 : r>180) ink++;
+                if (r>100 && r<180) edges++;
+            }
+        }
+        Check(ink>110 && edges>40,"legible, antialiased heading in both themes");
+    }
+
+    private static void CheckDisplayAndInput()
+    {
+        IntPtr old = SetThreadDpiAwarenessContext(new IntPtr(-1));
+        try
+        {
+            Open("PLANAR display and input", delegate(IntPtr w) {
+                Check(AreDpiAwarenessContextsEqual(GetWindowDpiAwarenessContext(w),new IntPtr(-4)), "journal window is per-monitor aware in a legacy DPI host");
+                IntPtr tanto = GetDlgItem(w,Tanto);
+                Send(tanto,0x201,new IntPtr(1),PointAt(tanto,.6,.5));
+                Check((Send(tanto,0xf2,Zero,Zero).ToInt32() & 4)!=0,"physical mouse button is down");
+                CheckPressedSurface(w,Tanto);
+                Send(tanto,0x202,Zero,PointAt(tanto,.6,.5));
+                Check(Send(tanto,BmGetCheck,Zero,Zero).ToInt32()==1,"mouse selection is committed on release");
+                CheckPressedSurface(w,Outside);
+                Send(GetDlgItem(w,Inside),0x100,new IntPtr(39),Zero);
+                CheckPair(w,Inside,Outside,true);
+                Check((GetWindowLongW(GetDlgItem(w,Outside),-16)&0x10000)!=0,"Tab uses the selected radio");
+                Send(GetDlgItem(w,Outside),0x100,new IntPtr(37),Zero);
+                CheckPair(w,Inside,Outside,false);
+                IntPtr blank = GetDlgItem(w,Blank);
+                Send(blank,0x100,new IntPtr(32),Zero); Send(blank,0x101,new IntPtr(32),Zero);
+                Check(Send(blank,BmGetCheck,Zero,Zero).ToInt32()==1,"Space toggles the independent checkbox");
+                Rect bounds; Check(GetWindowRect(w,out bounds),"window bounds at 96 DPI");
+                IntPtr rect=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(Rect)));
+                try
+                {
+                    Marshal.StructureToPtr(bounds,rect,false);
+                    foreach (int dpi in new int[]{120,144,96})
+                    {
+                        Send(w,0x2e0,new IntPtr(dpi | (dpi<<16)),rect);
+                        Rect changed; Check(GetWindowRect(w,out changed),"DPI bounds");
+                        int width=changed.Right-changed.X;
+                        Check(dpi==96 ? width==692 : width>692 && width<=(int)Math.Round(692*dpi/96.0),"DPI layout "+dpi+" : "+width);
+                        CheckText(w,false);
+                    }
+                }
+                finally { Marshal.FreeHGlobal(rect); }
+                Click(w,Cancel);
+            });
+            Check(AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),new IntPtr(-1)), "caller DPI restored");
+        }
+        finally { if(old!=Zero) SetThreadDpiAwarenessContext(old); }
+    }
     private static IntPtr OpenPalette(IntPtr window, string title)
     {
         Click(window, Gear);
@@ -296,6 +407,7 @@ internal static class PlanarSideSelection
     }
     private static void CheckLiveStyle()
     {
+        CheckDisplayAndInput();
         string local = System.IO.Path.ChangeExtension(prefs, "appearance");
         string shared = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(prefs), "Appearance.settings");
         const string title = "PLANAR appearance";
@@ -312,6 +424,8 @@ internal static class PlanarSideSelection
             Check(PrimaryColour(w) == NativeColour("#FF790F"), "HEX updates the main action before confirmation");
             Snapshot(w, "dark-main");
             Snapshot(p, "dark-menu");
+            CheckText(w, false);
+            CheckPressedSurface(p, Dark);
             CheckBlueMark(w);
             CheckGradient(p);
             string before = System.IO.File.ReadAllText(local);
@@ -335,6 +449,8 @@ internal static class PlanarSideSelection
             SetWindowTextW(field, "#FF790F");
             Snapshot(w, "light-main");
             Snapshot(p, "light-menu");
+            CheckText(w, true);
+            CheckPressedSurface(p, Light);
             CheckBlueMark(w);
             CheckGradient(p);
             Click(p, Shared);

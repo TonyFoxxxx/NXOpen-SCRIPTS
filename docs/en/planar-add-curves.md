@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.10 · 2026-11-24** — The header gear opens light and dark themes, a continuous colour picker and HEX input. Dragging the marker immediately updates the buttons and checkboxes. The compact ON dialog expands the two side selectors in TANTO. The milling icon has three fixed blue toolpaths. The shared style button saves a default for scripts that support it.
+**V1.11 · 2026-11-24** — Small labels use larger type and grayscale antialiasing. The journal paints each selection button in all states, including when it is pressed or focused, to prevent the extra Windows radio dot. The start window and palette scale to the monitor DPI. Tab, the arrow keys and Space support keyboard selection.
 
 File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater name: **«Кривые в PLANAR_MILL / PROFILE»**. This is a separate script for existing curves; [engraving centerline construction](planar-mill-curves.md) remains a separate tool.
 
@@ -62,6 +62,6 @@ The result window is resizable. **«Копировать всё»** copies the e
 - The CAM operation and selected curves must belong to the work part. A planar face or Datum Plane can also be selected on a positioned assembly component.
 - When a selected set inherits populated boundaries from a geometry parent, define local boundaries in NX before adding curves to that set.
 - User preferences in `%LOCALAPPDATA%\NXOpen-Scripts` are stored in `PlanarAddCurves.settings`, `PlanarAddCurves.appearance`, `Appearance.settings` for CAM options, local appearance and the shared style respectively. The operator generates the toolpath and saves the part as usual.
-- V1.10 was compiled against the Designcenter 2606 journal libraries. Background tests exercise the native dialogs, live colour updates before release, saved local and shared settings, sides, plane offsets, separate Part/Blank selections and rollback. CAM transactions were tested with an API fixture. A live machining operation requires verification in NX.
+- V1.11 compiles against the Designcenter 2606 journal libraries. Background tests exercise mouse press and release, keyboard selection, the native repaint requests, DPI changes and the return to the caller’s DPI context. Other tests cover the palette, saved settings, plane offsets, Part/Blank selections and rollback. CAM transactions were checked with an API fixture.
 
 [Download script](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Planar_Add_Curves.cs) · [Catalog](../../README.en.md) · [Changelog](../../CHANGELOG.en.md)

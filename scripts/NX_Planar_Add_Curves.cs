@@ -1,5 +1,5 @@
 // NX_Planar_Add_Curves.cs - separate curve boundaries for PLANAR_MILL / PLANAR_PROFILE.
-// SCRIPT_VERSION: V1.10
+// SCRIPT_VERSION: V1.11
 // Select one planar operation, choose ON / TANTO and a boundary plane, then pick existing curves.
 // One saved boundary per curve in each selected Part / Blank destination.
 // Remembers confirmed dialog settings per user. No automatic toolpath calculation or part save.
@@ -19,7 +19,7 @@ using CamOperation = NXOpen.CAM.Operation;
 
 public class NXPlanarAddCurves
 {
-    private const string SCRIPT_VERSION = "V1.10";
+    private const string SCRIPT_VERSION = "V1.11";
     private static readonly string Title = "Кривые в PLANAR — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
 
@@ -967,9 +967,9 @@ public static class PlanarCurveWindows
     private const int Inside = 121, Outside = 122, Left = 124, Right = 125, Note = 127;
     private const int ReportEdit = 130, Copy = 131;
     private const uint TabStop = 0x00010000, Group = 0x00020000;
-    private const uint ButtonCheckBox = 2;
+    private const uint OwnerDraw = 0x0b;
     private const uint StaticNoPrefix = 0x80;
-    private const uint WmSetFont = 0x30, BmSetCheck = 0xf1;
+    private const uint WmSetFont = 0x30;
     private const int PlaneChoice = 128;
 
     private static int Rgb(int r, int g, int b) { return r | (g << 8) | (b << 16); }
@@ -1382,8 +1382,77 @@ public static class PlanarCurveWindows
         }
     }
 
+    // Grid-fitted grayscale glyphs have neutral edges on both themes. The selected
+    // HFONT already uses the DPI of the window receiving this paint request.
+    private sealed class LabelPainter : IDisposable
+    {
+        private readonly Dictionary<IntPtr, IntPtr> fonts = new Dictionary<IntPtr, IntPtr>();
+        private readonly IntPtr[] formats = new IntPtr[3];
+        private IntPtr brush;
+
+        internal bool Draw(IntPtr dc, IntPtr font, string text, Native.Rect rect, int colour, uint align)
+        {
+            if (String.IsNullOrEmpty(text))
+                return true;
+            IntPtr nativeFont;
+            if (!fonts.TryGetValue(font, out nativeFont))
+            {
+                if (Native.GdipCreateFontFromDC(dc, out nativeFont) != 0)
+                    return false;
+                fonts.Add(font, nativeFont);
+            }
+            if (formats[align] == IntPtr.Zero)
+            {
+                IntPtr format;
+                if (Native.GdipCreateStringFormat(0x1000, 0, out format) != 0) // StringFormatFlagsNoWrap
+                    return false;
+                if (Native.GdipSetStringFormatAlign(format, (int)align) != 0 ||
+                    Native.GdipSetStringFormatLineAlign(format, 1) != 0 ||
+                    Native.GdipSetStringFormatTrimming(format, 3) != 0)
+                {
+                    Native.GdipDeleteStringFormat(format);
+                    return false;
+                }
+                formats[align] = format;
+            }
+            int argb = unchecked((int)0xff000000) | Appearance.Reverse(colour);
+            if (brush == IntPtr.Zero && Native.GdipCreateSolidFill(argb, out brush) != 0)
+                return false;
+            IntPtr graphics;
+            if (Native.GdipCreateFromHDC(dc, out graphics) != 0)
+                return false;
+            try
+            {
+                Native.FloatRect bounds = new Native.FloatRect { X = rect.Left, Y = rect.Top,
+                    Width = rect.Right - rect.Left, Height = rect.Bottom - rect.Top };
+                return Native.GdipSetPageUnit(graphics, 2) == 0 &&
+                    Native.GdipSetTextRenderingHint(graphics, 3) == 0 &&
+                    Native.GdipSetSolidFillColor(brush, argb) == 0 &&
+                    Native.GdipDrawString(graphics, text, text.Length, nativeFont, ref bounds, formats[align], brush) == 0;
+            }
+            finally { Native.GdipDeleteGraphics(graphics); }
+        }
+
+        public void Dispose()
+        {
+            foreach (IntPtr font in fonts.Values)
+                Native.GdipDeleteFont(font);
+            fonts.Clear();
+            for (int i = 0; i < formats.Length; i++)
+            {
+                if (formats[i] != IntPtr.Zero)
+                    Native.GdipDeleteStringFormat(formats[i]);
+                formats[i] = IntPtr.Zero;
+            }
+            if (brush != IntPtr.Zero)
+                Native.GdipDeleteBrush(brush);
+            brush = IntPtr.Zero;
+        }
+    }
+
     private sealed class Dialog
     {
+        private readonly LabelPainter labelPainter = new LabelPainter();
         internal PlanarCurveOptions Options;
         private readonly string title, headline, operation, report;
         private readonly int severity;
@@ -1409,6 +1478,7 @@ public static class PlanarCurveWindows
             IntPtr memory = Marshal.AllocHGlobal(template.Length);
             Native.DialogProc procedure = HandleMessage;
             UIntPtr graphicsToken = UIntPtr.Zero;
+            IntPtr previousDpi = IntPtr.Zero;
             try
             {
                 Native.GraphicsStartup startup = new Native.GraphicsStartup
@@ -1417,6 +1487,10 @@ public static class PlanarCurveWindows
                 };
                 VectorInk.Check(Native.GdiplusStartup(out graphicsToken, ref startup, IntPtr.Zero));
                 Marshal.Copy(template, 0, memory, template.Length);
+                // Only the custom top-level dialog and its palette use this thread scope.
+                // NX's own windows retain their original awareness contexts.
+                if (SettingsWindow)
+                    previousDpi = Native.SetThreadDpiAwarenessContext(new IntPtr(-4)); // Per Monitor V2
                 IntPtr result = Native.DialogBoxIndirectParamW(Native.GetModuleHandleW(null), memory, owner, procedure, IntPtr.Zero);
                 int error = Marshal.GetLastWin32Error();
                 if (callbackError != null)
@@ -1427,6 +1501,9 @@ public static class PlanarCurveWindows
             }
             finally
             {
+                if (previousDpi != IntPtr.Zero)
+                    Native.SetThreadDpiAwarenessContext(previousDpi);
+                labelPainter.Dispose();
                 paletteFrame.Dispose();
                 mainFrame.Dispose();
                 if (graphicsToken != UIntPtr.Zero)
@@ -1448,6 +1525,8 @@ public static class PlanarCurveWindows
                 {
                     case 0x110: // WM_INITDIALOG
                         window = hwnd;
+                        if (SettingsWindow)
+                            Native.SetDialogDpiChangeBehavior(hwnd, 6, 6); // LayoutStart handles resize and child layout.
                         BuildControls();
                         Native.SendMessageW(hwnd, 0x401, new IntPtr(OK), IntPtr.Zero); // DM_SETDEFID
                         ready = true;
@@ -1477,6 +1556,7 @@ public static class PlanarCurveWindows
                     case 0x02e0: // WM_DPICHANGED
                         if (SettingsWindow && ready)
                         {
+                            labelPainter.Dispose();
                             Native.Rect suggested = (Native.Rect)Marshal.PtrToStructure(lParam, typeof(Native.Rect));
                             FitWindow(Native.MonitorFromRect(ref suggested, 2), suggested, (uint)(wParam.ToInt64() & 0xffff));
                             IntPtr[] previousFonts = fonts.ToArray();
@@ -1515,6 +1595,8 @@ public static class PlanarCurveWindows
                         }
 
                         break;
+                    case 0x2b: // WM_DRAWITEM also arrives for focus and pressed states.
+                        return DrawChoiceItem(hwnd, lParam);
                     case 0x111: // WM_COMMAND
                         if (Command((int)(wParam.ToInt64() & 0xffff), (int)((wParam.ToInt64() >> 16) & 0xffff)))
                             return new IntPtr(1);
@@ -1731,7 +1813,7 @@ public static class PlanarCurveWindows
         }
         private IntPtr PixelFont(string face, int pixels, int weight)
         {
-            IntPtr f = Native.CreateFontW(-Px(pixels), 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5, 0, face);
+            IntPtr f = Native.CreateFontW(-Px(pixels), 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 4, 0, face);
             if (f == IntPtr.Zero)
                 return Native.GetStockObject(17);
             fonts.Add(f);
@@ -1739,12 +1821,12 @@ public static class PlanarCurveWindows
         }
         private void SetPanelFonts()
         {
-            fontTitle = PixelFont("Segoe UI", 24, 650);
-            fontHeading = PixelFont("Segoe UI", 16, 650);
-            fontStrong = PixelFont("Segoe UI", 14, 600);
-            fontBody = PixelFont("Segoe UI", 13, 400);
-            fontSmall = PixelFont("Segoe UI", 12, 400);
-            fontMono = PixelFont("Consolas", 13, 600);
+            fontTitle = PixelFont("Segoe UI Semibold", 24, 600);
+            fontHeading = PixelFont("Segoe UI Semibold", 16, 600);
+            fontStrong = PixelFont("Segoe UI Semibold", 14, 600);
+            fontBody = PixelFont("Segoe UI", 14, 400);
+            fontSmall = PixelFont("Segoe UI", 13, 400);
+            fontMono = PixelFont("Consolas", 13, 400);
         }
         private void AddChoice(int id, string caption, uint style)
         {
@@ -1765,16 +1847,17 @@ public static class PlanarCurveWindows
             FitWindow(Native.MonitorFromWindow(owner != IntPtr.Zero ? owner : window, 2), anchor, Native.GetDpiForWindow(window));
             SetPanelFonts();
             buttonProc = HandleButton;
-            AddChoice(PartChoice, "Part Boundaries — Границы детали", Group | TabStop | ButtonCheckBox);
-            AddChoice(BlankChoice, "Blank Boundaries — Границы заготовки", TabStop | ButtonCheckBox);
-            AddChoice(PlaneChoice, "Выбрать плоскость границ", TabStop | ButtonCheckBox);
+            AddChoice(PartChoice, "Part Boundaries — Границы детали", Group | TabStop | OwnerDraw);
+            AddChoice(BlankChoice, "Blank Boundaries — Границы заготовки", TabStop | OwnerDraw);
+            AddChoice(PlaneChoice, "Выбрать плоскость границ", TabStop | OwnerDraw);
             Add("STATIC", Note, "", StaticNoPrefix, fontSmall);
-            AddChoice(On, "ON — Центр на границе", Group | TabStop | 9);
-            AddChoice(Tanto, "TANTO — Касание границы", 9);
-            AddChoice(Inside, "Внутри (Inside)", Group | TabStop | 9);
-            AddChoice(Outside, "Снаружи (Outside)", 9);
-            AddChoice(Left, "Слева (Left)", Group | TabStop | 9);
-            AddChoice(Right, "Справа (Right)", 9);
+            Subclass(Note);
+            AddChoice(On, "ON — Центр на границе", Group | TabStop | OwnerDraw);
+            AddChoice(Tanto, "TANTO — Касание границы", OwnerDraw);
+            AddChoice(Inside, "Внутри (Inside)", Group | TabStop | OwnerDraw);
+            AddChoice(Outside, "Снаружи (Outside)", OwnerDraw);
+            AddChoice(Left, "Слева (Left)", Group | TabStop | OwnerDraw);
+            AddChoice(Right, "Справа (Right)", OwnerDraw);
             AddChoice(Cancel, "Отмена", Group | TabStop);
             AddChoice(OK, "", TabStop | 1);
             AddChoice(Gear, "Оформление", TabStop);
@@ -1801,32 +1884,9 @@ public static class PlanarCurveWindows
         }
         private void RefreshStart()
         {
-            int[] ids =
-            {
-                PartChoice,
-                BlankChoice,
-                PlaneChoice,
-                On,
-                Tanto,
-                Inside,
-                Outside,
-                Left,
-                Right
-            };
-            bool[] state =
-            {
-                Options.Part,
-                Options.Blank,
-                Options.SelectPlane,
-                !Options.Tanto,
-                Options.Tanto,
-                !Options.ClosedOutside,
-                Options.ClosedOutside,
-                !Options.OpenRight,
-                Options.OpenRight
-            };
-            for (int i = 0; i < ids.Length; i++)
-                Native.SendMessageW(Item(ids[i]), BmSetCheck, new IntPtr(state[i] ? 1 : 0), IntPtr.Zero);
+            SetGroupTabStop(On, Tanto, Options.Tanto);
+            SetGroupTabStop(Inside, Outside, Options.ClosedOutside);
+            SetGroupTabStop(Left, Right, Options.OpenRight);
             foreach (int id in SideButtons)
             {
                 Native.EnableWindow(Item(id), Options.Tanto);
@@ -1847,6 +1907,62 @@ public static class PlanarCurveWindows
         private static bool IsSide(int id)
         {
             return id == Inside || id == Outside || id == Left || id == Right;
+        }
+        private static int PairedChoice(int id)
+        {
+            switch (id)
+            {
+                case On: return Tanto;
+                case Tanto: return On;
+                case Inside: return Outside;
+                case Outside: return Inside;
+                case Left: return Right;
+                case Right: return Left;
+                case DarkTheme: return LightTheme;
+                case LightTheme: return DarkTheme;
+                default: return 0;
+            }
+        }
+        private bool ChoiceChecked(int id)
+        {
+            switch (id)
+            {
+                case PartChoice: return Options.Part;
+                case BlankChoice: return Options.Blank;
+                case PlaneChoice: return Options.SelectPlane;
+                case On: return !Options.Tanto;
+                case Tanto: return Options.Tanto;
+                case Inside: return !Options.ClosedOutside;
+                case Outside: return Options.ClosedOutside;
+                case Left: return !Options.OpenRight;
+                case Right: return Options.OpenRight;
+                case DarkTheme: return !look.Light;
+                case LightTheme: return look.Light;
+                default: return false;
+            }
+        }
+        private void SetGroupTabStop(int first, int second, bool useSecond)
+        {
+            SetTabStop(Item(first), !useSecond);
+            SetTabStop(Item(second), useSecond);
+        }
+        private static void SetTabStop(IntPtr hwnd, bool enabled)
+        {
+            int style = Native.GetWindowLongW(hwnd, -16);
+            int updated = enabled ? style | (int)TabStop : style & ~(int)TabStop;
+            if (style != updated)
+                Native.SetWindowLongW(hwnd, -16, updated);
+        }
+        private IntPtr DrawChoiceItem(IntPtr parent, IntPtr data)
+        {
+            if (data == IntPtr.Zero)
+                return IntPtr.Zero;
+            Native.DrawItem item = (Native.DrawItem)Marshal.PtrToStructure(data, typeof(Native.DrawItem));
+            if (item.Type != 4 || item.Window == IntPtr.Zero || item.Dc == IntPtr.Zero ||
+                ParentOf((int)item.Id) != parent || Item((int)item.Id) != item.Window)
+                return IntPtr.Zero;
+            DrawButton(item.Window, item.Dc, (int)item.Id);
+            return new IntPtr(1);
         }
         private void Box(IntPtr dc, int x, int y, int w, int h, int radius, int fill, int border)
         {
@@ -1881,8 +1997,11 @@ public static class PlanarCurveWindows
                 Bottom = Px(y + h)
             };
             Native.SelectObject(dc, font);
-            Native.SetTextColor(dc, color);
-            Native.DrawTextW(dc, text, -1, ref rect, 0x8824u | align); // single line, centered vertically, ellipsis, no prefix
+            if (!labelPainter.Draw(dc, font, text, rect, color, align))
+            {
+                Native.SetTextColor(dc, color);
+                Native.DrawTextW(dc, text, -1, ref rect, 0x8824u | align);
+            }
         }
         private static void InitPaint(IntPtr dc)
         {
@@ -1904,8 +2023,8 @@ public static class PlanarCurveWindows
                 TextLine(dc, "Кривые в PLANAR", 78, 12, 510, 31, fontTitle, White, 0);
                 int split = title.IndexOf(" — ", StringComparison.Ordinal);
                 TextLine(dc, split >= 0 ? title.Substring(split + 3) : title, 79, 43, 515, 20, fontSmall, Quiet, 0);
-                TextLine(dc, "Операция", 22, 82, 63, 24, fontSmall, Quiet, 0);
-                TextLine(dc, operation, 89, 82, 325, 24, fontMono, White, 0);
+                TextLine(dc, "Операция", 22, 82, 76, 24, fontSmall, Quiet, 0);
+                TextLine(dc, operation, 100, 82, 313, 24, fontMono, White, 0);
                 TextLine(dc, "PLANAR_MILL / PLANAR_PROFILE", 419, 82, 251, 24, fontSmall, Quiet, 2);
                 TextLine(dc, "Границы операции", 22, 122, 345, 27, fontHeading, White, 0);
                 TextLine(dc, "Можно выбрать оба набора", 374, 122, 296, 27, fontSmall, Quiet, 2);
@@ -2008,7 +2127,7 @@ public static class PlanarCurveWindows
             try
             {
                 InitPaint(dc);
-                bool enabled = Native.IsWindowEnabled(hwnd), selected = Native.SendMessageW(hwnd, 0xf0, IntPtr.Zero, IntPtr.Zero) != IntPtr.Zero;
+                bool enabled = Native.IsWindowEnabled(hwnd), selected = ChoiceChecked(id);
                 int state = Native.SendMessageW(hwnd, 0xf2, IntPtr.Zero, IntPtr.Zero).ToInt32();
                 bool hot = enabled && (hover == id || (state & 4) != 0);
                 if (id >= PaletteClose && id <= SaveShared)
@@ -2266,8 +2385,6 @@ public static class PlanarCurveWindows
             {
                 if (syncHex)
                     SyncHex();
-                Native.SendMessageW(Item(DarkTheme), BmSetCheck, new IntPtr(look.Light ? 0 : 1), IntPtr.Zero);
-                Native.SendMessageW(Item(LightTheme), BmSetCheck, new IntPtr(look.Light ? 1 : 0), IntPtr.Zero);
                 Native.RedrawWindow(palette, IntPtr.Zero, IntPtr.Zero, dragControl != 0 ? 0x181u : 0x81u);
             }
 
@@ -2317,11 +2434,13 @@ public static class PlanarCurveWindows
             {
                 switch (msg)
                 {
+                    case 0x2b: return DrawChoiceItem(hwnd, l);
                     case 0x110:
                         palette = hwnd;
+                        Native.SetDialogDpiChangeBehavior(hwnd, 6, 6); // LayoutPalette uses the scale of the main window.
                         AddChoice(PaletteClose, "Закрыть оформление", TabStop);
-                        AddChoice(DarkTheme, "Тёмная", Group | TabStop | 9);
-                        AddChoice(LightTheme, "Светлая", TabStop | 9);
+                        AddChoice(DarkTheme, "Тёмная", Group | TabStop | OwnerDraw);
+                        AddChoice(LightTheme, "Светлая", TabStop | OwnerDraw);
                         Add("EDIT", HexEdit, "", TabStop | 0x80, fontMono);
                         Subclass(HexEdit);
                         Native.SendMessageW(Item(HexEdit), 0xc5, new IntPtr(7), IntPtr.Zero);
@@ -2654,6 +2773,34 @@ public static class PlanarCurveWindows
             try
             {
                 int id = (int)sub.ToUInt32();
+                int partner = PairedChoice(id);
+                bool toggle = partner != 0 || id == PartChoice || id == BlankChoice || id == PlaneChoice;
+                if (toggle && message == 0xf4) // BM_SETSTYLE from the dialog manager must not replace BS_OWNERDRAW.
+                    return IntPtr.Zero;
+                if (toggle && partner == 0 && message == 0x87)
+                    return new IntPtr(0x2000); // DLGC_BUTTON
+                if (toggle && message == 0xf0) // BM_GETCHECK
+                    return new IntPtr(ChoiceChecked(id) ? 1 : 0);
+                if (toggle && message == 0xf2) // BM_GETSTATE retains the system's focus and pressed bits.
+                {
+                    long state = Native.DefSubclassProc(hwnd, message, wParam, lParam).ToInt64();
+                    return new IntPtr((state & ~3L) | (ChoiceChecked(id) ? 1L : 0L));
+                }
+                if (partner != 0 && id != DarkTheme && id != LightTheme)
+                {
+                    if (message == 0x87) // Preserve radio-group navigation in the native dialog manager.
+                        return new IntPtr(0x2041); // DLGC_BUTTON | DLGC_RADIOBUTTON | DLGC_WANTARROWS
+                    if (message == 0x100 && wParam.ToInt32() >= 37 && wParam.ToInt32() <= 40)
+                    {
+                        IntPtr other = Item(partner);
+                        if (Native.IsWindowEnabled(other))
+                        {
+                            Native.SetFocus(other);
+                            Native.SendMessageW(other, 0xf5, IntPtr.Zero, IntPtr.Zero);
+                        }
+                        return IntPtr.Zero;
+                    }
+                }
                 if (id >= PaletteClose && id <= SaveShared)
                 {
                     if (message == 0x87)
@@ -2743,6 +2890,21 @@ public static class PlanarCurveWindows
                         DrawSurface(dc);
                     else if (id == -1)
                         DrawPaletteSurface(dc);
+                    else if (id == Note)
+                    {
+                        int old = Native.SaveDC(dc);
+                        try
+                        {
+                            Native.Rect note;
+                            Native.GetClientRect(hwnd, out note);
+                            InitPaint(dc);
+                            int width = (int)Math.Ceiling(note.Right / scale);
+                            int height = (int)Math.Ceiling(note.Bottom / scale);
+                            Box(dc, 0, 0, width + 1, height + 1, 0, Panel, Panel);
+                            TextLine(dc, WindowText(hwnd), 0, 0, width, height, fontSmall, Quiet, 0);
+                        }
+                        finally { Native.RestoreDC(dc, old); }
+                    }
                     else
                         DrawButton(hwnd, dc, id);
                 }
@@ -2944,6 +3106,28 @@ public static class PlanarCurveWindows
 
     private static class Native
     {
+        [StructLayout(LayoutKind.Sequential)] internal struct FloatRect { internal float X, Y, Width, Height; }
+        [StructLayout(LayoutKind.Sequential)] internal struct DrawItem
+        {
+            internal uint Type, Id, ItemId, Action, State;
+            internal IntPtr Window, Dc;
+            internal Rect Bounds;
+            internal UIntPtr Data;
+        }
+        [DllImport("user32.dll", ExactSpelling=true)] internal static extern int GetWindowLongW(IntPtr window, int index);
+        [DllImport("user32.dll", ExactSpelling=true)] internal static extern int SetWindowLongW(IntPtr window, int index, int value);
+        [DllImport("user32.dll")] internal static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+        [DllImport("user32.dll")] internal static extern bool SetDialogDpiChangeBehavior(IntPtr dialog, int mask, int values);
+        [DllImport("gdiplus.dll")] internal static extern int GdipCreateFontFromDC(IntPtr dc, out IntPtr font);
+        [DllImport("gdiplus.dll")] internal static extern int GdipDeleteFont(IntPtr font);
+        [DllImport("gdiplus.dll")] internal static extern int GdipCreateStringFormat(int flags, ushort language, out IntPtr format);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetStringFormatAlign(IntPtr format, int alignment);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetStringFormatLineAlign(IntPtr format, int alignment);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetStringFormatTrimming(IntPtr format, int trimming);
+        [DllImport("gdiplus.dll")] internal static extern int GdipDeleteStringFormat(IntPtr format);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetTextRenderingHint(IntPtr graphics, int mode);
+        [DllImport("gdiplus.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
+        internal static extern int GdipDrawString(IntPtr graphics, string text, int length, IntPtr font, ref FloatRect layout, IntPtr format, IntPtr brush);
         [StructLayout(LayoutKind.Sequential)] internal struct GraphicsStartup { internal uint Version; internal IntPtr Debug; internal int SuppressThread,SuppressCodecs; }
         [StructLayout(LayoutKind.Sequential,Pack=1)] internal struct Blend { internal byte Op,Flags,Alpha,Format; }
         [DllImport("user32.dll")] internal static extern bool UpdateLayeredWindow(IntPtr hwnd,IntPtr dstDc,ref Point dst,ref Point size,IntPtr srcDc,ref Point src,int key,ref Blend blend,uint flags);

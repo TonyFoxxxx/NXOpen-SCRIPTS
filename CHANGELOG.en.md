@@ -2,6 +2,12 @@
 
 [Русский](CHANGELOG.md) | **English**
 
+## 2026-11-24 — Curves for PLANAR V1.11
+
+Small labels use larger type and grayscale antialiasing. The journal paints each selection button in all states, including when it is pressed or focused, to prevent the extra Windows radio dot. The start window and palette scale to the monitor DPI. Tab, the arrow keys and Space support keyboard selection. [Guide](docs/en/planar-add-curves.md#latest-release).
+
+Source SHA-256 for V1.11 is `c89dc93783fed90f1b617f6405bdaca74024a86d786c90fceb3de95a81e26b93`.
+
 ## 2026-11-24 — Curves for PLANAR V1.10
 
 The header gear opens light and dark themes, a continuous colour picker and HEX input. Dragging the marker immediately updates the buttons and checkboxes. The compact ON dialog expands the two side selectors in TANTO. The milling icon has three fixed blue toolpaths. The shared style button saves a default for scripts that support it. [Guide](docs/en/planar-add-curves.md#latest-release).

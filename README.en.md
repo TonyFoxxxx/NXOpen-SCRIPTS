@@ -20,7 +20,7 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Rename operations in CAM tree order. | [All features](docs/en/rename-operations.md) |
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Clean copy/instance suffixes and counters in all operation names while preserving Z. | [All features](docs/en/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Set Tool Position On for selected PLANAR_MILL boundaries and optionally apply a shared Stock value. | [All features](docs/en/planarchik.md) |
-| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.10 | One boundary per curve in Part and/or Blank, ON/TANTO, plane offsets and a live theme and colour picker. | [All features](docs/en/planar-add-curves.md) |
+| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.11 | One boundary per curve in Part and/or Blank, ON/TANTO, plane offsets and a live theme and colour picker. | [All features](docs/en/planar-add-curves.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.18 | Engraving centerlines and D/2 dots for an existing or new PLANAR_MILL. | [Full guide](docs/en/planar-mill-curves.md) |
 | [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1.01 | Engraving-operation settings snapshot with a text report and JSON export. | [All features](docs/en/engraving-operation-diagnostic.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Create single-stroke GOST A text from lines and smooth splines using an external FON. | [All features](docs/en/gost-smooth-text.md) |
@@ -39,7 +39,13 @@ Target versions: **NX 2506.8100** and **Designcenter 2606 Build 4002** on Window
 
 Each guide covers features, use, settings, output files and limitations. See the [changelog](CHANGELOG.en.md) for release history.
 
-### Latest update — Curves for PLANAR V1.10 · 2026-11-24
+### Latest update — Curves for PLANAR V1.11 · 2026-11-24
+
+Small labels use larger type and grayscale antialiasing. The journal paints each selection button in all states, including when it is pressed or focused, to prevent the extra Windows radio dot. [Guide](docs/en/planar-add-curves.md#latest-release).
+
+Source SHA-256 for V1.11 is `c89dc93783fed90f1b617f6405bdaca74024a86d786c90fceb3de95a81e26b93`.
+
+### Also released — Curves for PLANAR V1.10 · 2026-11-24
 
 The header gear opens light and dark themes, a continuous colour picker and HEX input. Dragging the marker immediately updates the buttons and checkboxes. The compact ON dialog expands the two side selectors in TANTO. [Guide](docs/en/planar-add-curves.md#latest-release).
 
