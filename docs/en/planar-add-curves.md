@@ -4,7 +4,7 @@
 
 ## Latest release
 
-**V1.09 · 2026-11-24** — The rounded start dialog remembers confirmed settings. Select **Part Boundaries**, **Blank Boundaries**, or both. With both checked, pick the part curves first and the blank curves second. One Undo step covers both sets.
+**V1.10 · 2026-11-24** — The header gear opens light and dark themes, a continuous colour picker and HEX input. Dragging the marker immediately updates the buttons and checkboxes. The compact ON dialog expands the two side selectors in TANTO. The milling icon has three fixed blue toolpaths. The shared style button saves a default for scripts that support it.
 
 File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater name: **«Кривые в PLANAR_MILL / PROFILE»**. This is a separate script for existing curves; [engraving centerline construction](planar-mill-curves.md) remains a separate tool.
 
@@ -18,6 +18,16 @@ File: [NX_Planar_Add_Curves.cs](../../scripts/NX_Planar_Add_Curves.cs). Updater 
 6. Select the curves requested by each NX prompt. If both sets are enabled, confirm the part curves first, then select the blank curves separately. Each new curve gets one boundary in its own set. Cancelling either picker leaves both sets as they were.
 
 Confirming the start dialog remembers the two boundary checkboxes, the plane checkbox, ON/TANTO and both side selections for this Windows user. Cancel keeps the previous preferences. The Plane dialog shows the last confirmed construction method. After **At Distance**, choose a fresh reference and click **«Повторить последнее смещение»** to preview the saved signed distance, converted into the current part units. To enter a new distance, use the native **At Distance** control. No geometry identifiers are stored.
+
+## Appearance
+
+The gear beside the close button opens **«Оформление»**. Choose **«Тёмная»** or **«Светлая»**. Drag the right-hand strip to select a hue and the marker in the square to set saturation horizontally and brightness vertically. The window previews every move while the mouse button is held. You can also enter a six-digit HEX colour such as **#FF790F**. Arrow keys adjust the focused picker, Shift makes larger steps, and Esc closes the appearance panel.
+
+The journal remembers the theme and colour for the next launch, including when you cancel the start dialog. **«Для всех скриптов»** writes a shared default for compatible scripts. PLANAR uses this default when it has no local appearance preference. The header icon uses the accent for the cutter and stepped part. Its three passes keep their original blue **#00A9D0**. The results window also uses the chosen theme.
+
+With **ON**, the tool stays on the boundary. Switching to **TANTO** shows Inside / Outside and Left / Right and restores the last selected sides. The plane checkbox shows **«Выберите плоскость в окне Plane»** when enabled.
+
+## Tool position and sides
 
 | Position | Closed curves | Open curves |
 | --- | --- | --- |
@@ -51,7 +61,7 @@ The result window is resizable. **«Копировать всё»** copies the e
 - Supports classic PLANAR_MILL and PLANAR_PROFILE operations represented by the NXOpen `PlanarMilling` class. Other operation classes are rejected.
 - The CAM operation and selected curves must belong to the work part. A planar face or Datum Plane can also be selected on a positioned assembly component.
 - When a selected set inherits populated boundaries from a geometry parent, define local boundaries in NX before adding curves to that set.
-- The journal stores its preferences in `%LOCALAPPDATA%\NXOpen-Scripts\PlanarAddCurves.settings`. The operator generates the toolpath and saves the CAM part as usual.
-- V1.09 was compiled with the Designcenter 2606 journal references. Background tests exercise the native start dialog, separate and combined selections, shared geometry, offsets, all TANTO side combinations, cancellation and rollback on a failure in the second set. CAM checks use a test model. A live machining operation has yet to be verified.
+- User preferences in `%LOCALAPPDATA%\NXOpen-Scripts` are stored in `PlanarAddCurves.settings`, `PlanarAddCurves.appearance`, `Appearance.settings` for CAM options, local appearance and the shared style respectively. The operator generates the toolpath and saves the part as usual.
+- V1.10 was compiled against the Designcenter 2606 journal libraries. Background tests exercise the native dialogs, live colour updates before release, saved local and shared settings, sides, plane offsets, separate Part/Blank selections and rollback. CAM transactions were tested with an API fixture. A live machining operation requires verification in NX.
 
 [Download script](https://raw.githubusercontent.com/TonyFoxxxx/NXOpen-SCRIPTS/main/scripts/NX_Planar_Add_Curves.cs) · [Catalog](../../README.en.md) · [Changelog](../../CHANGELOG.en.md)

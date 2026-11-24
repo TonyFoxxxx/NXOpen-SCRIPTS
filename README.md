@@ -20,7 +20,7 @@
 | [NX_Rename_Operations_In_Selected_Folder.cs](scripts/NX_Rename_Operations_In_Selected_Folder.cs) | V1.04 | Переименование операций с нумерацией по порядку дерева CAM. | [Все функции](docs/rename-operations.md) |
 | [NX_Clean_Operation_Names.cs](scripts/NX_Clean_Operation_Names.cs) | V1 | Очистка служебных хвостов и нумерации в именах всех операций с сохранением Z. | [Все функции](docs/clean-operation-names.md) |
 | [PlanarCHIK.cs](scripts/PlanarCHIK.cs) | V1.01 | Tool Position On для границ выбранных PLANAR_MILL и единый припуск Stock по запросу. | [Все функции](docs/planarchik.md) |
-| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.09 | По одной границе на кривую в Part и/или Blank. Отдельный выбор кривых, общая плоскость со смещением, ON/TANTO и запоминание настроек. | [Все функции](docs/planar-add-curves.md) |
+| [NX_Planar_Add_Curves.cs](scripts/NX_Planar_Add_Curves.cs) | V1.10 | По одной границе на кривую в Part и/или Blank, ON/TANTO, плоскость со смещением и живая палитра подсветки. | [Все функции](docs/planar-add-curves.md) |
 | [NX_PlanarMill_Select_Curves.cs](scripts/NX_PlanarMill_Select_Curves.cs) | V1.18 | Оси гравировки и точки D/2 для выбранной или новой PLANAR_MILL. | [Все функции](docs/planar-mill-curves.md) |
 | [NX_Engraving_Operation_Diagnostic.cs](scripts/NX_Engraving_Operation_Diagnostic.cs) | V1.01 | Снимок параметров операции гравировки, отчёт и JSON для диагностики. | [Все функции](docs/engraving-operation-diagnostic.md) |
 | [NX_GOST_Smooth_Text.cs](scripts/NX_GOST_Smooth_Text.cs) | V1.01 | Создание однолинейного текста ГОСТ А из линий и гладких сплайнов по внешнему FON. | [Все функции](docs/gost-smooth-text.md) |
@@ -39,7 +39,13 @@
 
 По ссылке **«Все функции»** доступны возможности скрипта, порядок запуска, настройки, создаваемые файлы и ограничения. Изменения между версиями перечислены в [CHANGELOG.md](CHANGELOG.md).
 
-### Последнее обновление — Кривые в PLANAR V1.09 · 24.11.2026
+### Последнее обновление — Кривые в PLANAR V1.10 · 24.11.2026
+
+Шестерёнка в шапке открывает светлую и тёмную темы, цветовой квадрат и поле HEX. Подсветка кнопок и галочек меняется прямо при перетаскивании. Компактное окно ON раскрывает оба блока выбора стороны при переключении в TANTO. [Руководство](docs/planar-add-curves.md#изменения-последней-версии).
+
+SHA-256 исходника V1.10 — `19973515bc537f3920759e30d0e805a20be15bb62947617a04c3d66163bc4fc9`.
+
+### Также опубликовано — Кривые в PLANAR V1.09 · 24.11.2026
 
 Стартовое окно со скруглёнными кнопками запоминает подтверждённые настройки. Отметьте **Part Boundaries**, **Blank Boundaries** или обе галочки. При двух галочках сначала выбираются кривые детали, затем кривые заготовки. Оба набора отменяются одним шагом Undo. [Руководство](docs/planar-add-curves.md#изменения-последней-версии).
 

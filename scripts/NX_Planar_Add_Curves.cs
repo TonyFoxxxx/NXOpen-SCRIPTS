@@ -1,5 +1,5 @@
 // NX_Planar_Add_Curves.cs - separate curve boundaries for PLANAR_MILL / PLANAR_PROFILE.
-// SCRIPT_VERSION: V1.09
+// SCRIPT_VERSION: V1.10
 // Select one planar operation, choose ON / TANTO and a boundary plane, then pick existing curves.
 // One saved boundary per curve in each selected Part / Blank destination.
 // Remembers confirmed dialog settings per user. No automatic toolpath calculation or part save.
@@ -19,7 +19,7 @@ using CamOperation = NXOpen.CAM.Operation;
 
 public class NXPlanarAddCurves
 {
-    private const string SCRIPT_VERSION = "V1.09";
+    private const string SCRIPT_VERSION = "V1.10";
     private static readonly string Title = "Кривые в PLANAR — " + SCRIPT_VERSION + " — "
         + Encoding.UTF8.GetString(Convert.FromBase64String("YnkgQFRvbnlfRm94eHggKFRHKQ=="));
 
@@ -879,20 +879,41 @@ public sealed class PlanarCurveOptions
 
     internal void Save(string path)
     {
-        string temp = null;
         try
         {
             int flags = (Part ? 1 : 0) | (Blank ? 2 : 0) | (SelectPlane ? 4 : 0) | (Tanto ? 8 : 0) | (ClosedOutside ? 16 : 0) | (OpenRight ? 32 : 0);
-            string value = "2|" + flags.ToString(CultureInfo.InvariantCulture) + "|" + LastMethod + "|"
-                + (OffsetMm.HasValue ? OffsetMm.Value.ToString("R", CultureInfo.InvariantCulture) : "");
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
-            temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            File.WriteAllText(temp, value, new UTF8Encoding(false));
-            if (!MoveFileExW(temp, path, 9)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-            temp = null;
+            string value = "2|" + flags.ToString(CultureInfo.InvariantCulture) + "|" + LastMethod + "|" + (OffsetMm.HasValue ? OffsetMm.Value.ToString("R", CultureInfo.InvariantCulture) : "");
+            WriteAtomic(path, value);
         }
-        catch (Exception ex) { PreferenceNotice = "Не удалось сохранить последние настройки: " + ex.Message; }
-        finally { if (temp != null) try { File.Delete(temp); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+        catch (Exception ex)
+        {
+            PreferenceNotice = "Не удалось сохранить последние настройки: " + ex.Message;
+        }
+    }
+
+    internal static void WriteAtomic(string path, string value)
+    {
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+        string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temp, value, new UTF8Encoding(false));
+            if (!MoveFileExW(temp, path, 9))
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temp);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
@@ -910,8 +931,11 @@ public static class PlanarCurveWindows
 {
     public static PlanarCurveOptions AskOptions(IntPtr owner, string title, string operation)
     {
-        string path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NXOpen-Scripts", "PlanarAddCurves.settings");
-        return AskOptions(owner, title, operation, path);
+        return AskOptions(owner, title, operation, PreferencePath());
+    }
+    private static string PreferencePath()
+    {
+        return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NXOpen-Scripts", "PlanarAddCurves.settings");
     }
 
     internal static PlanarCurveOptions AskOptions(IntPtr owner, string title, string operation, string path)
@@ -919,14 +943,23 @@ public static class PlanarCurveWindows
         Dialog dialog = new Dialog(title, "Кривые в PLANAR", operation, null, 0);
         dialog.Options = PlanarCurveOptions.Load(path);
         dialog.Options.PreferencePath = path;
-        if (dialog.Show(owner) != OK) return null;
+        dialog.LoadAppearance(path);
+        if (dialog.Show(owner) != OK)
+            return null;
         dialog.Options.Save(path);
         return dialog.Options;
     }
 
     public static void ShowReport(IntPtr owner, string title, string headline, string report, int severity)
     {
-        new Dialog(title, headline, null, report, severity).Show(owner);
+        ShowReport(owner, title, headline, report, severity, PreferencePath());
+    }
+
+    internal static void ShowReport(IntPtr owner, string title, string headline, string report, int severity, string path)
+    {
+        Dialog dialog = new Dialog(title, headline, null, report, severity);
+        dialog.LoadAppearance(path);
+        dialog.Show(owner);
     }
 
     private const int OK = 1, Cancel = 2;
@@ -940,8 +973,414 @@ public static class PlanarCurveWindows
     private const int PlaneChoice = 128;
 
     private static int Rgb(int r, int g, int b) { return r | (g << 8) | (b << 16); }
-    private static readonly int Canvas = Rgb(245, 247, 248), Ink = Rgb(31, 43, 49);
-    private static readonly int Accent = Rgb(24, 116, 89), Muted = Rgb(93, 109, 115);
+    private static int Mix(int first, int second, double amount)
+    {
+        int result = 0;
+        for (int shift = 0; shift <= 16; shift += 8)
+        {
+            int a = (first >> shift) & 255, b = (second >> shift) & 255;
+            result |= (int)Math.Round(a + (b - a) * amount) << shift;
+        }
+
+        return result;
+    }
+
+    private sealed class Appearance
+    {
+        internal bool Light;
+        internal double Hue, Saturation, Value;
+        internal Appearance()
+        {
+            SetHex("#00CD86", false);
+        }
+        internal Appearance Copy()
+        {
+            return (Appearance)MemberwiseClone();
+        }
+        internal int Color { get { return FromHsv(Hue, Saturation, Value); } }
+        internal string Hex { get { return "#" + Reverse(Color).ToString("X6", CultureInfo.InvariantCulture); } }
+        internal static int Reverse(int c)
+        {
+            return ((c & 255) << 16) | (c & 65280) | ((c >> 16) & 255);
+        }
+        internal static int FromHsv(double h, double s, double v)
+        {
+            double sector = (h % 360) / 60, c = v * s, x = c * (1 - Math.Abs(sector % 2 - 1));
+            double r = 0, g = 0, b = 0, m = v - c;
+            switch ((int)sector)
+            {
+                case 0:
+                    r = c;
+                    g = x;
+                    break;
+                case 1:
+                    r = x;
+                    g = c;
+                    break;
+                case 2:
+                    g = c;
+                    b = x;
+                    break;
+                case 3:
+                    g = x;
+                    b = c;
+                    break;
+                case 4:
+                    r = x;
+                    b = c;
+                    break;
+                default:
+                    r = c;
+                    b = x;
+                    break;
+            }
+
+            return Rgb((int)Math.Round(255 * (r + m)), (int)Math.Round(255 * (g + m)), (int)Math.Round(255 * (b + m)));
+        }
+        internal bool SetHex(string input, bool allowShort)
+        {
+            string digits = input.Trim();
+            if (digits.StartsWith("#", StringComparison.Ordinal))
+                digits = digits.Substring(1);
+            if (allowShort && digits.Length == 3)
+                digits = new string (new char[] { digits[0], digits[0], digits[1], digits[1], digits[2], digits[2] });
+            int rgb;
+            if (digits.Length != 6 || !Int32.TryParse(digits, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out rgb))
+                return false;
+            double r = ((rgb >> 16) & 255) / 255.0, g = ((rgb >> 8) & 255) / 255.0, b = (rgb & 255) / 255.0;
+            Value = Math.Max(r, Math.Max(g, b));
+            double delta = Value - Math.Min(r, Math.Min(g, b));
+            if (Value != 0)
+                Saturation = delta / Value;
+            if (delta != 0)
+                Hue = ((Value == r ? (g - b) / delta : Value == g ? 2 + (b - r) / delta : 4 + (r - g) / delta) * 60 + 360) % 360;
+            return true;
+        }
+        private static double Channel(int c)
+        {
+            double n = (c & 255) / 255.0;
+            return n <= .04045 ? n / 12.92 : Math.Pow((n + .055) / 1.055, 2.4);
+        }
+        internal static double Luminance(int c)
+        {
+            return .2126 * Channel(c) + .7152 * Channel(c >> 8) + .0722 * Channel(c >> 16);
+        }
+        internal static double Contrast(double a, double b)
+        {
+            return (Math.Max(a, b) + .05) / (Math.Min(a, b) + .05);
+        }
+        internal int Indicator(int background)
+        {
+            int accent = Color, end = Light ? 0 : 0xffffff;
+            double against = Luminance(background);
+            for (int i = 0; i <= 20; ++i)
+            {
+                int c = Mix(accent, end, i / 20.0);
+                if (Contrast(Luminance(c), against) >= 3)
+                    return c;
+            }
+
+            return end;
+        }
+        internal void Save(string path)
+        {
+            PlanarCurveOptions.WriteAtomic(path, String.Format(CultureInfo.InvariantCulture, "1|{0}|{1}|{2:R}|{3:R}|{4:R}", new object[] { Light ? "light" : "dark", Hex, Hue, Saturation, Value }));
+        }
+        internal static Appearance Read(string path)
+        {
+            if (!File.Exists(path))
+                return null;
+            string[] p = File.ReadAllText(path).Trim().Split('|');
+            if (p.Length != 6 || p[0] != "1" || (p[1] != "dark" && p[1] != "light"))
+                return null;
+            Appearance a = new Appearance();
+            if (!a.SetHex(p[2], false))
+                return null;
+            a.Light = p[1] == "light";
+            double h, s, v;
+            if (Number(p[3], 360, out h) && Number(p[4], 1, out s) && Number(p[5], 1, out v) && FromHsv(h, s, v) == a.Color)
+            {
+                a.Hue = h;
+                a.Saturation = s;
+                a.Value = v;
+            }
+
+            return a;
+        }
+        private static bool Number(string text, double max, out double n)
+        {
+            return Double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out n) && n >= 0 && n <= max;
+        }
+    }
+    // Use Windows' native antialiased vector painter; the journal needs no additional managed references.
+    private sealed class VectorInk : IDisposable
+    {
+        private IntPtr graphics, pen, brush;
+        internal static void Check(int status)
+        {
+            if (status != 0)
+                throw new InvalidOperationException("Ошибка отрисовки окна Windows (" + status + ").");
+        }
+        internal VectorInk(IntPtr dc, double scale)
+        {
+            try
+            {
+                Check(Native.GdipCreateFromHDC(dc, out graphics));
+                Check(Native.GdipSetPageUnit(graphics, 2)); // UnitPixel
+                Check(Native.GdipSetSmoothingMode(graphics, 4));
+                Check(Native.GdipScaleWorldTransform(graphics, (float)scale, (float)scale, 0));
+                Check(Native.GdipCreatePen1(-1, 1, 0, out pen));
+                Check(Native.GdipSetPenLineJoin(pen, 2));
+                Check(Native.GdipSetPenStartCap(pen, 2));
+                Check(Native.GdipSetPenEndCap(pen, 2));
+                Check(Native.GdipCreateSolidFill(-1, out brush));
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+        public void Dispose()
+        {
+            if (brush != IntPtr.Zero)
+            {
+                Native.GdipDeleteBrush(brush);
+                brush = IntPtr.Zero;
+            }
+
+            if (pen != IntPtr.Zero)
+            {
+                Native.GdipDeletePen(pen);
+                pen = IntPtr.Zero;
+            }
+
+            if (graphics != IntPtr.Zero)
+            {
+                Native.GdipDeleteGraphics(graphics);
+                graphics = IntPtr.Zero;
+            }
+        }
+        private static int Argb(int color)
+        {
+            return unchecked((int)0xff000000) | Appearance.Reverse(color);
+        }
+        private void Pen(int color, float width)
+        {
+            Check(Native.GdipSetPenColor(pen, Argb(color)));
+            Check(Native.GdipSetPenWidth(pen, width));
+        }
+        internal void Line(float x, float y, float endX, float endY, int color, float width)
+        {
+            Pen(color, width);
+            Check(Native.GdipDrawLine(graphics, pen, x, y, endX, endY));
+        }
+        internal void Outline(float[] xy, int color, float width)
+        {
+            Pen(color, width);
+            Check(Native.GdipDrawPolygon(graphics, pen, xy, xy.Length / 2));
+        }
+        internal void Round(float x, float y, float w, float h, float radius, int fill, int edge)
+        {
+            x += .5f;
+            y += .5f;
+            w -= 1;
+            h -= 1;
+            float d = Math.Min(2 * radius, Math.Min(w, h));
+            if (d <= 0)
+                return;
+            IntPtr path;
+            Check(Native.GdipCreatePath(0, out path));
+            try
+            {
+                Check(Native.GdipAddPathArc(path, x, y, d, d, 180, 90));
+                Check(Native.GdipAddPathArc(path, x + w - d, y, d, d, 270, 90));
+                Check(Native.GdipAddPathArc(path, x + w - d, y + h - d, d, d, 0, 90));
+                Check(Native.GdipAddPathArc(path, x, y + h - d, d, d, 90, 90));
+                Check(Native.GdipClosePathFigure(path));
+                if (fill >= 0)
+                {
+                    Check(Native.GdipSetSolidFillColor(brush, Argb(fill)));
+                    Check(Native.GdipFillPath(graphics, brush, path));
+                }
+
+                Pen(edge, 1);
+                Check(Native.GdipDrawPath(graphics, pen, path));
+            }
+            finally
+            {
+                Native.GdipDeletePath(path);
+            }
+        }
+        internal void Ellipse(float x, float y, float diameter, int fill, int edge, float width)
+        {
+            float inset = width / 2, d = diameter - width;
+            if (fill >= 0)
+            {
+                Check(Native.GdipSetSolidFillColor(brush, Argb(fill)));
+                Check(Native.GdipFillEllipse(graphics, brush, x + inset, y + inset, d, d));
+            }
+
+            Pen(edge, width);
+            Check(Native.GdipDrawEllipse(graphics, pen, x + inset, y + inset, d, d));
+        }
+    }
+
+    // A Win32 region has binary coverage. Let the normal HWND handle controls and hit testing,
+    // and use a click-through ARGB rim for the partly covered edge pixels, including on Windows 10.
+    private sealed class RoundedFrame : IDisposable
+    {
+        private IntPtr rim;
+        private int width,height,radius,edge=-1;
+        internal void Move(IntPtr owner)
+        {
+            Native.Rect b;
+            if (rim != IntPtr.Zero && Native.GetWindowRect(owner, out b))
+                Native.SetWindowPos(rim, IntPtr.Zero, b.Left, b.Top, 0, 0, 0x215);
+        }
+        internal void Show(bool visible)
+        {
+            if (rim != IntPtr.Zero)
+                Native.ShowWindow(rim, visible ? 8 : 0);
+        }
+        public void Dispose()
+        {
+            if (rim != IntPtr.Zero)
+            {
+                Native.DestroyWindow(rim);
+                rim = IntPtr.Zero;
+            }
+
+            width = height = radius = 0;
+            edge = -1;
+        }
+        internal void Fit(IntPtr owner, int w, int h, int r, int colour)
+        {
+            if (w < 2 * r || h < 2 * r || r < 1)
+                return;
+            if (width == w && height == h && radius == r && colour == edge)
+            {
+                Move(owner);
+                return;
+            }
+
+            Native.Rect b;
+            if (!Native.GetWindowRect(owner, out b))
+                return;
+            if (rim == IntPtr.Zero)
+                rim = Native.CreateWindowExW(0x080800a0u, "STATIC", "", 0x80000000u, b.Left, b.Top, w, h, owner, IntPtr.Zero, Native.GetModuleHandleW(null), IntPtr.Zero);
+            IntPtr region = IntPtr.Zero;
+            bool smooth = rim != IntPtr.Zero && Rasterize(w, h, r, colour, b.Left, b.Top, out region);
+            if (!smooth)
+            {
+                Dispose();
+                region = Native.CreateRoundRectRgn(0, 0, w + 1, h + 1, r * 2, r * 2);
+            }
+
+            if (region != IntPtr.Zero && Native.SetWindowRgn(owner, region, true) == 0)
+                Native.DeleteObject(region);
+            width = w;
+            height = h;
+            radius = r;
+            edge = colour;
+            Show(Native.IsWindowVisible(owner));
+        }
+        private static int Pixel(int colour, int coverage)
+        {
+            int a = (coverage * 255 + 8) / 16;
+            return unchecked(a << 24) | (((((colour & 255) * a + 127) / 255)) << 16) | (((((colour >> 8) & 255) * a + 127) / 255) << 8) | ((((colour >> 16) & 255) * a + 127) / 255);
+        }
+        private static int Corner(int x, int y, int r, int colour, bool backed)
+        {
+            int covered = 0;
+            for (int sy = 0; sy < 4; sy++)
+                for (int sx = 0; sx < 4; sx++)
+                {
+                    double xx = x + (sx + .5) / 4, yy = y + (sy + .5) / 4;
+                    double dx = r - xx, dy = r - yy, d = dx * dx + dy * dy;
+                    if (d <= r * r && (!backed || xx < 1 || yy < 1 || d > (r - 1) * (r - 1)))
+                        covered++;
+                }
+
+            return Pixel(colour, covered);
+        }
+        private bool Rasterize(int w, int h, int r, int colour, int left, int top, out IntPtr shape)
+        {
+            shape = IntPtr.Zero;
+            Native.BitmapInfo info = Native.BitmapInfo.TopDown(w, h);
+            IntPtr dc = Native.CreateCompatibleDC(IntPtr.Zero), bits, bitmap = Native.CreateDIBSection(dc, ref info, 0, out bits, IntPtr.Zero, 0);
+            IntPtr prev = IntPtr.Zero, clip = IntPtr.Zero, row = IntPtr.Zero;
+            try
+            {
+                if (dc == IntPtr.Zero || bitmap == IntPtr.Zero || bits == IntPtr.Zero)
+                    return false;
+                prev = Native.SelectObject(dc, bitmap);
+                clip = Native.CreateRectRgn(0, r, w, h - r);
+                row = Native.CreateRectRgn(0, 0, 0, 0);
+                if (clip == IntPtr.Zero || row == IntPtr.Zero)
+                    return false;
+                int[] pixels = new int[checked(w * h)];
+                int solid = Pixel(colour, 16);
+                for (int x = r; x < w - r; x++)
+                {
+                    pixels[x] = solid;
+                    pixels[(h - 1) * w + x] = solid;
+                }
+
+                for (int y = r; y < h - r; y++)
+                {
+                    pixels[y * w] = solid;
+                    pixels[y * w + w - 1] = solid;
+                }
+
+                for (int y = 0; y < r; y++)
+                {
+                    int inset = (int)Math.Ceiling(r - Math.Sqrt(r * (double)r - (r - y) * (double)(r - y)));
+                    if (!Native.SetRectRgn(row, inset, y, w - inset, y + 1) || Native.CombineRgn(clip, clip, row, 2) == 0 || !Native.SetRectRgn(row, inset, h - 1 - y, w - inset, h - y) || Native.CombineRgn(clip, clip, row, 2) == 0)
+                        return false;
+                    for (int x = 0; x < r; x++)
+                    {
+                        int pixel = Corner(x, y, r, colour, x >= inset);
+                        pixels[y * w + x] = pixels[y * w + w - 1 - x] = pixels[(h - 1 - y) * w + x] = pixels[(h - 1 - y) * w + w - 1 - x] = pixel;
+                    }
+                }
+
+                Marshal.Copy(pixels, 0, bits, pixels.Length);
+                Native.Point dst = new Native.Point
+                {
+                    X = left,
+                    Y = top
+                }, size = new Native.Point
+                {
+                    X = w,
+                    Y = h
+                }, src = new Native.Point();
+                Native.Blend blend = new Native.Blend
+                {
+                    Alpha = 255,
+                    Format = 1
+                };
+                if (!Native.UpdateLayeredWindow(rim, IntPtr.Zero, ref dst, ref size, dc, ref src, 0, ref blend, 2))
+                    return false;
+                shape = clip;
+                clip = IntPtr.Zero;
+                return true;
+            }
+            finally
+            {
+                if (row != IntPtr.Zero)
+                    Native.DeleteObject(row);
+                if (clip != IntPtr.Zero)
+                    Native.DeleteObject(clip);
+                if (prev != IntPtr.Zero)
+                    Native.SelectObject(dc, prev);
+                if (bitmap != IntPtr.Zero)
+                    Native.DeleteObject(bitmap);
+                if (dc != IntPtr.Zero)
+                    Native.DeleteDC(dc);
+            }
+        }
+    }
 
     private sealed class Dialog
     {
@@ -950,6 +1389,7 @@ public static class PlanarCurveWindows
         private readonly int severity;
         private readonly List<IntPtr> fonts = new List<IntPtr>();
         private IntPtr window;
+        private readonly RoundedFrame mainFrame=new RoundedFrame(), paletteFrame=new RoundedFrame();
         private bool ready;
         private Exception callbackError;
         private bool IsReport { get { return report != null; } }
@@ -968,20 +1408,35 @@ public static class PlanarCurveWindows
             byte[] template = Template(title, IsReport ? 398 : 360, IsReport ? 250 : 260, IsReport);
             IntPtr memory = Marshal.AllocHGlobal(template.Length);
             Native.DialogProc procedure = HandleMessage;
+            UIntPtr graphicsToken = UIntPtr.Zero;
             try
             {
+                Native.GraphicsStartup startup = new Native.GraphicsStartup
+                {
+                    Version = 1
+                };
+                VectorInk.Check(Native.GdiplusStartup(out graphicsToken, ref startup, IntPtr.Zero));
                 Marshal.Copy(template, 0, memory, template.Length);
                 IntPtr result = Native.DialogBoxIndirectParamW(Native.GetModuleHandleW(null), memory, owner, procedure, IntPtr.Zero);
                 int error = Marshal.GetLastWin32Error();
-                if (callbackError != null) throw new InvalidOperationException("Ошибка окна журнала.", callbackError);
-                if (result.ToInt64() == -1) throw new System.ComponentModel.Win32Exception(error, "Не удалось открыть окно журнала.");
+                if (callbackError != null)
+                    throw new InvalidOperationException("Ошибка окна журнала.", callbackError);
+                if (result.ToInt64() == -1)
+                    throw new System.ComponentModel.Win32Exception(error, "Не удалось открыть окно журнала.");
                 return result.ToInt32();
             }
             finally
             {
+                paletteFrame.Dispose();
+                mainFrame.Dispose();
+                if (graphicsToken != UIntPtr.Zero)
+                    Native.GdiplusShutdown(graphicsToken);
                 GC.KeepAlive(procedure);
+                GC.KeepAlive(paletteProc);
+                GC.KeepAlive(buttonProc);
                 Marshal.FreeHGlobal(memory);
-                foreach (IntPtr font in fonts) Native.DeleteObject(font);
+                foreach (IntPtr font in fonts)
+                    Native.DeleteObject(font);
             }
         }
 
@@ -999,62 +1454,144 @@ public static class PlanarCurveWindows
                         Layout();
                         Native.SetFocus(Item(IsReport ? OK : PartChoice));
                         return IntPtr.Zero; // Keep the explicitly assigned keyboard focus.
-                    case 0x0f: case 0x318: // WM_PAINT, WM_PRINTCLIENT
-                        if (SettingsWindow && ready) { Paint(hwnd, message, wParam, 0); return new IntPtr(1); }
+                    case 0x0f:
+                    case 0x318: // WM_PAINT, WM_PRINTCLIENT
+                        if (SettingsWindow && ready)
+                        {
+                            Paint(hwnd, message, wParam, 0);
+                            return new IntPtr(1);
+                        }
+
                         break;
                     case 0x201: // drag the borderless header
+                        if (SettingsWindow && palette != IntPtr.Zero)
+                            ClosePalette(false);
                         if (SettingsWindow && ((short)(lParam.ToInt64() >> 16)) < Px(76))
                         {
                             Native.ReleaseCapture();
                             Native.SendMessageW(hwnd, 0xa1, new IntPtr(2), IntPtr.Zero);
                             return new IntPtr(1);
                         }
+
                         break;
                     case 0x02e0: // WM_DPICHANGED
                         if (SettingsWindow && ready)
                         {
-                            Native.Rect suggested=(Native.Rect)Marshal.PtrToStructure(lParam,typeof(Native.Rect));
-                            FitWindow(Native.MonitorFromRect(ref suggested,2),suggested,(uint)(wParam.ToInt64() & 0xffff));
-                            IntPtr[] previousFonts=fonts.ToArray(); fonts.Clear(); SetPanelFonts();
-                            foreach (int id in new int[]{PartChoice,BlankChoice,PlaneChoice,On,Tanto,Inside,Outside,Left,Right,CloseChoice,Cancel,OK,Note})
-                                Native.SendMessageW(Item(id),WmSetFont,id==Note?fontSmall:fontBody,IntPtr.Zero);
-                            foreach (IntPtr font in previousFonts) Native.DeleteObject(font);
-                            RefreshStart(); return new IntPtr(1);
+                            Native.Rect suggested = (Native.Rect)Marshal.PtrToStructure(lParam, typeof(Native.Rect));
+                            FitWindow(Native.MonitorFromRect(ref suggested, 2), suggested, (uint)(wParam.ToInt64() & 0xffff));
+                            IntPtr[] previousFonts = fonts.ToArray();
+                            fonts.Clear();
+                            SetPanelFonts();
+                            foreach (int id in new int[]
+                            {
+                                PartChoice,
+                                BlankChoice,
+                                PlaneChoice,
+                                On,
+                                Tanto,
+                                Inside,
+                                Outside,
+                                Left,
+                                Right,
+                                Gear,
+                                CloseChoice,
+                                Cancel,
+                                OK,
+                                Note
+                            }
+
+                            )
+                                Native.SendMessageW(Item(id), WmSetFont, id == Note ? fontSmall : fontBody, IntPtr.Zero);
+                            if (palette != IntPtr.Zero)
+                            {
+                                SetPaletteFonts();
+                                LayoutPalette();
+                            }
+
+                            foreach (IntPtr font in previousFonts)
+                                Native.DeleteObject(font);
+                            RefreshStart();
+                            return new IntPtr(1);
                         }
+
                         break;
                     case 0x111: // WM_COMMAND
                         if (Command((int)(wParam.ToInt64() & 0xffff), (int)((wParam.ToInt64() >> 16) & 0xffff)))
                             return new IntPtr(1);
                         break;
                     case 0x10: // WM_CLOSE (including the title-bar cross)
+                        if (palette != IntPtr.Zero)
+                        {
+                            ClosePalette(true);
+                            return new IntPtr(1);
+                        }
+
                         Native.EndDialog(hwnd, new IntPtr(Cancel));
                         return new IntPtr(1);
+                    case 2: // WM_DESTROY
+                        ready = false;
+                        if (SettingsWindow)
+                        {
+                            ClosePalette(false);
+                            SaveLocalLook();
+                            mainFrame.Dispose();
+                        }
+
+                        break;
+                    case 3: // WM_MOVE
+                        mainFrame.Move(hwnd);
+                        if (ready && palette != IntPtr.Zero)
+                            PositionPalette();
+                        break;
+                    case 0x18:
+                        mainFrame.Show(wParam != IntPtr.Zero);
+                        break; // WM_SHOWWINDOW
                     case 0x05: // WM_SIZE
-                        if (ready) Layout();
+                        if (ready)
+                            Layout();
                         break;
                     case 0x24: // WM_GETMINMAXINFO
-                        if (ready && IsReport) { SetMinimumSize(lParam); return new IntPtr(1); }
+                        if (ready && IsReport)
+                        {
+                            SetMinimumSize(lParam);
+                            return new IntPtr(1);
+                        }
+
                         break;
                     case 0x136: // WM_CTLCOLORDLG
-                        return SettingsWindow ? Brush(wParam, Panel, White) : Brush(wParam, Canvas, Ink);
+                        return Brush(wParam, Panel, White);
                     case 0x138: // WM_CTLCOLORSTATIC (also used by read-only EDITs)
                         return ControlBrush(wParam, Native.GetDlgCtrlID(lParam));
                 }
             }
             catch (Exception error)
             {
-                if (callbackError == null) callbackError = error;
+                if (callbackError == null)
+                    callbackError = error;
                 Native.EndDialog(hwnd, new IntPtr(Cancel));
                 return new IntPtr(1);
             }
+
             return IntPtr.Zero;
         }
 
-        private IntPtr Item(int id) { return Native.GetDlgItem(window, id); }
+        private IntPtr ParentOf(int id)
+        {
+            return id >= PaletteClose && id <= SaveShared ? palette : window;
+        }
+        private IntPtr Item(int id)
+        {
+            return Native.GetDlgItem(ParentOf(id), id);
+        }
 
         private void BuildControls()
         {
-            if (SettingsWindow) { BuildStart(); return; }
+            if (SettingsWindow)
+            {
+                BuildStart();
+                return;
+            }
+
             IntPtr normal = Native.SendMessageW(window, 0x31, IntPtr.Zero, IntPtr.Zero);
             Add("STATIC", Heading, headline, StaticNoPrefix, CreateFont(18, 700, "Segoe UI", normal));
             Add("STATIC", Summary, "Результат и проверка границ", StaticNoPrefix, normal);
@@ -1062,42 +1599,135 @@ public static class PlanarCurveWindows
             Native.SendMessageW(Item(ReportEdit), 0xc5, new IntPtr(Int32.MaxValue - 2), IntPtr.Zero);
             if (!Native.SetWindowTextW(Item(ReportEdit), report))
                 throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Не удалось показать текст отчёта.");
-            Add("BUTTON", Copy, "Копировать всё", TabStop, normal);
-            Add("BUTTON", OK, "Закрыть", TabStop | 1u, normal);
+            scale = Math.Max(1, (int)Native.GetDpiForWindow(window)) / 96.0;
+            if (scale < .5)
+                scale = 1;
+            SetPanelFonts();
+            buttonProc = HandleButton;
+            AddChoice(Copy, "Копировать всё", TabStop);
+            AddChoice(OK, "Закрыть", TabStop | 1u);
+            int dark = look.Light ? 0 : 1;
+            Native.DwmSetWindowAttribute(window, 20, ref dark, 4);
         }
 
         private static readonly int[] SideButtons = { Inside, Outside, Left, Right };
         private const int PartChoice = 140, BlankChoice = 141, CloseChoice = 142;
-        private const int PanelWidth = 692, PanelHeight = 592;
-        private static readonly int Shell = Rgb(34,37,41), Panel = Rgb(43,46,50), Tile = Rgb(48,52,56), Edge = Rgb(69,74,78);
-        private static readonly int LineColor = Rgb(57,62,66), White = Rgb(243,244,243), Sub = Rgb(195,200,199), Quiet = Rgb(173,181,180);
-        private static readonly int Mint = Rgb(0,205,134), MintInk = Rgb(7,46,34), Selected = Rgb(38,60,52), SelectedEdge = Rgb(61,128,101);
+        private const int Gear=150, PaletteClose=151, DarkTheme=152, LightTheme=153, Square=154, HueStrip=155, HexEdit=156, SaveShared=157;
+        private const int PanelWidth=692, FullHeight=592, PaletteWidth=322, PaletteHeight=620;
+        private int PanelHeight { get { return Options.Tanto ? FullHeight : FullHeight-110; } }
+        private int FooterY { get { return PanelHeight-81; } }
+        private int Shell, Panel, Tile, Edge, LineColor, White, Sub, Quiet, Recess, Context, Disabled, Faded;
+        private int AccentFill, AccentInk, Strong, Selected, SelectedEdge, AppFill, AppEdge, HoverAccent;
+        private Appearance look=new Appearance(), sharedLook;
+        private string appearancePath, sharedPath, appearanceNotice;
+        private bool appearanceDirty, updatingHex;
+        private IntPtr palette;
+        private Native.DialogProc paletteProc;
+        private int dragControl;
         private double scale = 1;
         private IntPtr fontTitle, fontHeading, fontStrong, fontBody, fontSmall, fontMono;
         private Native.SubclassProc buttonProc;
         private int hover;
         private bool SettingsWindow { get { return !IsReport; } }
 
+        internal void LoadAppearance(string path)
+        {
+            appearancePath = System.IO.Path.ChangeExtension(path, "appearance");
+            sharedPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path), "Appearance.settings");
+            sharedLook = ReadLook(sharedPath);
+            look = ReadLook(appearancePath) ?? (sharedLook != null ? sharedLook.Copy() : new Appearance());
+            UpdateColours();
+        }
+        private Appearance ReadLook(string path)
+        {
+            try
+            {
+                return Appearance.Read(path);
+            }
+            catch (Exception ex)
+            {
+                appearanceNotice = "Не удалось прочитать оформление: " + ex.Message;
+                return null;
+            }
+        }
+        private void UpdateColours()
+        {
+            bool light = look.Light;
+            Shell = light ? Rgb(253, 254, 253) : Rgb(34, 37, 41);
+            Panel = light ? Rgb(248, 250, 249) : Rgb(43, 46, 50);
+            Tile = light ? 0xffffff : Rgb(48, 52, 56);
+            Edge = light ? Rgb(203, 211, 207) : Rgb(72, 77, 81);
+            LineColor = light ? Rgb(220, 227, 222) : Rgb(58, 64, 67);
+            White = light ? Rgb(32, 41, 36) : Rgb(243, 244, 243);
+            Sub = light ? Rgb(68, 83, 75) : Rgb(199, 203, 202);
+            Quiet = light ? Rgb(83, 97, 88) : Rgb(171, 180, 178);
+            Recess = light ? Rgb(234, 240, 236) : Rgb(38, 42, 45);
+            Context = light ? Rgb(237, 241, 238) : Rgb(38, 41, 44);
+            Disabled = light ? Rgb(238, 241, 239) : Rgb(42, 45, 48);
+            Faded = light ? Rgb(103, 115, 108) : Rgb(152, 160, 158);
+            AccentFill = look.Color;
+            double luminance = Appearance.Luminance(AccentFill);
+            AccentInk = Appearance.Contrast(luminance, 1) > Appearance.Contrast(luminance, 0) ? 0xffffff : 0;
+            Strong = look.Indicator(light ? Recess : Rgb(56, 61, 64));
+            Selected = Mix(Tile, AccentFill, .12);
+            SelectedEdge = Mix(Edge, Strong, .62);
+            AppFill = Mix(Shell, AccentFill, .14);
+            AppEdge = Mix(Edge, Strong, .47);
+            HoverAccent = Mix(AccentFill, AccentInk == 0 ? 0xffffff : 0, .12);
+        }
+        private void SaveLocalLook()
+        {
+            if (!appearanceDirty)
+                return;
+            try
+            {
+                look.Save(appearancePath);
+                appearanceDirty = false;
+            }
+            catch (Exception ex)
+            {
+                appearanceNotice = "Не удалось сохранить оформление: " + ex.Message;
+                if (Options != null)
+                    Options.PreferenceNotice = appearanceNotice;
+            }
+        }
+
         private int Px(int v) { return (int)Math.Round(v * scale); }
         private void PlacePx(int id, int x, int y, int w, int h)
         {
             Native.SetWindowPos(Item(id), IntPtr.Zero, Px(x), Px(y), Math.Max(1, Px(x + w) - Px(x)), Math.Max(1, Px(y + h) - Px(y)), 0x14);
         }
-        private void FitWindow(IntPtr monitor, Native.Rect anchor, uint dpi)
+        private static Native.Rect WorkArea(IntPtr monitor)
         {
             Native.MonitorInfo info = new Native.MonitorInfo();
             info.Size = Marshal.SizeOf(typeof(Native.MonitorInfo));
             if (!Native.GetMonitorInfoW(monitor, ref info))
                 throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-            Native.Rect area = info.Work;
-            scale = Math.Min((dpi == 0 ? 96 : dpi) / 96.0, Math.Min((area.Right - area.Left - 8.0) / PanelWidth, (area.Bottom - area.Top - 8.0) / PanelHeight));
+            return info.Work;
+        }
+        private void FitWindow(IntPtr monitor, Native.Rect anchor, uint dpi)
+        {
+            Native.Rect area = WorkArea(monitor);
+            scale = Math.Min((dpi == 0 ? 96 : dpi) / 96.0, Math.Min((area.Right - area.Left - 8.0) / PanelWidth, (area.Bottom - area.Top - 8.0) / PaletteHeight));
             int w = Px(PanelWidth), h = Px(PanelHeight);
             int x = Math.Max(area.Left, Math.Min(area.Right - w, (anchor.Left + anchor.Right - w) / 2));
             int y = Math.Max(area.Top, Math.Min(area.Bottom - h, (anchor.Top + anchor.Bottom - h) / 2));
             Native.SetWindowPos(window, IntPtr.Zero, x, y, w, h, 0x14);
-            IntPtr region = Native.CreateRoundRectRgn(0, 0, w + 1, h + 1, Px(42), Px(42));
-            if (region != IntPtr.Zero && Native.SetWindowRgn(window, region, true) == 0)
-                Native.DeleteObject(region);
+            Frame(window, w, h, Px(22));
+        }
+        private void Frame(IntPtr hwnd, int w, int h, int radius)
+        {
+            (hwnd == window ? mainFrame : paletteFrame).Fit(hwnd, w, h, radius, Edge);
+        }
+        private void FitHeight()
+        {
+            Native.Rect r;
+            if (!Native.GetWindowRect(window, out r) || r.Bottom - r.Top == Px(PanelHeight))
+                return;
+            Native.Rect area = WorkArea(Native.MonitorFromWindow(window, 2));
+            int w = Px(PanelWidth), h = Px(PanelHeight);
+            Native.SetWindowPos(window, IntPtr.Zero, r.Left, Math.Max(area.Top, Math.Min(r.Top, area.Bottom - h)), w, h, 0x14);
+            Frame(window, w, h, Px(22));
         }
         private IntPtr PixelFont(string face, int pixels, int weight)
         {
@@ -1119,8 +1749,12 @@ public static class PlanarCurveWindows
         private void AddChoice(int id, string caption, uint style)
         {
             Add("BUTTON", id, caption, style, fontBody);
+            Subclass(id);
+        }
+        private void Subclass(int id)
+        {
             if (!Native.SetWindowSubclass(Item(id), buttonProc, new UIntPtr((uint)id), UIntPtr.Zero))
-                throw new InvalidOperationException("Не удалось оформить элемент окна: " + caption);
+                throw new InvalidOperationException("Не удалось оформить элемент окна: " + id);
         }
         private void BuildStart()
         {
@@ -1143,6 +1777,7 @@ public static class PlanarCurveWindows
             AddChoice(Right, "Справа (Right)", 9);
             AddChoice(Cancel, "Отмена", Group | TabStop);
             AddChoice(OK, "", TabStop | 1);
+            AddChoice(Gear, "Оформление", TabStop);
             AddChoice(CloseChoice, "Закрыть", TabStop);
             RefreshStart();
         }
@@ -1159,9 +1794,10 @@ public static class PlanarCurveWindows
             PlacePx(Left, 351, 418, 156, 36);
             PlacePx(Right, 513, 418, 157, 36);
             PlacePx(CloseChoice, 641, 17, 30, 30);
+            PlacePx(Gear, 602, 16, 34, 32);
             int primaryWidth = Options.SelectPlane ? 175 : 215;
-            PlacePx(Cancel, PanelWidth - 22 - primaryWidth - 83, 532, 75, 38);
-            PlacePx(OK, PanelWidth - 22 - primaryWidth, 532, primaryWidth, 38);
+            PlacePx(Cancel, PanelWidth - 22 - primaryWidth - 83, FooterY + 21, 75, 38);
+            PlacePx(OK, PanelWidth - 22 - primaryWidth, FooterY + 21, primaryWidth, 38);
         }
         private void RefreshStart()
         {
@@ -1192,10 +1828,15 @@ public static class PlanarCurveWindows
             for (int i = 0; i < ids.Length; i++)
                 Native.SendMessageW(Item(ids[i]), BmSetCheck, new IntPtr(state[i] ? 1 : 0), IntPtr.Zero);
             foreach (int id in SideButtons)
+            {
                 Native.EnableWindow(Item(id), Options.Tanto);
+                Native.ShowWindow(Item(id), Options.Tanto ? 5 : 0);
+            }
+
             Native.EnableWindow(Item(OK), Options.Part || Options.Blank);
             Native.SetWindowTextW(Item(OK), NextLabel());
-            Native.SetWindowTextW(Item(Note), Options.SelectPlane ? PlanarCurveOptions.PlanePickPrompt : "NX определит плоскость каждой новой границы автоматически.");
+            Native.SetWindowTextW(Item(Note), Options.SelectPlane ? "Выберите плоскость в окне Plane" : "NX определит плоскость каждой новой границы автоматически.");
+            FitHeight();
             LayoutStart();
             Native.RedrawWindow(window, IntPtr.Zero, IntPtr.Zero, 0x85); // invalidate, erase and include children
         }
@@ -1209,24 +1850,26 @@ public static class PlanarCurveWindows
         }
         private void Box(IntPtr dc, int x, int y, int w, int h, int radius, int fill, int border)
         {
+            if (radius > 0)
+            {
+                using (VectorInk ink = new VectorInk(dc, scale))
+                    ink.Round(x, y, w, h, radius, fill, border);
+                return;
+            }
+
             Native.SetDCBrushColor(dc, fill);
             Native.SetDCPenColor(dc, border);
-            if (radius == 0)
-                Native.Rectangle(dc, Px(x), Px(y), Px(x + w), Px(y + h));
-            else
-                Native.RoundRect(dc, Px(x), Px(y), Px(x + w), Px(y + h), Px(2 * radius), Px(2 * radius));
+            Native.Rectangle(dc, Px(x), Px(y), Px(x + w), Px(y + h));
         }
         private void Stroke(IntPtr dc, int x, int y, int xx, int yy, int color)
         {
-            Native.SetDCPenColor(dc, color);
-            Native.MoveToEx(dc, Px(x), Px(y), IntPtr.Zero);
-            Native.LineTo(dc, Px(xx), Px(yy));
+            using (VectorInk ink = new VectorInk(dc, scale))
+                ink.Line(x + .5f, y + .5f, xx + .5f, yy + .5f, color, 1);
         }
         private void Circle(IntPtr dc, int x, int y, int d, int fill, int edge)
         {
-            Native.SetDCPenColor(dc, edge);
-            Native.SetDCBrushColor(dc, fill);
-            Native.Ellipse(dc, Px(x), Px(y), Px(x + d), Px(y + d));
+            using (VectorInk ink = new VectorInk(dc, scale))
+                ink.Ellipse(x, y, d, fill, edge, 1.1f);
         }
         private void TextLine(IntPtr dc, string text, int x, int y, int w, int h, IntPtr font, int color, uint align)
         {
@@ -1255,19 +1898,9 @@ public static class PlanarCurveWindows
                 InitPaint(dc);
                 Box(dc, 0, 0, PanelWidth, PanelHeight, 0, Panel, Panel);
                 Box(dc, 0, 0, PanelWidth, 76, 0, Shell, Shell);
-                Box(dc, 0, 76, PanelWidth, 37, 0, Rgb(38, 41, 44), LineColor);
-                Box(dc, 0, 511, PanelWidth, 82, 0, Shell, LineColor);
-                Box(dc, 22, 17, 42, 42, 12, Rgb(25, 60, 48), Rgb(49, 102, 79));
-                int c = Rgb(120, 228, 178);
-                for (int i = 0; i < 3; i++)
-                {
-                    int y = 29 + i * 5;
-                    Stroke(dc, 30, y, 43, y + 7, c);
-                    Stroke(dc, 43, y + 7, 56, y, c);
-                }
-
-                Stroke(dc, 30, 29, 43, 22, c);
-                Stroke(dc, 43, 22, 56, 29, c);
+                Box(dc, 0, 76, PanelWidth, 37, 0, Context, LineColor);
+                Box(dc, 0, FooterY, PanelWidth, 82, 0, Shell, LineColor);
+                DrawMark(dc);
                 TextLine(dc, "Кривые в PLANAR", 78, 12, 510, 31, fontTitle, White, 0);
                 int split = title.IndexOf(" — ", StringComparison.Ordinal);
                 TextLine(dc, split >= 0 ? title.Substring(split + 3) : title, 79, 43, 515, 20, fontSmall, Quiet, 0);
@@ -1278,11 +1911,15 @@ public static class PlanarCurveWindows
                 TextLine(dc, "Можно выбрать оба набора", 374, 122, 296, 27, fontSmall, Quiet, 2);
                 Stroke(dc, 22, 281, 670, 281, LineColor);
                 TextLine(dc, "Положение инструмента", 22, 290, 475, 25, fontHeading, White, 0);
-                TextLine(dc, "Замкнутые кривые", 22, 389, 318, 24, fontStrong, Sub, 0);
-                TextLine(dc, "Открытые кривые", 351, 389, 318, 24, fontStrong, Sub, 0);
-                TextLine(dc, Options.Tanto ? "Слева и справа — по направлению открытой кривой." : "Выбор стороны доступен в режиме TANTO.", 22, 463, 648, 26, fontSmall, Quiet, 0);
+                if (Options.Tanto)
+                {
+                    TextLine(dc, "Замкнутые кривые", 22, 389, 318, 24, fontStrong, Sub, 0);
+                    TextLine(dc, "Открытые кривые", 351, 389, 318, 24, fontStrong, Sub, 0);
+                    TextLine(dc, "Слева и справа — по направлению открытой кривой.", 22, 463, 648, 26, fontSmall, Quiet, 0);
+                }
+
                 bool any = Options.Part || Options.Blank;
-                TextLine(dc, any ? "Порядок выбора" : "Отметьте хотя бы один набор границ.", 22, 527, 310, 21, fontSmall, Quiet, 0);
+                TextLine(dc, any ? "Порядок выбора" : "Отметьте хотя бы один набор границ.", 22, FooterY + 16, 310, 21, fontSmall, Quiet, 0);
                 if (any)
                 {
                     List<string> order = new List<string>();
@@ -1292,7 +1929,7 @@ public static class PlanarCurveWindows
                         order.Add("Деталь");
                     if (Options.Blank)
                         order.Add("Заготовка");
-                    TextLine(dc, String.Join("   ›   ", order.ToArray()), 22, 547, 310, 24, fontBody, White, 0);
+                    TextLine(dc, String.Join("   ›   ", order.ToArray()), 22, FooterY + 36, 310, 24, fontBody, White, 0);
                 }
             }
             finally
@@ -1300,18 +1937,67 @@ public static class PlanarCurveWindows
                 Native.RestoreDC(dc, saved);
             }
         }
+        private void DrawMark(IntPtr dc)
+        {
+            using (VectorInk ink = new VectorInk(dc, scale))
+            {
+                ink.Round(22, 17, 42, 42, 12, AppFill, AppEdge);
+                int pass = Rgb(0, 169, 208);
+                ink.Line(34.67f, 30.25f, 49.62f, 30.25f, pass, 1.35f);
+                ink.Line(40.52f, 36.1f, 55.47f, 36.1f, pass, 1.35f);
+                ink.Line(45.72f, 41.3f, 55.47f, 41.3f, pass, 1.35f);
+                ink.Outline(new float[] { 28.3f, 30.25f, 34.15f, 30.25f, 34.15f, 36.1f, 40, 36.1f, 40, 41.3f, 45.2f, 41.3f, 45.2f, 47.15f, 51.05f, 47.15f, 51.05f, 53, 28.3f, 53 }, Strong, 1.35f);
+                ink.Round(49.25f, 21.95f, 9.1f, 13.7f, 1.6f, Mix(AppFill, AccentFill, .10), Strong);
+                ink.Line(49.95f, 28.6f, 57.45f, 23.85f, Strong, 1.1f);
+                ink.Line(49.95f, 33.4f, 57.45f, 28.6f, Strong, 1.1f);
+            }
+        }
+        private void DrawGear(IntPtr dc, int w, int h, int color)
+        {
+            float[] points = new float[8 * 5 * 2];
+            double[] offset =
+            {
+                -.49,
+                -.32,
+                -.21,
+                .12,
+                .23
+            }, radius =
+            {
+                7,
+                7,
+                9,
+                9,
+                7
+            };
+            for (int tooth = 0; tooth < 8; tooth++)
+                for (int j = 0; j < 5; j++)
+                {
+                    double angle = (tooth + offset[j]) * Math.PI / 4 - Math.PI / 2;
+                    int i = (tooth * 5 + j) * 2;
+                    points[i] = (float)(w * .5 + Math.Cos(angle) * radius[j]);
+                    points[i + 1] = (float)(h * .5 + Math.Sin(angle) * radius[j]);
+                }
+
+            using (VectorInk ink = new VectorInk(dc, scale))
+            {
+                ink.Outline(points, color, 1.5f);
+                ink.Ellipse(w * .5f - 3.15f, h * .5f - 3.15f, 6.3f, -1, color, 1.4f);
+            }
+        }
         private void Tick(IntPtr dc, int x, int y, int color)
         {
-            Stroke(dc, x, y + 4, x + 4, y + 8, color);
-            Stroke(dc, x + 4, y + 8, x + 11, y, color);
-            Stroke(dc, x, y + 5, x + 4, y + 9, color);
-            Stroke(dc, x + 4, y + 9, x + 11, y + 1, color);
+            using (VectorInk ink = new VectorInk(dc, scale))
+            {
+                ink.Line(x, y + 4, x + 4, y + 8, color, 1.6f);
+                ink.Line(x + 4, y + 8, x + 11, y, color, 1.6f);
+            }
         }
         private void CheckBox(IntPtr dc, int x, int y, bool selected, int bg)
         {
-            Box(dc, x, y, 18, 18, 4, selected ? Mint : bg, selected ? Mint : Quiet);
+            Box(dc, x, y, 18, 18, 5, selected ? AccentFill : bg, selected ? Strong : Quiet);
             if (selected)
-                Tick(dc, x + 3, y + 4, MintInk);
+                Tick(dc, x + 3, y + 4, AccentInk);
         }
         private void DrawButton(IntPtr hwnd, IntPtr dc, int id)
         {
@@ -1325,15 +2011,33 @@ public static class PlanarCurveWindows
                 bool enabled = Native.IsWindowEnabled(hwnd), selected = Native.SendMessageW(hwnd, 0xf0, IntPtr.Zero, IntPtr.Zero) != IntPtr.Zero;
                 int state = Native.SendMessageW(hwnd, 0xf2, IntPtr.Zero, IntPtr.Zero).ToInt32();
                 bool hot = enabled && (hover == id || (state & 4) != 0);
-                int bg = id == OK || id == Cancel || id == CloseChoice ? Shell : Panel;
+                if (id >= PaletteClose && id <= SaveShared)
+                {
+                    DrawPaletteControl(dc, id, w, h, hot, state);
+                    return;
+                }
+
+                if (IsReport)
+                {
+                    Box(dc, 0, 0, w + 1, h + 1, 0, Panel, Panel);
+                    Box(dc, 0, 0, w, h, 9, id == OK ? (hot ? HoverAccent : AccentFill) : Tile, hot ? Strong : Edge);
+                    TextLine(dc, WindowText(hwnd), 4, 0, w - 8, h, fontStrong, id == OK ? AccentInk : White, 1);
+                    if ((state & 8) != 0)
+                        FocusRect(dc, rect);
+                    return;
+                }
+
+                int bg = id == OK || id == Cancel || id == Gear || id == CloseChoice ? Shell : Panel;
                 Box(dc, 0, 0, w + 1, h + 1, 0, bg, bg);
                 bool plain = id == PlaneChoice || id == CloseChoice;
-                int fill = !enabled ? Rgb(41, 44, 48) : selected ? Selected : Tile;
+                if (id == Gear)
+                    selected = palette != IntPtr.Zero;
+                int fill = !enabled ? Disabled : selected ? Selected : Tile;
                 int border = !enabled ? LineColor : selected ? SelectedEdge : Edge;
                 if (id == OK && enabled)
                 {
-                    fill = Mint;
-                    border = Mint;
+                    fill = AccentFill;
+                    border = SelectedEdge;
                 }
 
                 if (plain)
@@ -1344,13 +2048,13 @@ public static class PlanarCurveWindows
 
                 if (hot && !plain)
                 {
-                    border = id == OK ? Rgb(82, 239, 171) : Rgb(97, 152, 127);
+                    border = Strong;
                     if (id == OK)
-                        fill = Rgb(39, 220, 150);
+                        fill = HoverAccent;
                 }
 
                 Box(dc, 0, 0, w, h, IsSide(id) ? 9 : id == CloseChoice ? 8 : 12, fill, border);
-                int ink = enabled ? White : Rgb(151, 159, 157);
+                int ink = enabled ? White : Faded;
                 if (id == PartChoice || id == BlankChoice)
                 {
                     CheckBox(dc, 14, (h - 18) / 2, selected, fill);
@@ -1364,7 +2068,7 @@ public static class PlanarCurveWindows
                 }
                 else if (id == On || id == Tanto)
                 {
-                    int glyph = selected ? Rgb(111, 232, 179) : Sub, square = selected ? Rgb(28, 50, 40) : Rgb(40, 44, 46);
+                    int glyph = selected ? Strong : Sub, square = selected ? AppFill : Recess;
                     Box(dc, 12, 11, 39, 38, 8, square, square);
                     int cy = id == On ? 30 : 25, line = id == On ? 30 : 34;
                     Circle(dc, 23, cy - 9, 19, square, glyph);
@@ -1373,17 +2077,19 @@ public static class PlanarCurveWindows
                     Circle(dc, 31, cy - 1, 3, glyph, glyph);
                     TextLine(dc, id == On ? "ON" : "TANTO", 63, 7, w - 95, 24, fontHeading, ink, 0);
                     TextLine(dc, id == On ? "Центр на границе" : "Касание границы", 63, 30, w - 95, 20, fontSmall, Sub, 0);
-                    Circle(dc, w - 27, 23, 14, fill, selected ? Mint : Quiet);
+                    Circle(dc, w - 27, 23, 14, fill, selected ? Strong : Quiet);
                     if (selected)
-                        Circle(dc, w - 23, 27, 6, Mint, Mint);
+                        Circle(dc, w - 23, 27, 6, Strong, Strong);
                 }
                 else if (IsSide(id))
                 {
                     string caption = id == Inside ? "Внутри  Inside" : id == Outside ? "Снаружи  Outside" : id == Left ? "Слева  Left" : "Справа  Right";
                     if (selected)
-                        Tick(dc, 10, (h - 10) / 2, enabled ? Mint : Quiet);
+                        Tick(dc, 10, (h - 10) / 2, enabled ? Strong : Quiet);
                     TextLine(dc, caption, selected ? 19 : 4, 0, w - (selected ? 23 : 8), h, fontBody, ink, 1);
                 }
+                else if (id == Gear)
+                    DrawGear(dc, w, h, selected ? Strong : Sub);
                 else if (id == CloseChoice)
                 {
                     Stroke(dc, 10, 10, 20, 20, Quiet);
@@ -1391,43 +2097,610 @@ public static class PlanarCurveWindows
                 }
                 else
                 {
-                    TextLine(dc, id == OK ? NextLabel() : "Отмена", 3, 0, w - (id == OK ? 24 : 6), h, fontStrong, id == OK && enabled ? MintInk : ink, 1);
+                    TextLine(dc, id == OK ? NextLabel() : "Отмена", 3, 0, w - (id == OK ? 24 : 6), h, fontStrong, id == OK && enabled ? AccentInk : ink, 1);
                     if (id == OK)
                     {
                         int x = w - 22, y = h / 2;
-                        Stroke(dc, x - 2, y, x + 10, y, enabled ? MintInk : ink);
-                        Stroke(dc, x + 5, y - 5, x + 10, y, enabled ? MintInk : ink);
-                        Stroke(dc, x + 5, y + 5, x + 10, y, enabled ? MintInk : ink);
+                        Stroke(dc, x - 2, y, x + 10, y, enabled ? AccentInk : ink);
+                        Stroke(dc, x + 5, y - 5, x + 10, y, enabled ? AccentInk : ink);
+                        Stroke(dc, x + 5, y + 5, x + 10, y, enabled ? AccentInk : ink);
                     }
                 }
 
                 if ((state & 8) != 0 && (Native.SendMessageW(hwnd, 0x129, IntPtr.Zero, IntPtr.Zero).ToInt32() & 1) == 0)
-                {
-                    Native.Rect focus = new Native.Rect
-                    {
-                        Left = Px(4),
-                        Top = Px(3),
-                        Right = rect.Right - Px(4),
-                        Bottom = rect.Bottom - Px(3)
-                    };
-                    Native.DrawFocusRect(dc, ref focus);
-                }
+                    FocusRect(dc, rect);
             }
             finally
             {
                 Native.RestoreDC(dc, saved);
             }
         }
+        private void FocusRect(IntPtr dc, Native.Rect rect)
+        {
+            rect.Left += Px(4);
+            rect.Top += Px(3);
+            rect.Right -= Px(4);
+            rect.Bottom -= Px(3);
+            Native.DrawFocusRect(dc, ref rect);
+        }
+        private bool hexEdited, closingPalette, positioningPalette;
+        private static readonly int[] PaletteTabs={PaletteClose,DarkTheme,LightTheme,HexEdit,Square,HueStrip,SaveShared};
+        private void OpenPalette()
+        {
+            if (palette != IntPtr.Zero)
+            {
+                ClosePalette(true);
+                return;
+            }
+
+            string caption = "Оформление — " + title;
+            byte[] bytes = Template(caption, 170, 260, false);
+            IntPtr data = Marshal.AllocHGlobal(bytes.Length);
+            try
+            {
+                Marshal.Copy(bytes, 0, data, bytes.Length);
+                paletteProc = HandlePalette;
+                IntPtr popup = Native.CreateDialogIndirectParamW(Native.GetModuleHandleW(null), data, window, paletteProc, IntPtr.Zero);
+                if (popup == IntPtr.Zero)
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Не удалось открыть оформление.");
+                if (callbackError != null)
+                    return;
+                PositionPalette(true);
+                Native.ShowWindow(popup, 5);
+                Native.SetFocus(Item(look.Light ? LightTheme : DarkTheme));
+                IntPtr gear = Item(Gear);
+                if (gear != IntPtr.Zero)
+                    Native.InvalidateRect(gear, IntPtr.Zero, false);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(data);
+            }
+        }
+        private void ClosePalette(bool focusGear)
+        {
+            if (palette == IntPtr.Zero || closingPalette)
+                return;
+            closingPalette = true;
+            try
+            {
+                FinishHex();
+                if (dragControl != 0)
+                {
+                    dragControl = 0;
+                    Native.ReleaseCapture();
+                }
+
+                SaveLocalLook();
+                Native.DestroyWindow(palette);
+                if (focusGear && ready)
+                    Native.SetFocus(Item(Gear));
+                IntPtr gear = Item(Gear);
+                if (gear != IntPtr.Zero)
+                    Native.InvalidateRect(gear, IntPtr.Zero, false);
+            }
+            finally
+            {
+                closingPalette = false;
+            }
+        }
+        private void PositionPalette(bool makeRoom = false)
+        {
+            if (palette == IntPtr.Zero || positioningPalette)
+                return;
+            Native.Rect main;
+            if (!Native.GetWindowRect(window, out main))
+                return;
+            Native.Rect work = WorkArea(Native.MonitorFromWindow(window, 2));
+            int w = Px(PaletteWidth), h = Px(PaletteHeight), gap = Px(12);
+            positioningPalette = true;
+            try
+            {
+                int x, top = main.Top;
+                if (main.Right + gap + w <= work.Right)
+                    x = main.Right + gap;
+                else if (main.Left - gap - w >= work.Left)
+                    x = main.Left - gap - w;
+                else if (makeRoom && main.Right - main.Left + gap + w + Px(8) <= work.Right - work.Left)
+                {
+                    int right = work.Right - w - gap - Px(4);
+                    Native.SetWindowPos(window, IntPtr.Zero, right - (main.Right - main.Left), main.Top, 0, 0, 0x15);
+                    x = right + gap;
+                }
+                else
+                {
+                    x = Math.Max(work.Left, Math.Min(work.Right - w, main.Right - w - Px(12)));
+                    top += Px(59);
+                }
+
+                int y = Math.Max(work.Top, Math.Min(work.Bottom - h, top));
+                Native.SetWindowPos(palette, IntPtr.Zero, x, y, w, h, 0x14);
+            }
+            finally
+            {
+                positioningPalette = false;
+            }
+        }
+        private void SetPaletteFonts()
+        {
+            foreach (int id in PaletteTabs)
+                Native.SendMessageW(Item(id), WmSetFont, id == HexEdit ? fontMono : fontBody, IntPtr.Zero);
+        }
+        private void LayoutPalette()
+        {
+            PlacePx(PaletteClose, 274, 12, 32, 31);
+            PlacePx(DarkTheme, 20, 92, 136, 77);
+            PlacePx(LightTheme, 165, 92, 137, 77);
+            PlacePx(HexEdit, 228, 186, 66, 19);
+            PlacePx(Square, 12, 218, 258, 258);
+            PlacePx(HueStrip, 273, 218, 36, 258);
+            PlacePx(SaveShared, 20, 542, 282, 38);
+            Frame(palette, Px(PaletteWidth), Px(PaletteHeight), Px(19));
+            PositionPalette();
+        }
+        private void SyncHex()
+        {
+            updatingHex = true;
+            try
+            {
+                Native.SetWindowTextW(Item(HexEdit), look.Hex);
+                hexEdited = false;
+            }
+            finally
+            {
+                updatingHex = false;
+            }
+        }
+        private void RepaintLook(bool syncHex)
+        {
+            int previousEdge = Edge;
+            UpdateColours();
+            if (previousEdge != Edge)
+            {
+                Frame(window, Px(PanelWidth), Px(PanelHeight), Px(22));
+                if (palette != IntPtr.Zero)
+                    Frame(palette, Px(PaletteWidth), Px(PaletteHeight), Px(19));
+            }
+
+            if (palette != IntPtr.Zero)
+            {
+                if (syncHex)
+                    SyncHex();
+                Native.SendMessageW(Item(DarkTheme), BmSetCheck, new IntPtr(look.Light ? 0 : 1), IntPtr.Zero);
+                Native.SendMessageW(Item(LightTheme), BmSetCheck, new IntPtr(look.Light ? 1 : 0), IntPtr.Zero);
+                Native.RedrawWindow(palette, IntPtr.Zero, IntPtr.Zero, dragControl != 0 ? 0x181u : 0x81u);
+            }
+
+            Native.RedrawWindow(window, IntPtr.Zero, IntPtr.Zero, dragControl != 0 ? 0x181u : 0x81u);
+        }
+        private void ChangedLook(bool syncHex, bool save)
+        {
+            appearanceDirty = true;
+            appearanceNotice = null;
+            if (save)
+                SaveLocalLook();
+            RepaintLook(syncHex);
+        }
+        private void FinishHex()
+        {
+            if (!hexEdited || palette == IntPtr.Zero)
+                return;
+            if (look.SetHex(WindowText(Item(HexEdit)), true))
+                ChangedLook(true, true);
+            else
+            {
+                appearanceNotice = "Введите HEX в формате #RRGGBB.";
+                SyncHex();
+                Native.InvalidateRect(palette, IntPtr.Zero, false);
+            }
+        }
+        private void SaveGlobalLook()
+        {
+            FinishHex();
+            SaveLocalLook();
+            try
+            {
+                look.Save(sharedPath);
+                sharedLook = look.Copy();
+                appearanceNotice = "Общий стиль сохранён · " + look.Hex;
+            }
+            catch (Exception ex)
+            {
+                appearanceNotice = "Не удалось сохранить общий стиль: " + ex.Message;
+            }
+
+            Native.InvalidateRect(palette, IntPtr.Zero, false);
+        }
+        private IntPtr HandlePalette(IntPtr hwnd, uint msg, IntPtr w, IntPtr l)
+        {
+            try
+            {
+                switch (msg)
+                {
+                    case 0x110:
+                        palette = hwnd;
+                        AddChoice(PaletteClose, "Закрыть оформление", TabStop);
+                        AddChoice(DarkTheme, "Тёмная", Group | TabStop | 9);
+                        AddChoice(LightTheme, "Светлая", TabStop | 9);
+                        Add("EDIT", HexEdit, "", TabStop | 0x80, fontMono);
+                        Subclass(HexEdit);
+                        Native.SendMessageW(Item(HexEdit), 0xc5, new IntPtr(7), IntPtr.Zero);
+                        AddChoice(Square, "Насыщенность и яркость. Управление стрелками.", TabStop);
+                        AddChoice(HueStrip, "Оттенок. Управление стрелками.", TabStop);
+                        AddChoice(SaveShared, "Для всех скриптов", TabStop);
+                        LayoutPalette();
+                        RepaintLook(true);
+                        return new IntPtr(1);
+                    case 0x0f:
+                    case 0x318:
+                        Paint(hwnd, msg, w, -1);
+                        return new IntPtr(1);
+                    case 0x14:
+                        return new IntPtr(1);
+                    case 0x111:
+                        int id = (int)(w.ToInt64() & 65535), note = (int)((w.ToInt64() >> 16) & 65535);
+                        if (id == HexEdit)
+                        {
+                            if (note == 0x300 && !updatingHex)
+                            {
+                                hexEdited = true;
+                                if (look.SetHex(WindowText(Item(HexEdit)), false))
+                                    ChangedLook(false, true);
+                            }
+
+                            if (note == 0x200 && !closingPalette)
+                                FinishHex();
+                            return new IntPtr(1);
+                        }
+
+                        if (note != 0)
+                            break;
+                        if (id == PaletteClose || id == Cancel)
+                            ClosePalette(true);
+                        else if (id == DarkTheme || id == LightTheme)
+                        {
+                            look.Light = id == LightTheme;
+                            ChangedLook(true, true);
+                        }
+                        else if (id == SaveShared)
+                            SaveGlobalLook();
+                        else if (id == OK)
+                            FinishHex();
+                        return new IntPtr(1);
+                    case 0x133:
+                        return Brush(w, Recess, White); // WM_CTLCOLOREDIT
+                    case 0x136:
+                    case 0x138:
+                        return Brush(w, Panel, White);
+                    case 0x10:
+                        ClosePalette(true);
+                        return new IntPtr(1);
+                    case 3:
+                        paletteFrame.Move(hwnd);
+                        break;
+                    case 0x18:
+                        paletteFrame.Show(w != IntPtr.Zero);
+                        break;
+                    case 2:
+                        paletteFrame.Dispose();
+                        break;
+                    case 0x82:
+                        palette = IntPtr.Zero;
+                        dragControl = 0;
+                        hexEdited = false;
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (callbackError == null)
+                    callbackError = ex;
+                Native.EndDialog(window, new IntPtr(Cancel));
+            }
+
+            return IntPtr.Zero;
+        }
+        private static string WindowText(IntPtr hwnd)
+        {
+            StringBuilder text = new StringBuilder(96);
+            Native.GetWindowTextW(hwnd, text, text.Capacity);
+            return text.ToString();
+        }
+        private void DrawPaletteSurface(IntPtr dc)
+        {
+            int saved = Native.SaveDC(dc);
+            try
+            {
+                InitPaint(dc);
+                Box(dc, 0, 0, PaletteWidth, PaletteHeight, 0, Panel, Panel);
+                Box(dc, 0, 0, PaletteWidth, 57, 0, Shell, LineColor);
+                TextLine(dc, "Оформление", 20, 12, 250, 31, fontHeading, White, 0);
+                TextLine(dc, "Тема окна", 20, 64, 280, 24, fontStrong, White, 0);
+                TextLine(dc, "Цвет подсветки", 20, 181, 164, 28, fontStrong, White, 0);
+                Box(dc, 198, 180, 104, 31, 7, Recess, Edge);
+                Box(dc, 207, 189, 13, 13, 4, AccentFill, Strong);
+                TextLine(dc, "Вправо — насыщеннее, вверх — светлее.", 20, 476, 285, 20, fontSmall, Quiet, 0);
+                TextLine(dc, "Полоса справа меняет оттенок.", 20, 496, 285, 20, fontSmall, Quiet, 0);
+                Box(dc, 0, 529, PaletteWidth, PaletteHeight - 529, 0, Shell, LineColor);
+                string status = appearanceNotice ?? (sharedLook == null ? "Общий стиль для совместимых скриптов." : "Общий стиль · " + (sharedLook.Light ? "светлая" : "тёмная") + " / " + sharedLook.Hex);
+                TextLine(dc, status, 20, 584, 283, 24, fontSmall, Quiet, 0);
+            }
+            finally
+            {
+                Native.RestoreDC(dc, saved);
+            }
+        }
+        private void DrawPaletteControl(IntPtr dc, int id, int w, int h, bool hot, int state)
+        {
+            bool footer = id == SaveShared, close = id == PaletteClose;
+            int bg = footer || close ? Shell : Panel;
+            Box(dc, 0, 0, w + 1, h + 1, 0, bg, bg);
+            if (id == Square || id == HueStrip)
+                DrawPicker(dc, id);
+            else if (close)
+            {
+                if (hot)
+                    Box(dc, 0, 0, w, h, 9, Tile, Edge);
+                Stroke(dc, 11, 10, 21, 20, Quiet);
+                Stroke(dc, 21, 10, 11, 20, Quiet);
+            }
+            else if (footer)
+            {
+                Box(dc, 0, 0, w, h, 11, Tile, hot ? Strong : Edge);
+                Box(dc, 68, 12, 11, 8, 2, Tile, Sub);
+                Box(dc, 72, 15, 11, 8, 2, Tile, Sub);
+                TextLine(dc, "Для всех скриптов", 90, 0, w - 99, h, fontStrong, White, 0);
+            }
+            else
+            {
+                bool light = id == LightTheme, selected = look.Light == light;
+                int face = selected ? Selected : Tile;
+                Box(dc, 0, 0, w, h, 11, face, selected || hot ? SelectedEdge : Edge);
+                int mini = light ? Rgb(245, 247, 244) : Rgb(55, 61, 58), edge = light ? Rgb(193, 203, 195) : Rgb(76, 84, 80);
+                int bar = light ? 0xffffff : Rgb(38, 43, 40), field = light ? Rgb(224, 231, 224) : Rgb(71, 78, 73);
+                Box(dc, 8, 8, w - 16, 40, 5, mini, edge);
+                Box(dc, 10, 10, w - 20, 9, 2, bar, bar);
+                Box(dc, 14, 13, 4, 3, 1, AccentFill, AccentFill);
+                Box(dc, 21, 13, 21, 2, 0, edge, edge);
+                Box(dc, 13, 23, w / 2 - 17, 10, 2, Mix(mini, AccentFill, .24), Mix(edge, AccentFill, .58));
+                Box(dc, w / 2, 23, w / 2 - 14, 10, 2, field, edge);
+                Box(dc, w - 36, 38, 21, 5, 2, AccentFill, AccentFill);
+                TextLine(dc, light ? "Светлая" : "Тёмная", 12, 49, w - 44, 23, fontStrong, White, 0);
+                Circle(dc, w - 26, 54, 13, face, selected ? Strong : Quiet);
+                if (selected)
+                    Circle(dc, w - 22, 58, 5, Strong, Strong);
+            }
+
+            if ((state & 8) != 0 && (Native.SendMessageW(Item(id), 0x129, IntPtr.Zero, IntPtr.Zero).ToInt32() & 1) == 0)
+            {
+                Native.Rect rect;
+                Native.GetClientRect(Item(id), out rect);
+                FocusRect(dc, rect);
+            }
+        }
+        private int[] squarePixels, huePixels;
+        private int squareWidth,squareHeight,pureKey=-1;
+        private static double Clamp(double v, double max)
+        {
+            return Math.Max(0, Math.Min(v, max));
+        }
+        private Native.Rect PickerArea(int id)
+        {
+            Native.Rect r;
+            Native.GetClientRect(Item(id), out r);
+            r.Left = Px(id == Square ? 8 : 10);
+            r.Right -= r.Left;
+            r.Top = Px(8);
+            r.Bottom -= r.Top;
+            return r;
+        }
+        private int[] Gradient(bool square, int w, int h)
+        {
+            if (!square)
+            {
+                if (huePixels == null || huePixels.Length != h)
+                {
+                    huePixels = new int[h];
+                    for (int y = 0; y < h; y++)
+                        huePixels[y] = Appearance.Reverse(Appearance.FromHsv(360 * (1 - y / (h - 1.0)), 1, 1));
+                }
+
+                return huePixels;
+            }
+
+            int pure = Appearance.FromHsv(look.Hue, 1, 1);
+            if (squareWidth == w && squareHeight == h && pureKey == pure)
+                return squarePixels;
+            if (squarePixels == null || squarePixels.Length != w * h)
+                squarePixels = new int[w * h];
+            for (int x = 0; x < w; x++)
+            {
+                int top = Mix(0xffffff, pure, x / (w - 1.0));
+                int r = top & 255, g = (top >> 8) & 255, b = (top >> 16) & 255;
+                for (int y = 0; y < h; y++)
+                {
+                    int v = h - 1 - y, half = (h - 1) / 2;
+                    squarePixels[y * w + x] = (((r * v + half) / (h - 1)) << 16) | (((g * v + half) / (h - 1)) << 8) | ((b * v + half) / (h - 1));
+                }
+            }
+
+            squareWidth = w;
+            squareHeight = h;
+            pureKey = pure;
+            return squarePixels;
+        }
+        private void DrawPicker(IntPtr dc, int id)
+        {
+            bool square = id == Square;
+            Native.Rect r = PickerArea(id);
+            int w = r.Right - r.Left, h = r.Bottom - r.Top;
+            if (w < 2 || h < 2)
+                return;
+            Native.BitmapInfo bmp = Native.BitmapInfo.TopDown(square ? w : 1, h);
+            int radius = Px(square ? 9 : 7);
+            // Clip regions use device coordinates. A child rendered into the parent's
+            // buffer has a translated viewport, both with WS_EX_COMPOSITED and WM_PRINT.
+            Native.Point origin = new Native.Point();
+            Native.LPtoDP(dc, ref origin, 1);
+            IntPtr region = Native.CreateRoundRectRgn(origin.X + r.Left, origin.Y + r.Top, origin.X + r.Right + 1, origin.Y + r.Bottom + 1, radius * 2, radius * 2);
+            int saved = Native.SaveDC(dc);
+            try
+            {
+                if (region != IntPtr.Zero)
+                    Native.ExtSelectClipRgn(dc, region, 1);
+                Native.StretchDIBits(dc, r.Left, r.Top, w, h, 0, 0, bmp.Width, h, Gradient(square, w, h), ref bmp, 0, 0x00cc0020);
+            }
+            finally
+            {
+                Native.RestoreDC(dc, saved);
+                if (region != IntPtr.Zero)
+                    Native.DeleteObject(region);
+            }
+
+            float unit = (float)scale;
+            float x = (float)(r.Left + look.Saturation * (w - 1)) / unit;
+            float y = (float)(r.Top + (1 - (square ? look.Value : look.Hue / 360)) * (h - 1)) / unit;
+            using (VectorInk ink = new VectorInk(dc, scale))
+            {
+                ink.Round(r.Left / unit, r.Top / unit, w / unit, h / unit, square ? 9 : 7, -1, Mix(Edge, Quiet, .28));
+                if (square)
+                {
+                    ink.Ellipse(x - 8, y - 8, 16, AccentFill, 0x151515, 1.2f);
+                    ink.Ellipse(x - 6.8f, y - 6.8f, 13.6f, -1, 0xffffff, 1.8f);
+                }
+                else
+                {
+                    int pure = Appearance.FromHsv(look.Hue, 1, 1);
+                    ink.Round(5, y - 5, 26, 10, 4, pure, 0x171717);
+                    ink.Round(6, y - 4, 24, 8, 3, pure, 0xffffff);
+                }
+            }
+        }
+        private void SamplePicker(int id, IntPtr coords)
+        {
+            Native.Rect r = PickerArea(id);
+            int x = (short)(coords.ToInt64() & 65535), y = (short)(coords.ToInt64() >> 16);
+            double vertical = 1 - Clamp((y - r.Top) / (double)Math.Max(1, r.Bottom - r.Top - 1), 1);
+            if (id == Square)
+            {
+                double s = Clamp((x - r.Left) / (double)Math.Max(1, r.Right - r.Left - 1), 1);
+                if (s == look.Saturation && vertical == look.Value)
+                    return;
+                look.Saturation = s;
+                look.Value = vertical;
+            }
+            else
+            {
+                if (look.Hue == vertical * 360)
+                    return;
+                look.Hue = vertical * 360;
+            }
+
+            ChangedLook(true, false);
+        }
+        private bool PaletteKey(int id, int key)
+        {
+            bool shift = Native.GetKeyState(0x10) < 0;
+            if (key == 27)
+            {
+                ClosePalette(true);
+                return true;
+            }
+
+            if (key == 9)
+            {
+                int index = Array.IndexOf(PaletteTabs, id);
+                Native.SetFocus(Item(PaletteTabs[(index + (shift ? -1 : 1) + PaletteTabs.Length) % PaletteTabs.Length]));
+                return true;
+            }
+
+            if (key == 13)
+            {
+                if (id == HexEdit)
+                {
+                    FinishHex();
+                    Native.SendMessageW(Item(id), 0xb1, IntPtr.Zero, new IntPtr(-1));
+                }
+                else if (id != Square && id != HueStrip)
+                    Native.SendMessageW(Item(id), 0xf5, IntPtr.Zero, IntPtr.Zero);
+                return true;
+            }
+
+            if (key < 37 || key > 40)
+                return false;
+            int direction = key == 37 || key == 40 ? -1 : 1;
+            if (id == Square)
+            {
+                double delta = direction * (shift ? 0.10 : 0.01);
+                if (key == 37 || key == 39)
+                    look.Saturation = Clamp(look.Saturation + delta, 1);
+                else
+                    look.Value = Clamp(look.Value + delta, 1);
+            }
+            else if (id == HueStrip)
+                look.Hue = Clamp(look.Hue + direction * (shift ? 10 : 1), 360);
+            else if (id == DarkTheme || id == LightTheme)
+            {
+                look.Light = id == DarkTheme;
+                Native.SetFocus(Item(look.Light ? LightTheme : DarkTheme));
+            }
+            else
+                return false;
+            ChangedLook(true, true);
+            return true;
+        }
         private IntPtr HandleButton(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam, UIntPtr sub, UIntPtr data)
         {
             try
             {
                 int id = (int)sub.ToUInt32();
-                if (message == 0x0f || message == 0x318)
+                if (id >= PaletteClose && id <= SaveShared)
+                {
+                    if (message == 0x87)
+                        return new IntPtr(Native.DefSubclassProc(hwnd, message, wParam, lParam).ToInt64() | 5);
+                    if (message == 0x100 && PaletteKey(id, wParam.ToInt32()))
+                        return IntPtr.Zero;
+                    if (message == 0x102 && (wParam.ToInt32() == 13 || wParam.ToInt32() == 9 || wParam.ToInt32() == 27))
+                        return IntPtr.Zero;
+                    if (id == Square || id == HueStrip)
+                    {
+                        if (message == 0x201)
+                        {
+                            Native.SetFocus(hwnd);
+                            Native.SetCapture(hwnd);
+                            dragControl = id;
+                            SamplePicker(id, lParam);
+                            return IntPtr.Zero;
+                        }
+
+                        if (dragControl == id)
+                        {
+                            if (message == 0x200)
+                            {
+                                SamplePicker(id, lParam);
+                                return IntPtr.Zero;
+                            }
+
+                            if (message == 0x202 || message == 0x215 || message == 0x1f)
+                            {
+                                if (message == 0x202)
+                                    SamplePicker(id, lParam);
+                                dragControl = 0;
+                                if (Native.GetCapture() == hwnd)
+                                    Native.ReleaseCapture();
+                                SaveLocalLook();
+                                return IntPtr.Zero;
+                            }
+                        }
+                    }
+                }
+                else if (message == 0x201 && id != Gear && palette != IntPtr.Zero)
+                    ClosePalette(false);
+                if (id != HexEdit && (message == 0x0f || message == 0x318))
                     return Paint(hwnd, message, wParam, id);
-                if (message == 0x14)
+                if (message == 0x14 && id != HexEdit)
                     return new IntPtr(1);
-                if (message == 0x200 && hover != id)
+                if (message == 0x200 && hover != id && id != HexEdit)
                 {
                     hover = id;
                     Native.TrackMouse track = new Native.TrackMouse
@@ -1468,6 +2741,8 @@ public static class PlanarCurveWindows
                 {
                     if (id == 0)
                         DrawSurface(dc);
+                    else if (id == -1)
+                        DrawPaletteSurface(dc);
                     else
                         DrawButton(hwnd, dc, id);
                 }
@@ -1484,9 +2759,9 @@ public static class PlanarCurveWindows
         private void Add(string kind, int id, string text, uint style, IntPtr font)
         {
             // WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS
-            IntPtr child = Native.CreateWindowExW(0, kind, text, 0x54000000u | style, 0, 0, 1, 1,
-                window, new IntPtr(id), Native.GetModuleHandleW(null), IntPtr.Zero);
-            if (child == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Не удалось создать элемент " + kind + ".");
+            IntPtr child = Native.CreateWindowExW(0, kind, text, 0x54000000u | style, 0, 0, 1, 1, ParentOf(id), new IntPtr(id), Native.GetModuleHandleW(null), IntPtr.Zero);
+            if (child == IntPtr.Zero)
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Не удалось создать элемент " + kind + ".");
             Native.SendMessageW(child, WmSetFont, font, IntPtr.Zero);
         }
 
@@ -1502,30 +2777,66 @@ public static class PlanarCurveWindows
 
         private bool Command(int id, int notification)
         {
-            if (notification != 0) return false; // BN_CLICKED / STN_CLICKED or a dialog key
+            if (notification != 0)
+                return false; // BN_CLICKED / STN_CLICKED or a dialog key
             switch (id)
             {
-                case PartChoice: Options.Part = !Options.Part; break;
-                case BlankChoice: Options.Blank = !Options.Blank; break;
-                case PlaneChoice: Options.SelectPlane = !Options.SelectPlane; break;
-                case On: case Tanto: Options.Tanto = id == Tanto; break;
-                case Inside: case Outside: if (Options.Tanto) Options.ClosedOutside = id == Outside; break;
-                case Left: case Right: if (Options.Tanto) Options.OpenRight = id == Right; break;
-                case Cancel: case CloseChoice: Native.EndDialog(window, new IntPtr(Cancel)); return true;
+                case PartChoice:
+                    Options.Part = !Options.Part;
+                    break;
+                case BlankChoice:
+                    Options.Blank = !Options.Blank;
+                    break;
+                case PlaneChoice:
+                    Options.SelectPlane = !Options.SelectPlane;
+                    break;
+                case On:
+                case Tanto:
+                    Options.Tanto = id == Tanto;
+                    break;
+                case Inside:
+                case Outside:
+                    if (Options.Tanto)
+                        Options.ClosedOutside = id == Outside;
+                    break;
+                case Left:
+                case Right:
+                    if (Options.Tanto)
+                        Options.OpenRight = id == Right;
+                    break;
+                case Gear:
+                    OpenPalette();
+                    return true;
+                case Cancel:
+                    if (palette != IntPtr.Zero)
+                    {
+                        ClosePalette(true);
+                        return true;
+                    }
+
+                    goto case CloseChoice;
+                case CloseChoice:
+                    Native.EndDialog(window, new IntPtr(Cancel));
+                    return true;
                 case OK:
-                    if (IsReport || Options.Part || Options.Blank) Native.EndDialog(window, new IntPtr(OK));
+                    if (IsReport || Options.Part || Options.Blank)
+                        Native.EndDialog(window, new IntPtr(OK));
                     return true;
                 case Copy:
-                    if (!IsReport) return false;
+                    if (!IsReport)
+                        return false;
                     if (CopyText(window, report))
                     {
                         Native.SetWindowTextW(Item(Copy), "Скопировано");
                         Native.SetWindowTextW(Item(Summary), "Отчёт скопирован целиком.");
                     }
-                    else Native.SetWindowTextW(Item(Summary), "Буфер обмена недоступен. Повторите копирование.");
+                    else
+                        Native.SetWindowTextW(Item(Summary), "Буфер обмена недоступен. Повторите копирование.");
                     return true;
-                default: return false;
+                default:
+                    return false;
             }
+
             RefreshStart();
             return true;
         }
@@ -1540,10 +2851,12 @@ public static class PlanarCurveWindows
 
         private IntPtr ControlBrush(IntPtr dc, int id)
         {
-            if (SettingsWindow) return Brush(dc, Panel, Quiet);
-            if (id == ReportEdit) return Brush(dc, 0xffffff, Ink);
-            int color = id != Heading ? Muted : severity == 2 ? Rgb(162,54,49) : severity == 1 ? Rgb(136,96,28) : Accent;
-            return Brush(dc, Canvas, color);
+            if (SettingsWindow)
+                return Brush(dc, Panel, Quiet);
+            if (id == ReportEdit)
+                return Brush(dc, Tile, White);
+            int color = id != Heading ? Quiet : severity == 2 ? (look.Light ? Rgb(155, 50, 46) : Rgb(255, 159, 147)) : severity == 1 ? (look.Light ? Rgb(133, 85, 21) : Rgb(255, 209, 145)) : Strong;
+            return Brush(dc, Panel, color);
         }
 
         private void Layout()
@@ -1631,6 +2944,60 @@ public static class PlanarCurveWindows
 
     private static class Native
     {
+        [StructLayout(LayoutKind.Sequential)] internal struct GraphicsStartup { internal uint Version; internal IntPtr Debug; internal int SuppressThread,SuppressCodecs; }
+        [StructLayout(LayoutKind.Sequential,Pack=1)] internal struct Blend { internal byte Op,Flags,Alpha,Format; }
+        [DllImport("user32.dll")] internal static extern bool UpdateLayeredWindow(IntPtr hwnd,IntPtr dstDc,ref Point dst,ref Point size,IntPtr srcDc,ref Point src,int key,ref Blend blend,uint flags);
+        [DllImport("gdi32.dll")] internal static extern IntPtr CreateCompatibleDC(IntPtr dc);
+        [DllImport("gdi32.dll")] internal static extern bool DeleteDC(IntPtr dc);
+        [DllImport("gdi32.dll")] internal static extern IntPtr CreateDIBSection(IntPtr dc,ref BitmapInfo info,uint usage,out IntPtr bits,IntPtr section,uint offset);
+        [DllImport("gdi32.dll")] internal static extern IntPtr CreateRectRgn(int left,int top,int right,int bottom);
+        [DllImport("gdi32.dll")] internal static extern bool SetRectRgn(IntPtr region,int left,int top,int right,int bottom);
+        [DllImport("gdi32.dll")] internal static extern int CombineRgn(IntPtr dest,IntPtr a,IntPtr b,int operation);
+        [DllImport("user32.dll")] internal static extern bool IsWindowVisible(IntPtr hwnd);
+        [StructLayout(LayoutKind.Sequential)] internal struct BitmapInfo
+        {
+            internal uint Size; internal int Width,Height; internal ushort Planes,Bits;
+            internal uint Compression,ImageSize; internal int X,Y; internal uint Colors,Important;
+            internal static BitmapInfo TopDown(int width,int height)
+            { return new BitmapInfo{Size=40,Width=width,Height=-height,Planes=1,Bits=32}; }
+        }
+        [DllImport("gdi32.dll")] internal static extern int StretchDIBits(IntPtr dc,int x,int y,int w,int h,int srcX,int srcY,int sw,int sh,[In] int[] pixels,ref BitmapInfo info,uint usage,uint rop);
+        [DllImport("gdi32.dll")] internal static extern int ExtSelectClipRgn(IntPtr dc,IntPtr region,int mode);
+        [DllImport("gdi32.dll")] internal static extern bool LPtoDP(IntPtr dc,ref Point point,int count);
+        [DllImport("user32.dll",ExactSpelling=true,SetLastError=true)] internal static extern IntPtr CreateDialogIndirectParamW(IntPtr instance,IntPtr template,IntPtr owner,DialogProc proc,IntPtr data);
+        [DllImport("user32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)] internal static extern int GetWindowTextW(IntPtr hwnd,StringBuilder text,int capacity);
+        [DllImport("user32.dll")] internal static extern bool DestroyWindow(IntPtr hwnd);
+        [DllImport("user32.dll")] internal static extern IntPtr SetCapture(IntPtr hwnd);
+        [DllImport("user32.dll")] internal static extern IntPtr GetCapture();
+        [DllImport("user32.dll")] internal static extern short GetKeyState(int key);
+        [DllImport("dwmapi.dll")] internal static extern int DwmSetWindowAttribute(IntPtr hwnd,int attribute,ref int value,int size);
+        [DllImport("gdiplus.dll",ExactSpelling=true)] internal static extern int GdiplusStartup(out UIntPtr token,ref GraphicsStartup input,IntPtr output);
+        [DllImport("gdiplus.dll",ExactSpelling=true)] internal static extern void GdiplusShutdown(UIntPtr token);
+        [DllImport("gdiplus.dll")] internal static extern int GdipCreateFromHDC(IntPtr dc,out IntPtr g);
+        [DllImport("gdiplus.dll")] internal static extern int GdipDeleteGraphics(IntPtr g);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetPageUnit(IntPtr g,int unit);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetSmoothingMode(IntPtr g,int mode);
+        [DllImport("gdiplus.dll")] internal static extern int GdipScaleWorldTransform(IntPtr g,float sx,float sy,int order);
+        [DllImport("gdiplus.dll")] internal static extern int GdipCreatePen1(int argb,float width,int unit,out IntPtr pen);
+        [DllImport("gdiplus.dll")] internal static extern int GdipDeletePen(IntPtr pen);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetPenWidth(IntPtr pen,float width);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetPenColor(IntPtr pen,int color);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetPenLineJoin(IntPtr pen,int join);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetPenStartCap(IntPtr pen,int cap);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetPenEndCap(IntPtr pen,int cap);
+        [DllImport("gdiplus.dll")] internal static extern int GdipCreateSolidFill(int argb,out IntPtr brush);
+        [DllImport("gdiplus.dll")] internal static extern int GdipSetSolidFillColor(IntPtr brush,int argb);
+        [DllImport("gdiplus.dll")] internal static extern int GdipDeleteBrush(IntPtr brush);
+        [DllImport("gdiplus.dll")] internal static extern int GdipDrawLine(IntPtr g,IntPtr pen,float x,float y,float x2,float y2);
+        [DllImport("gdiplus.dll")] internal static extern int GdipDrawPolygon(IntPtr g,IntPtr pen,[In] float[] xy,int points);
+        [DllImport("gdiplus.dll")] internal static extern int GdipCreatePath(int fillMode,out IntPtr path);
+        [DllImport("gdiplus.dll")] internal static extern int GdipAddPathArc(IntPtr path,float x,float y,float w,float h,float start,float sweep);
+        [DllImport("gdiplus.dll")] internal static extern int GdipClosePathFigure(IntPtr path);
+        [DllImport("gdiplus.dll")] internal static extern int GdipFillPath(IntPtr g,IntPtr brush,IntPtr path);
+        [DllImport("gdiplus.dll")] internal static extern int GdipDrawPath(IntPtr g,IntPtr pen,IntPtr path);
+        [DllImport("gdiplus.dll")] internal static extern int GdipDeletePath(IntPtr path);
+        [DllImport("gdiplus.dll")] internal static extern int GdipFillEllipse(IntPtr g,IntPtr brush,float x,float y,float w,float h);
+        [DllImport("gdiplus.dll")] internal static extern int GdipDrawEllipse(IntPtr g,IntPtr pen,float x,float y,float w,float h);
         [UnmanagedFunctionPointer(CallingConvention.Winapi)] internal delegate IntPtr SubclassProc(IntPtr hwnd,uint msg,IntPtr w,IntPtr l,UIntPtr id,UIntPtr data);
         [StructLayout(LayoutKind.Sequential)] internal struct MonitorInfo { internal int Size; internal Rect Monitor, Work; internal uint Flags; }
         [StructLayout(LayoutKind.Sequential)] internal struct TrackMouse { internal int Size; internal uint Flags; internal IntPtr Window; internal uint HoverTime; }
@@ -1646,6 +3013,7 @@ public static class PlanarCurveWindows
         [DllImport("user32.dll")] internal static extern int SetWindowRgn(IntPtr hwnd,IntPtr region,bool redraw);
         [DllImport("user32.dll")] internal static extern bool RedrawWindow(IntPtr hwnd,IntPtr rect,IntPtr region,uint flags);
         [DllImport("user32.dll")] internal static extern bool IsWindowEnabled(IntPtr hwnd);
+        [DllImport("user32.dll")] internal static extern bool ShowWindow(IntPtr hwnd,int command);
         [DllImport("user32.dll")] internal static extern bool ReleaseCapture();
         [DllImport("user32.dll")] internal static extern IntPtr BeginPaint(IntPtr hwnd,out PaintInfo paint);
         [DllImport("user32.dll")] internal static extern bool EndPaint(IntPtr hwnd,ref PaintInfo paint);

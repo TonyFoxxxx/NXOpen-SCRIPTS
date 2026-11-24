@@ -72,10 +72,10 @@
       "id": "NX_Planar_Add_Curves",
       "name": "Кривые в PLANAR_MILL / PROFILE",
       "file": "NX_Planar_Add_Curves.cs",
-      "version": "V1.09",
+      "version": "V1.10",
       "path": "scripts/NX_Planar_Add_Curves.cs",
-      "sha256": "34bfd81c0f8065032c0a6440fed4d2b8804e959f69b7e65472c3530ad89dbb8a",
-      "description": "Part и Blank Boundaries по отдельности или за один запуск. По одной границе на кривую, ON/TANTO, плоскость со смещением и запоминание выбора."
+      "sha256": "19973515bc537f3920759e30d0e805a20be15bb62947617a04c3d66163bc4fc9",
+      "description": "Отдельные кривые для Part и Blank Boundaries. ON/TANTO, плоскость со смещением, сохранение выбора и темы с произвольным цветом подсветки."
     },
     {
       "id": "NX_PlanarMill_Select_Curves",

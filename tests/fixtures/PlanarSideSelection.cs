@@ -9,6 +9,7 @@ internal static class PlanarSideSelection
     private const int Continue = 1, Cancel = 2, On = 110, Tanto = 111, Part = 140, Blank = 141;
     private static string prefs;
     private const int Inside = 121, Outside = 122, Left = 124, Right = 125, PlaneHint = 127, PlaneChoice = 128;
+    private const int Gear=150,PaletteClose=151,Dark=152,Light=153,Square=154,Hue=155,Hex=156,Shared=157;
     private const uint BmGetCheck = 0xf0, BmClick = 0xf5;
     private static readonly IntPtr Zero = IntPtr.Zero;
     private static IntPtr desktop;
@@ -29,15 +30,13 @@ internal static class PlanarSideSelection
     private static void Click(IntPtr w, int id) { Send(GetDlgItem(w, id), BmClick, Zero, Zero); }
     private static void CheckPlane(IntPtr w, bool enabled)
     {
-        Check(IsWindowEnabled(GetDlgItem(w,PlaneChoice)) && Send(GetDlgItem(w,PlaneChoice),BmGetCheck,Zero,Zero).ToInt32()==(enabled?1:0),
-            "independent plane checkbox");
-        var caption=new System.Text.StringBuilder(80);
-        GetWindowText(GetDlgItem(w,Continue),caption,caption.Capacity);
-        Check(caption.ToString().Contains(enabled?"плоскость":"кривые"),"continue indicates next selection");
-        GetWindowText(GetDlgItem(w,PlaneHint),caption,caption.Capacity);
-        string hint=caption.ToString();
-        Check(enabled ? hint.Contains("At Distance") && hint.Contains("расстояние")
-            : hint.Contains("автоматически"), "visible instruction matches the next action");
+        Check(IsWindowEnabled(GetDlgItem(w, PlaneChoice)) && Send(GetDlgItem(w, PlaneChoice), BmGetCheck, Zero, Zero).ToInt32() == (enabled ? 1 : 0), "independent plane checkbox");
+        var caption = new System.Text.StringBuilder(80);
+        GetWindowText(GetDlgItem(w, Continue), caption, caption.Capacity);
+        Check(caption.ToString().Contains(enabled ? "плоскость" : "кривые"), "continue indicates next selection");
+        GetWindowText(GetDlgItem(w, PlaneHint), caption, caption.Capacity);
+        string hint = caption.ToString();
+        Check(enabled ? hint == "Выберите плоскость в окне Plane" : hint.Contains("автоматически"), "visible instruction matches the next action");
     }
     private static void CheckPair(IntPtr w, int first, int second, bool useSecond)
     {
@@ -46,9 +45,22 @@ internal static class PlanarSideSelection
     }
     private static void CheckEnabled(IntPtr w, bool enabled)
     {
-        foreach (int id in new[] { Inside, Outside, Left, Right })
-            Check(IsWindowEnabled(GetDlgItem(w, id)) == enabled, "side control availability " + id);
+        foreach (int id in new[]
+        {
+            Inside,
+            Outside,
+            Left,
+            Right
+        }
+
+        )
+            Check(IsWindowEnabled(GetDlgItem(w, id)) == enabled && IsWindowVisible(GetDlgItem(w, id)) == enabled, "side " + id + " expected " + enabled + "; enabled=" + IsWindowEnabled(GetDlgItem(w, id)) + ", visible=" + IsWindowVisible(GetDlgItem(w, id)) + ", window=" + IsWindowVisible(w));
     }
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)]
+    private static extern bool SetWindowTextW(IntPtr hwnd,string text);
+    [DllImport("user32.dll")] private static extern uint GetGuiResources(IntPtr process,uint flag);
+    [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
     private static Rect Bounds(IntPtr w, int id)
     {
         Rect r; Check(GetWindowRect(GetDlgItem(w,id), out r), "control bounds"); return r;
@@ -103,117 +115,464 @@ internal static class PlanarSideSelection
         finally{SelectObject(memory,previous);DeleteObject(bitmap);DeleteDC(memory);ReleaseDC(window,display);}
     }
 
-    private static PlanarCurveOptions Open(string title, Action<IntPtr> action)
+    private static PlanarCurveOptions Open(string title, Action<IntPtr> action, Action showReport = null)
     {
         Exception problem = null;
-        Thread monitor = new Thread((ThreadStart)delegate {
+        Thread monitor = new Thread((ThreadStart)delegate
+        {
             IntPtr w = Zero;
             try
             {
                 Check(SetThreadDesktop(desktop), "attach monitor to hidden desktop");
-                for (int i=0; i<200; i++)
+                for (int i = 0; i < 200; i++)
                 {
                     w = FindWindow("#32770", title);
-                    if (w != Zero && GetDlgItem(w, Continue) != Zero) break;
+                    if (w != Zero && IsWindowVisible(w) && GetDlgItem(w, Continue) != Zero)
+                        break;
                     Thread.Sleep(15);
                 }
-                Check(w != Zero && GetDlgItem(w, Continue) != Zero, "find options dialog");
+
+                Check(w != Zero && IsWindowVisible(w) && GetDlgItem(w, Continue) != Zero, "find visible options dialog");
                 Send(w, 0, Zero, Zero); // Wait for WM_INITDIALOG to finish.
                 action(w);
             }
-            catch(Exception ex) { problem = ex; }
-            finally { if (w!=Zero) Post(w, 0x10, Zero, Zero); }
+            catch (Exception ex)
+            {
+                problem = ex;
+            }
+            finally
+            {
+                IntPtr popup = FindWindow("#32770", "Оформление — " + title);
+                if (popup != Zero)
+                    Send(popup, 0x10, Zero, Zero);
+                if (w != Zero)
+                    Post(w, 0x10, Zero, Zero);
+            }
         });
         monitor.IsBackground = true;
         monitor.Start();
-        PlanarCurveOptions options = PlanarCurveWindows.AskOptions(Zero, title, "PLSK_CHIST_Z0", prefs);
+        PlanarCurveOptions options = null;
+        if (showReport == null)
+            options = PlanarCurveWindows.AskOptions(Zero, title, "PLSK_CHIST_Z0", prefs);
+        else
+            showReport();
         Check(monitor.Join(5000), "options dialog deadline");
-        if (problem!=null) throw problem;
+        if (problem != null)
+            throw new InvalidOperationException("Native dialog " + title, problem);
         return options;
     }
 
-    private static int Run()
+    private static string TextOf(IntPtr hwnd)
     {
-        desktop = CreateDesktop("PlanarSideTest"+Guid.NewGuid().ToString("N"), Zero, Zero, 0, 0xc3, Zero);
-        if (desktop==Zero || !SetThreadDesktop(desktop))
+        var value = new System.Text.StringBuilder(80);
+        GetWindowText(hwnd, value, value.Capacity);
+        return value.ToString();
+    }
+    private static IntPtr OpenPalette(IntPtr window, string title)
+    {
+        Click(window, Gear);
+        IntPtr popup = FindWindow("#32770", "Оформление — " + title);
+        Check(popup != Zero && IsWindowVisible(popup) && GetDlgItem(popup, Square) != Zero, "modeless palette is open");
+        return popup;
+    }
+    private static IntPtr PointAt(IntPtr window, double x, double y)
+    {
+        Rect b;
+        Check(GetWindowRect(window, out b), "picker area");
+        int xx = (int)Math.Round(x * (b.Right - b.X)), yy = (int)Math.Round(y * (b.Bottom - b.Y));
+        return new IntPtr((xx & 65535) | ((yy & 65535) << 16));
+    }
+    private static int NativeColour(string hex)
+    {
+        int c = Convert.ToInt32(hex.TrimStart('#'), 16);
+        return (c >> 16) | (c & 65280) | ((c & 255) << 16);
+    }
+    private static byte[] Render(IntPtr hwnd, out int width, out int height)
+    {
+        Rect rect;
+        Check(GetWindowRect(hwnd, out rect), "render bounds");
+        width = rect.Right - rect.X;
+        height = rect.Bottom - rect.Y;
+        IntPtr display = GetDC(hwnd), memory = CreateCompatibleDC(display), bmp = CreateCompatibleBitmap(display, width, height);
+        IntPtr previous = SelectObject(memory, bmp);
+        try
         {
-            int error=Marshal.GetLastWin32Error();
-            if (error==5 || error==170) return 77;
+            Send(hwnd, 0x317, memory, new IntPtr(0x1e));
+            SelectObject(memory, previous);
+            var header = new BitmapHeader
+            {
+                Size = 40,
+                Width = width,
+                Height = -height,
+                Planes = 1,
+                Bits = 32
+            };
+            byte[] bgra = new byte[width * height * 4];
+            Check(GetDIBits(display, bmp, 0, (uint)height, bgra, ref header, 0) == height, "read rendered controls");
+            return bgra;
+        }
+        finally
+        {
+            SelectObject(memory, previous);
+            DeleteObject(bmp);
+            DeleteDC(memory);
+            ReleaseDC(hwnd, display);
+        }
+    }
+    private static int Pixel(byte[] pixels, int w, int x, int y)
+    {
+        int i = 4 * (y * w + x);
+        return pixels[i + 2] | (pixels[i + 1] << 8) | (pixels[i] << 16);
+    }
+    private static int PrimaryColour(IntPtr w)
+    {
+        int width, height;
+        byte[] pixels = Render(GetDlgItem(w, Continue), out width, out height);
+        return Pixel(pixels, width, width / 2, Math.Max(2, height / 6));
+    }
+    private static void Snapshot(IntPtr window, string name)
+    {
+        string dir = Environment.GetEnvironmentVariable("NX_PLANAR_APPEARANCE_PREVIEW");
+        if (String.IsNullOrEmpty(dir))
+            return;
+        int w, h;
+        byte[] pixels = Render(window, out w, out h);
+        using (var stream = new System.IO.BinaryWriter(System.IO.File.Create(System.IO.Path.Combine(dir, name + ".bmp"))))
+        {
+            stream.Write((ushort)0x4d42);
+            stream.Write(54 + pixels.Length);
+            stream.Write(0);
+            stream.Write(54);
+            stream.Write(40);
+            stream.Write(w);
+            stream.Write(-h);
+            stream.Write((ushort)1);
+            stream.Write((ushort)32);
+            stream.Write(0);
+            stream.Write(pixels.Length);
+            stream.Write(0);
+            stream.Write(0);
+            stream.Write(0);
+            stream.Write(0);
+            stream.Write(pixels);
+        }
+    }
+    private static void CheckBlueMark(IntPtr window)
+    {
+        int w, h, runs = 0;
+        byte[] pixels = Render(window, out w, out h);
+        double scale = w / 692.0;
+        int x = (int)Math.Round(47.5 * scale);
+        bool was = false;
+        for (int y = (int)(26 * scale); y < (int)(45 * scale); y++)
+        {
+            int c = Pixel(pixels, w, x, y);
+            int red = c & 255, green = (c >> 8) & 255, blueChannel = c >> 16;
+            bool blue = blueChannel > red + 30 && green > red + 25 && blueChannel > green + 10;
+            if (blue && !was)
+                runs++;
+            was = blue;
+        }
+
+        Check(runs == 3, "three independent cyan passes, found " + runs);
+    }
+    private static void CheckGradient(IntPtr popup)
+    {
+        int width, height;
+        byte[] pixels = Render(popup, out width, out height);
+        Rect parent;
+        Check(GetWindowRect(popup, out parent), "palette bounds");
+        Rect square = Bounds(popup, Square), hue = Bounds(popup, Hue);
+        int sx = (square.X + square.Right) / 2 - parent.X;
+        int hx = (hue.X + hue.Right) / 2 - parent.X;
+        int nearWhite = Pixel(pixels, width, square.X - parent.X + (square.Right - square.X) / 10, square.Y - parent.Y + (square.Bottom - square.Y) / 10);
+        int middle = Pixel(pixels, width, sx, (square.Y + square.Bottom) / 2 - parent.Y);
+        int bottom = Pixel(pixels, width, sx, square.Bottom - parent.Y - (square.Bottom - square.Y) / 10);
+        Check((nearWhite & 255) > 207 && (nearWhite >> 16) > 180, "bright area across the square");
+        Check((middle & 255) > 110 && (middle & 255) < 145 && (middle >> 16) < 95, "centre of the orange gradient");
+        Check((bottom & 255) < 40 && (bottom >> 16) < 40, "dark end of the square");
+        int cyan = Pixel(pixels, width, hx, (hue.Y + hue.Bottom) / 2 - parent.Y);
+        Check((cyan & 255) < 25 && ((cyan >> 8) & 255) > 220 && (cyan >> 16) > 220, "rainbow strip is visible inside the popup");
+    }
+    private static void CheckLiveStyle()
+    {
+        string local = System.IO.Path.ChangeExtension(prefs, "appearance");
+        string shared = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(prefs), "Appearance.settings");
+        const string title = "PLANAR appearance";
+        Open(title, delegate (IntPtr w)
+        {
+            Snapshot(w, "compact-on");
+            Click(w, Tanto);
+            Click(w, Outside);
+            Click(w, Right);
+            IntPtr p = OpenPalette(w, title), field = GetDlgItem(p, Hex), square = GetDlgItem(p, Square), hue = GetDlgItem(p, Hue);
+            Check(TextOf(field) == "#00CD86", "default accent");
+            Check(!System.IO.File.Exists(local) && !System.IO.File.Exists(shared), "opening palette is read-only");
+            SetWindowTextW(field, "#FF790F");
+            Check(PrimaryColour(w) == NativeColour("#FF790F"), "HEX updates the main action before confirmation");
+            Snapshot(w, "dark-main");
+            Snapshot(p, "dark-menu");
+            CheckBlueMark(w);
+            CheckGradient(p);
+            string before = System.IO.File.ReadAllText(local);
+            Send(square, 0x201, new IntPtr(1), PointAt(square, .23, .75));
+            string first = TextOf(field);
+            Check(PrimaryColour(w) == NativeColour(first) && first != "#FF790F", "live square while pressed");
+            Send(square, 0x200, new IntPtr(1), PointAt(square, .72, .26));
+            string second = TextOf(field);
+            Check(second != first && PrimaryColour(w) == NativeColour(second), "live move before mouseup");
+            Check(System.IO.File.ReadAllText(local) == before, "no disk writes during drag");
+            Send(square, 0x202, Zero, PointAt(square, .72, .26));
+            Check(System.IO.File.ReadAllText(local).Contains(second), "commit on release");
+            Send(hue, 0x201, new IntPtr(1), PointAt(hue, .5, .19));
+            string third = TextOf(field);
+            Send(hue, 0x200, new IntPtr(1), PointAt(hue, .5, .69));
+            Check(third != TextOf(field) && PrimaryColour(w) == NativeColour(TextOf(field)), "live hue before release");
+            Send(hue, 0x202, Zero, PointAt(hue, .5, .69));
+            CheckPair(w, Inside, Outside, true);
+            CheckPair(w, Left, Right, true);
+            Click(p, Light);
+            SetWindowTextW(field, "#FF790F");
+            Snapshot(w, "light-main");
+            Snapshot(p, "light-menu");
+            CheckBlueMark(w);
+            CheckGradient(p);
+            Click(p, Shared);
+            Check(System.IO.File.ReadAllText(shared).Contains("light|#FF790F"), "shared profile is explicit");
+            Send(square, 0x201, new IntPtr(1), PointAt(square, .55, .55));
+            Send(square, 0x202, Zero, PointAt(square, -.2, -.2));
+            Check(TextOf(field) == "#FFFFFF", "white square corner");
+            Send(square, 0x201, new IntPtr(1), PointAt(square, .7, .45));
+            Send(square, 0x202, Zero, PointAt(square, 1.1, 1.1));
+            Check(TextOf(field) == "#000000", "black square corner");
+            Send(hue, 0x201, new IntPtr(1), PointAt(hue, .5, .3));
+            Send(hue, 0x202, Zero, PointAt(hue, .5, .3));
+            Check(TextOf(field) == "#000000", "black retains independent hue");
+            SetWindowTextW(field, "#ace");
+            Send(field, 0x100, new IntPtr(13), Zero);
+            Check(TextOf(field) == "#AACCEE", "three-digit HEX");
+            SetWindowTextW(field, "#ZZZZZZ");
+            Send(field, 0x100, new IntPtr(13), Zero);
+            Check(TextOf(field) == "#AACCEE", "invalid input restores previous colour");
+            SetWindowTextW(field, "#1020CD");
+            Send(square, 0x100, new IntPtr(38), Zero);
+            Check(TextOf(field) != "#1020CD", "square arrow changes brightness");
+            SetWindowTextW(field, "#314159");
+            Send(field, 0x100, new IntPtr(27), Zero);
+            Check(FindWindow("#32770", "Оформление — " + title) == Zero, "Escape closes only the palette");
+            uint start = GetGuiResources(GetCurrentProcess(), 0);
+            for (int i = 0; i < 6; i++)
+            {
+                p = OpenPalette(w, title);
+                Click(p, PaletteClose);
+            }
+
+            Check(GetGuiResources(GetCurrentProcess(), 0) <= start + 5, "palette resources released");
+            Click(w, Cancel);
+        });
+        const string reopened = "Saved appearance";
+        Open(reopened, delegate (IntPtr w)
+        {
+            IntPtr p = OpenPalette(w, reopened);
+            Check(TextOf(GetDlgItem(p, Hex)) == "#314159" && Send(GetDlgItem(p, Light), BmGetCheck, Zero, Zero).ToInt32() == 1, "local preferences survive cancellation");
+            Check(!IsWindowVisible(GetDlgItem(w, Outside)), "cancel did not apply CAM changes");
+            Click(p, PaletteClose);
+            Click(w, Cancel);
+        });
+        System.IO.File.Delete(local);
+        Open(reopened, delegate (IntPtr w)
+        {
+            IntPtr p = OpenPalette(w, reopened);
+            Check(TextOf(GetDlgItem(p, Hex)) == "#FF790F", "shared fallback with no local override");
+            Click(p, PaletteClose);
+            Click(w, Cancel);
+        });
+        const string reportTitle = "PLANAR report";
+        const string reportText = "Part Boundaries 36\r\nBlank Boundaries 5";
+        Open(reportTitle, delegate (IntPtr w)
+        {
+            Check(TextOf(GetDlgItem(w, 130)) == reportText, "complete diagnostic in the report");
+            Check(TextOf(GetDlgItem(w, 131)) == "Копировать всё", "copy report action available");
+            Check(PrimaryColour(w) == NativeColour("#FF790F"), "report uses the saved appearance");
+            Click(w, Continue);
+        }, delegate
+        {
+            PlanarCurveWindows.ShowReport(Zero, reportTitle, "Границы добавлены", reportText, 0, prefs);
+        });
+    }
+
+    private static int Run(bool appearanceOnly)
+    {
+        desktop = CreateDesktop("PlanarSideTest" + Guid.NewGuid().ToString("N"), Zero, Zero, 0, 0xc3, Zero);
+        if (desktop == Zero || !SetThreadDesktop(desktop))
+        {
+            int error = Marshal.GetLastWin32Error();
+            if (error == 5 || error == 170)
+                return 77;
             throw new Win32Exception(error);
         }
-        foreach (bool outside in new[]{false,true}) foreach (bool right in new[]{false,true})
+
+        if (appearanceOnly)
         {
-            System.IO.File.Delete(prefs);
-            PlanarCurveOptions options = Open("TANTO "+outside+" "+right, delegate(IntPtr w) {
-                CheckEnabled(w,false);
-                CheckPlane(w,true);
-                Check(Bounds(w,PlaneChoice).Bottom<=Bounds(w,On).Y && Bounds(w,Outside).Bottom<=Bounds(w,Continue).Y,"options fit the dialog");
-                Click(w,PlaneChoice); CheckPlane(w,false);
-                CheckPair(w,Inside,Outside,false); CheckPair(w,Left,Right,false);
-                Check(Bounds(w,Inside).Right <= Bounds(w,Outside).X && Bounds(w,Outside).Right <= Bounds(w,Left).X &&
-                    Bounds(w,Left).Right <= Bounds(w,Right).X, "four rounded sides in two groups");
-                Click(w,Tanto); CheckEnabled(w,true);
-                int closedId = outside ? Outside : Inside;
-                Click(w,closedId); Click(w,closedId);
-                CheckPair(w,Inside,Outside,outside); CheckPair(w,Left,Right,false);
-                int openId = right ? Right : Left;
-                Click(w,openId); Click(w,openId);
-                CheckPair(w,Inside,Outside,outside); CheckPair(w,Left,Right,right);
-                Click(w,On); CheckEnabled(w,false); CheckPlane(w,false); Click(w,Tanto);
-                if (outside) Click(w,PlaneChoice);
-                CheckPlane(w,outside);
-                CheckEnabled(w,true); CheckPair(w,Inside,Outside,outside); CheckPair(w,Left,Right,right);
-                Click(w,Continue);
-            });
-            Check(options!=null && options.Tanto && options.ClosedOutside==outside && options.OpenRight==right && options.SelectPlane==outside, "returned combination");
+            CheckLiveStyle();
+            return 0;
         }
+
+        foreach (bool outside in new[]
+        {
+            false,
+            true
+        }
+
+        )
+            foreach (bool right in new[]
+            {
+                false,
+                true
+            }
+
+            )
+            {
+                System.IO.File.Delete(prefs);
+                PlanarCurveOptions options = Open("TANTO " + outside + " " + right, delegate (IntPtr w)
+                {
+                    CheckEnabled(w, false);
+                    CheckPlane(w, true);
+                    int compactFooter = Bounds(w, Continue).Y;
+                    Check(Bounds(w, PlaneChoice).Bottom <= Bounds(w, On).Y && Bounds(w, On).Bottom <= compactFooter, "ON fits the compact dialog");
+                    Click(w, PlaneChoice);
+                    CheckPlane(w, false);
+                    CheckPair(w, Inside, Outside, false);
+                    CheckPair(w, Left, Right, false);
+                    Check(Bounds(w, Inside).Right <= Bounds(w, Outside).X && Bounds(w, Outside).Right <= Bounds(w, Left).X && Bounds(w, Left).Right <= Bounds(w, Right).X, "four rounded sides in two groups");
+                    Click(w, Tanto);
+                    CheckEnabled(w, true);
+                    Check(Bounds(w, Outside).Bottom <= Bounds(w, Continue).Y && Bounds(w, Continue).Y > compactFooter, "TANTO opens space for the sides");
+                    int closedId = outside ? Outside : Inside;
+                    Click(w, closedId);
+                    Click(w, closedId);
+                    CheckPair(w, Inside, Outside, outside);
+                    CheckPair(w, Left, Right, false);
+                    int openId = right ? Right : Left;
+                    Click(w, openId);
+                    Click(w, openId);
+                    CheckPair(w, Inside, Outside, outside);
+                    CheckPair(w, Left, Right, right);
+                    Click(w, On);
+                    CheckEnabled(w, false);
+                    CheckPlane(w, false);
+                    Click(w, Tanto);
+                    if (outside)
+                        Click(w, PlaneChoice);
+                    CheckPlane(w, outside);
+                    CheckEnabled(w, true);
+                    CheckPair(w, Inside, Outside, outside);
+                    CheckPair(w, Left, Right, right);
+                    Click(w, Continue);
+                });
+                Check(options != null && options.Tanto && options.ClosedOutside == outside && options.OpenRight == right && options.SelectPlane == outside, "returned combination");
+            }
+
         System.IO.File.Delete(prefs);
-        PlanarCurveOptions on = Open("ON ignores sides",delegate(IntPtr w) {
-            Click(w,Tanto); Click(w,Outside); Click(w,Right); Click(w,On); Click(w,Continue);
+        PlanarCurveOptions on = Open("ON ignores sides", delegate (IntPtr w)
+        {
+            Click(w, Tanto);
+            Click(w, Outside);
+            Click(w, Right);
+            Click(w, On);
+            Click(w, Continue);
         });
-        Check(on!=null && on.SelectPlane && !on.Tanto && !on.UsesOutsideOrRight(false) && !on.UsesOutsideOrRight(true), "ON ignores side selections");
-        Check(Open("Cancel",delegate(IntPtr w){Click(w,Tanto); Click(w,Right); Click(w,Cancel);})==null, "cancel");
+        Check(on != null && on.SelectPlane && !on.Tanto && !on.UsesOutsideOrRight(false) && !on.UsesOutsideOrRight(true), "ON ignores side selections");
+        Check(Open("Cancel", delegate (IntPtr w)
+        {
+            Click(w, Tanto);
+            Click(w, Right);
+            Click(w, Cancel);
+        }) == null, "cancel");
         System.IO.File.Delete(prefs);
-        Open("Defaults",delegate(IntPtr w){
-            CheckPair(w,Part,Blank,false);Click(w,Part);
-            Check(!IsWindowEnabled(GetDlgItem(w,Continue)),"at least one set required");
-            Send(w,0x111,new IntPtr(Continue),Zero);
-            Click(w,Blank);CheckPair(w,Part,Blank,true);Click(w,Part);Click(w,Tanto);Click(w,Outside);
-            Check(Send(GetDlgItem(w,Part),BmGetCheck,Zero,Zero).ToInt32()==1 && Send(GetDlgItem(w,Blank),BmGetCheck,Zero,Zero).ToInt32()==1,"both independent");
+        Open("Defaults", delegate (IntPtr w)
+        {
+            CheckPair(w, Part, Blank, false);
+            Click(w, Part);
+            Check(!IsWindowEnabled(GetDlgItem(w, Continue)), "at least one set required");
+            Send(w, 0x111, new IntPtr(Continue), Zero);
+            Click(w, Blank);
+            CheckPair(w, Part, Blank, true);
+            Click(w, Part);
+            Click(w, Tanto);
+            Click(w, Outside);
+            Check(Send(GetDlgItem(w, Part), BmGetCheck, Zero, Zero).ToInt32() == 1 && Send(GetDlgItem(w, Blank), BmGetCheck, Zero, Zero).ToInt32() == 1, "both independent");
             VerifyAppearance(w);
-            Click(w,Continue);
+            Click(w, Continue);
         });
-        Open("Cancel edited options",delegate(IntPtr w){
-            CheckEnabled(w,true);CheckPair(w,Inside,Outside,true);CheckPlane(w,true);
-            Check(Send(GetDlgItem(w,Blank),BmGetCheck,Zero,Zero).ToInt32()==1,"blank restored");
-            Click(w,Blank);Click(w,PlaneChoice);Click(w,On);Click(w,Cancel);
+        Open("Cancel edited options", delegate (IntPtr w)
+        {
+            CheckEnabled(w, true);
+            CheckPair(w, Inside, Outside, true);
+            CheckPlane(w, true);
+            Check(Send(GetDlgItem(w, Blank), BmGetCheck, Zero, Zero).ToInt32() == 1, "blank restored");
+            Click(w, Blank);
+            Click(w, PlaneChoice);
+            Click(w, On);
+            Click(w, Cancel);
         });
-        var restored=Open("Reopen",delegate(IntPtr w){Click(w,Continue);});
-        Check(restored.Part && restored.Blank && restored.SelectPlane && restored.Tanto && restored.ClosedOutside && !restored.OpenRight,"cancel preserves last confirmed choices");
-        restored.LastMethod="Distance";restored.OffsetMm=-25.4;restored.Save(prefs);
-        var previous=PlanarCurveOptions.Load(prefs);
-        Check(previous.LastMethod=="Distance" && previous.OffsetMm==restored.OffsetMm,"signed plane preset survives a new journal instance");
-        System.IO.File.WriteAllText(prefs,"damaged");
-        var recovered=Open("Recover defaults",delegate(IntPtr w){Click(w,Continue);});
-        Check(recovered.Part && !recovered.Blank && !recovered.Tanto && recovered.SelectPlane,"malformed settings use defaults");
+        var restored = Open("Reopen", delegate (IntPtr w)
+        {
+            Click(w, Continue);
+        });
+        Check(restored.Part && restored.Blank && restored.SelectPlane && restored.Tanto && restored.ClosedOutside && !restored.OpenRight, "cancel preserves last confirmed choices");
+        restored.LastMethod = "Distance";
+        restored.OffsetMm = -25.4;
+        restored.Save(prefs);
+        var previous = PlanarCurveOptions.Load(prefs);
+        Check(previous.LastMethod == "Distance" && previous.OffsetMm == restored.OffsetMm, "signed plane preset survives a new journal instance");
+        System.IO.File.WriteAllText(prefs, "damaged");
+        var recovered = Open("Recover defaults", delegate (IntPtr w)
+        {
+            Click(w, Continue);
+        });
+        Check(recovered.Part && !recovered.Blank && !recovered.Tanto && recovered.SelectPlane, "malformed settings use defaults");
         return 0;
     }
-    public static int Main()
+    public static int Main(string[] args)
     {
-        return ManagedTestHost.Run(RunOnDesktop);
+        return ManagedTestHost.Run(delegate
+        {
+            return RunOnDesktop(args.Length != 0 && args[0] == "appearance");
+        });
     }
-    private static int RunOnDesktop()
+    private static int RunOnDesktop(bool appearanceOnly)
     {
-        prefs=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"planar-ui-"+Guid.NewGuid().ToString("N")+".settings");
-        int status=1;
-        Thread gui = new Thread((ThreadStart)delegate {
-            try { status=Run(); } catch(Exception ex) { status=ManagedTestHost.Record(ex); }
+        string folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "planar-ui-" + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(folder);
+        prefs = System.IO.Path.Combine(folder, "PlanarAddCurves.settings");
+        int status = 1;
+        Thread gui = new Thread((ThreadStart)delegate
+        {
+            try
+            {
+                status = Run(appearanceOnly);
+            }
+            catch (Exception ex)
+            {
+                status = ManagedTestHost.Record(ex);
+            }
         });
         gui.SetApartmentState(ApartmentState.MTA);
-        gui.IsBackground=true;
+        gui.IsBackground = true;
         gui.Start();
-        if (!gui.Join(20000)) throw new TimeoutException("Private desktop test exceeded 20 seconds");
-        System.IO.File.Delete(prefs);
+        if (!gui.Join(35000))
+            throw new TimeoutException("Private desktop test exceeded 35 seconds");
+        foreach (string file in new[]
+        {
+            prefs,
+            System.IO.Path.ChangeExtension(prefs, "appearance"),
+            System.IO.Path.Combine(folder, "Appearance.settings")
+        }
+
+        )
+            System.IO.File.Delete(file);
+        System.IO.Directory.Delete(folder);
         return status;
     }
 }

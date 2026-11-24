@@ -27,6 +27,13 @@ class SeparatePlanarBoundaries(unittest.TestCase):
 
     @unittest.skipUnless(CSC.is_file(), 'Windows .NET Framework compiler unavailable')
     def test_native_side_checkboxes_with_base_runtime_only(self):
+        self.check_native_dialog('sides')
+
+    @unittest.skipUnless(CSC.is_file(), 'Windows .NET Framework compiler unavailable')
+    def test_native_live_appearance(self):
+        self.check_native_dialog('appearance')
+
+    def check_native_dialog(self, scenario):
         source = SOURCE.read_text(encoding='utf-8')
         imports = [line for line in source.splitlines() if line.startswith('using ') and 'NXOpen' not in line]
         windows = source.split('// BEGIN PLANAR CURVE WINDOWS\n', 1)[1].split('// END PLANAR CURVE WINDOWS', 1)[0]
@@ -40,7 +47,7 @@ class SeparatePlanarBoundaries(unittest.TestCase):
                        '/out:' + str(executable), str(unit), str(fixture), str(HOST)]
             result = invoke(command)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            checked = invoke([str(executable)])
+            checked = invoke([str(executable), scenario], timeout=45)
             if checked.returncode == 77:
                 self.skipTest('A private Windows desktop is unavailable')
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
